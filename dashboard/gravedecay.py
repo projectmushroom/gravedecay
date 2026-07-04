@@ -25,6 +25,7 @@ import re
 import shutil
 import socket
 import subprocess
+import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -102,6 +103,9 @@ ACTIONS = {
     "doctor": [GRAVE, "doctor"],
 }
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
+# Only one grave action at a time: concurrent mode flips race each other
+# (instrumentation caught a developer run failing mid gaming-kill).
+ACTION_LOCK = threading.Lock()
 
 
 @functools.cache
@@ -532,6 +536,9 @@ def state(headers):
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "gravedecay/1"
+    # HTTP/1.1: _send always sets Content-Length (keep-alive works), and the
+    # SSE stream omits it so the handler auto-closes the connection at end.
+    protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):  # journald gets enough from systemd
         pass
@@ -571,29 +578,45 @@ class Handler(BaseHTTPRequestHandler):
         if not cmd:
             self._send(400, json.dumps({"ok": False, "output": "unknown action"}))
             return
+        import sys
+        if not ACTION_LOCK.acquire(blocking=False):
+            self._send(409, json.dumps({"ok": False,
+                                        "output": "another action is already running — wait for it"}))
+            return
+        print(f"stream: start action={action} viewer={viewer} proto={self.request_version}",
+              file=sys.stderr, flush=True)
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True, bufsize=1)
+        sent = 0
         try:
             for line in proc.stdout:
                 payload = json.dumps(ANSI.sub("", line.rstrip("\n")))
                 self.wfile.write(f"data: {payload}\n\n".encode())
                 self.wfile.flush()
+                sent += 1
             rc = proc.wait(timeout=180)
             self.wfile.write(f"event: done\ndata: {rc}\n\n".encode())
             self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError):
+            print(f"stream: done action={action} rc={rc} lines={sent}",
+                  file=sys.stderr, flush=True)
+        except (BrokenPipeError, ConnectionResetError) as e:
             # Client went away mid-stream. NEVER kill the action — a
             # half-finished mode switch is worse than a lost console — and
             # keep draining stdout so the action isn't SIGPIPE'd either.
+            print(f"stream: client gone action={action} after {sent} lines: {e}",
+                  file=sys.stderr, flush=True)
             for _ in proc.stdout:
                 pass
             proc.wait(timeout=180)
         except subprocess.TimeoutExpired:
+            print(f"stream: TIMEOUT action={action}", file=sys.stderr, flush=True)
             proc.kill()
+        finally:
+            ACTION_LOCK.release()
 
     def do_GET(self):
         p = self._route()
@@ -666,7 +689,14 @@ class Handler(BaseHTTPRequestHandler):
             except KeyError:
                 self._send(400, json.dumps({"ok": False, "output": "unknown action"}))
                 return
-            rc, out, err = sh(cmd, timeout=120)
+            if not ACTION_LOCK.acquire(blocking=False):
+                self._send(409, json.dumps({"ok": False,
+                                            "output": "another action is already running"}))
+                return
+            try:
+                rc, out, err = sh(cmd, timeout=120)
+            finally:
+                ACTION_LOCK.release()
             self._send(200, json.dumps({"ok": rc == 0, "output": ANSI.sub("", out + err)}))
         else:
             self._send(404, '{"error":"not found"}')
