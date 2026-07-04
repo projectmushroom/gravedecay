@@ -239,6 +239,27 @@ cmd_update() {
   ok "update complete — reboot only if the kernel changed"
 }
 
+# -------------------------------------------------------------- bootmode ----
+cmd_bootmode() { # what the box boots into: developer (dev services up) or gaming
+  case "${1:-}" in
+    "")
+      if systemctl is-enabled --quiet t3code 2>/dev/null; then
+        say "boot mode: developer (dev services start at boot)"
+      else
+        say "boot mode: gaming (dev services stay down until 'grave developer')"
+      fi ;;
+    developer|dev)
+      need_root_helper
+      sudo systemctl enable t3code docker >/dev/null 2>&1 || true
+      ok "boot mode: developer — dev services start automatically after reboot" ;;
+    gaming|game)
+      need_root_helper
+      sudo systemctl disable t3code docker docker.socket >/dev/null 2>&1 || true
+      ok "boot mode: gaming — after reboot only ALWAYS_ON runs; 'grave developer' wakes the rest" ;;
+    *) say "usage: grave bootmode [developer|gaming]"; exit 1 ;;
+  esac
+}
+
 # --------------------------------------------------------------- upgrade ----
 cmd_upgrade() { # grave upgrade [--edge|--release] — update gravedecay itself
   local channel="${UPGRADE_CHANNEL:-release}"
@@ -449,6 +470,8 @@ grave — gravedecay appliance control 🪦
   grave update               snapshot (if snapper), update pkgs/npm/images
   grave upgrade              update gravedecay itself: pull latest release
                              (or --edge for main), re-run the ritual
+  grave bootmode [dev|game]  what a reboot boots into: developer services
+                             up (default) or gaming (ALWAYS_ON only)
   grave backup               bundle repos, configs, docker volumes
   grave restore [backup]     list / restore backups
 
@@ -468,6 +491,7 @@ case "${1:-help}" in
   docker)     shift; cmd_docker "$@" ;;
   update)     cmd_update ;;
   upgrade)    shift || true; cmd_upgrade "$@" ;;
+  bootmode)   shift || true; cmd_bootmode "$@" ;;
   logs)       shift; cmd_logs "$@" ;;
   doctor)     cmd_doctor ;;
   backup)     cmd_backup ;;

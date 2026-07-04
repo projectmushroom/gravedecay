@@ -107,6 +107,9 @@ ACTIONS = {
     "t3-pair": ["t3", "auth", "pairing", "create",
                 "--base-dir", f"{GRAVE_ROOT}/agents/t3code",
                 "--ttl", "15m", "--label", "gravedecay-dashboard"],
+    "reboot": ["sudo", "-n", "systemctl", "reboot"],
+    "bootmode-developer": [GRAVE, "bootmode", "developer"],
+    "bootmode-gaming": [GRAVE, "bootmode", "gaming"],
 }
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 # Only one grave action at a time: concurrent mode flips race each other
@@ -606,6 +609,11 @@ def collect_backups():
     return {"count": len(entries), "latest": entries[-1] if entries else None}
 
 
+def boot_mode():
+    rc, _, _ = sh(["systemctl", "is-enabled", "--quiet", "t3code"])
+    return "developer" if rc == 0 else "gaming"
+
+
 def state(headers):
     t3 = unit_state("t3code")
     mode = "developer" if t3["active"] == "active" else "gaming"
@@ -622,6 +630,7 @@ def state(headers):
             "host": HOST, "now": time.strftime("%H:%M:%S"),
             "viewer": headers.get("Tailscale-User-Login", "local"),
             "mode": mode, "apps": list(APPS), "settings": load_settings(),
+            "boot_mode": boot_mode(),
             "tmux": tmux, "torpor": len(tmux) if frozen else 0,
             "system": collect_system(),
             "github": {"login": None, "prs": [], "error": "paused in game mode"},
@@ -640,6 +649,7 @@ def state(headers):
         "now": time.strftime("%H:%M:%S"),
         "viewer": headers.get("Tailscale-User-Login", "local"),
         "mode": mode,
+        "boot_mode": boot_mode(),
         "apps": apps,
         "github": gh,
         "ci": collect_ci(),
@@ -884,6 +894,7 @@ a{color:var(--accent);text-decoration:none}
 a:hover{background:var(--accent);color:#000}
 h1{font-size:15px;font-weight:700;color:var(--ink);text-shadow:var(--glow)}
 h1::before{content:'> ';color:var(--accent)}
+#toplogo{width:24px;height:24px;display:block;border:1px solid var(--ring)}
 .topbar{position:sticky;top:0;z-index:101;display:flex;flex-wrap:wrap;gap:10px;align-items:center;
   background:var(--page);margin:0 -14px 16px;
   padding:calc(10px + env(safe-area-inset-top)) 14px 8px;
@@ -923,8 +934,8 @@ button.busy{opacity:.6;cursor:wait}
 .gear{min-height:0;padding:3px 9px;font-size:13px}
 @media(pointer:coarse){td{padding-top:9px;padding-bottom:9px}}
 /* panels: title sits ON the border, like a TUI frame */
-#panels{display:grid;grid-template-columns:1fr 1fr;gap:18px 12px;margin-bottom:12px;
-  align-items:start} /* panels hug their content instead of stretching rows */
+#panels{display:grid;grid-template-columns:1fr 1fr;gap:18px 12px;margin-bottom:12px}
+/* rows stretch: side-by-side widgets always share the taller one's height */
 @media(max-width:760px){#panels{grid-template-columns:1fr}}
 .w-full{grid-column:1/-1}
 .panel{position:relative;background:var(--surface);border:1px solid var(--ring);
@@ -996,13 +1007,14 @@ body.gaming #panels>[data-panel="stats"]{display:grid!important}
 #gc-box p{margin:6px 0;font-size:13px}
 .dim2{color:var(--muted)}
 /* settings */
-#settings-panel{display:none;margin-bottom:16px}
+#gc-box2{border-color:#4a2222}
 .setrow{display:flex;gap:8px;align-items:center;margin:7px 0;flex-wrap:wrap;font-size:13px}
 .setrow input,.setrow select{background:var(--inset);border:1px solid var(--hairline);
   color:var(--ink);border-radius:0;padding:7px 9px;
   font:13px ui-monospace,Menlo,monospace}
 .setrow input:focus,.setrow select:focus{outline:1px solid var(--accent)}
 .mini{min-height:28px;padding:2px 9px;font-size:12px}
+.mini.activebtn{background:var(--ink-2);color:#000;border-color:var(--ink-2)}
 .abtn{display:inline-flex;align-items:center;background:transparent;color:var(--ink);
   border:1px solid var(--ring);cursor:pointer}
 .abtn:hover{background:var(--ink-2);color:#000}
@@ -1019,6 +1031,7 @@ body.gaming #panels>[data-panel="stats"]{display:grid!important}
 </style></head><body>
 <div id="topcover"></div>
 <div class="topbar">
+  <img id="toplogo" src="icon-180.png" alt="">
   <h1>gravedecay</h1>
   <span class="badge" id="mode" role="button" title="Tap to switch mode" style="cursor:pointer">…</span>
   <button class="gear" id="gear" title="Settings" aria-label="Settings">⚙️</button>
@@ -1034,17 +1047,30 @@ body.gaming #panels>[data-panel="stats"]{display:grid!important}
   <button class="tab" data-tab="work">🛠️ Work</button>
   <button class="tab" data-tab="system">📟 System</button>
 </div>
-<div class="panel" id="settings-panel">
-  <h2>⚙️ Settings</h2>
-  <div class="sethead">Widgets — show &amp; order</div>
-  <div id="set-widgets"></div>
-  <div class="sethead">Launcher tiles</div>
+<div class="overlay" id="settings-panel" style="display:none">
+ <div class="dlg">
+  <button class="mini" id="settings-x" title="close (Esc)" aria-label="close"
+    style="position:absolute;top:10px;right:10px;z-index:2">✕</button>
+  <h2 style="color:var(--ink);font-size:15px;margin-bottom:10px">⚙️ Settings</h2>
+
+  <div class="sethead">Launcher tiles — 👁 show · ↗ open in new tab</div>
   <div id="set-apps"></div>
   <div class="setrow">
-    <input id="new-app-name" placeholder="label (e.g. 🎬 Jellyfin)" size="18">
-    <input id="new-app-url" placeholder="/path or https://…" size="22">
+    <input id="new-app-name" placeholder="label (e.g. 🎬 Jellyfin)" size="16">
+    <input id="new-app-url" placeholder="/path or https://…" size="20">
     <button class="mini" id="add-app">＋ add tile</button>
   </div>
+
+  <div class="sethead">Widgets — show &amp; order</div>
+  <div id="set-widgets"></div>
+
+  <div class="sethead">Boot mode — what a reboot starts</div>
+  <div class="setrow">
+    <button class="mini" id="boot-dev">💻 developer</button>
+    <button class="mini" id="boot-game">🎮 gaming</button>
+    <span class="setlabel dim2" id="boot-state"></span>
+  </div>
+
   <div class="sethead">Auth &amp; pairing</div>
   <div class="setrow">
     <button class="mini" id="t3-pair-btn">🔑 New T3 pairing token</button>
@@ -1052,10 +1078,12 @@ body.gaming #panels>[data-panel="stats"]{display:grid!important}
     <a class="mini abtn" data-auth="auth-codex">🧠 Re-auth Codex</a>
     <a class="mini abtn" data-auth="auth-github">🐙 Re-auth GitHub</a>
   </div>
+
   <div class="sethead">Integrations</div>
   <div class="setrow"><span class="setlabel">Linear API key <span id="linear-state"></span></span>
-    <input type="password" id="set-linear" placeholder="lin_api_… (leave empty to keep)" size="26">
+    <input type="password" id="set-linear" placeholder="lin_api_… (leave empty to keep)" size="24">
   </div>
+
   <div class="sethead">Refresh</div>
   <div class="setrow"><span class="setlabel">poll interval</span>
     <select id="set-poll">
@@ -1063,8 +1091,21 @@ body.gaming #panels>[data-panel="stats"]{display:grid!important}
       <option value="10000">10 s</option><option value="30000">30 s</option>
     </select>
   </div>
-  <div class="setrow"><button id="save-set">💾 Save</button>
+
+  <div class="setrow" style="position:sticky;bottom:0;background:var(--inset);padding-top:8px">
+    <button id="save-set">💾 Save</button>
     <button class="mini" id="close-set">Close</button><span id="set-msg" class="setlabel"></span></div>
+ </div>
+</div>
+<div class="overlay" id="kill-dlg" style="display:none">
+ <div class="dlg" id="gc-box2">
+  <button class="mini" id="kill-x" style="position:absolute;top:10px;right:10px;z-index:2">✕</button>
+  <h2 style="color:var(--ink);font-size:15px;margin-bottom:8px">🗡️ Kill sessions</h2>
+  <p class="dim2" style="font-size:13px;margin-bottom:8px">Pick what dies. Anything running inside dies with it.</p>
+  <div id="kill-list"></div>
+  <div class="setrow"><button class="mini" id="kill-all">☠️ Kill ALL sessions</button>
+    <span class="setlabel dim2" id="kill-msg"></span></div>
+ </div>
 </div>
 <div class="overlay" id="console" style="display:none">
   <div class="dlg">
@@ -1105,6 +1146,8 @@ body.gaming #panels>[data-panel="stats"]{display:grid!important}
       <button data-act="developer">💻 Developer mode</button>
       <button data-act="restart-t3" data-confirm="Restart T3 Code? Active agent sessions survive, the UI reconnects.">↻ Restart T3 Code</button>
       <button data-act="doctor">🩺 Run doctor</button>
+      <button data-act="reboot" data-confirm="Reboot the machine? Agent sessions die; everything else comes back automatically in the configured boot mode.">🔁 Reboot box</button>
+      <button id="kill-open">🗡️ Kill sessions…</button>
     </div>
   </div>
   <div class="panel" data-panel="services"><h2>⚙️ Services</h2><table id="services"></table></div>
@@ -1151,7 +1194,7 @@ const PANEL_TABS={prs:'work',ci:'work',linear:'work',usage:'work',
   tmux:'work',repos:'work',
   stats:'system',actions:'system',services:'system',docker:'system',journal:'system'};
 let linearConfigured=false,lastMode=null,lastTmux=[];
-let cfg=null,envApps=[],layoutKey='';
+let cfg=null,cfgSrv='',envApps=[],layoutKey='';
 let activeTab=localStorage.getItem('grave-tab')||'work';
 function allApps(){return envApps.concat(cfg&&cfg.custom_apps||[])}
 function applyLayout(){
@@ -1174,6 +1217,14 @@ document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
 function render(s){
   envApps=s.apps||[];
   lastTmux=s.tmux||[];
+  if(s.boot_mode){bootMode=s.boot_mode;paintBoot();}
+  // adopt settings saved elsewhere (another device/tab) — but never while
+  // this device is mid-edit in the settings modal
+  const sj=JSON.stringify(s.settings);
+  if(!cfg){cfg=s.settings;cfgSrv=sj;schedule();}
+  else if(sj!==cfgSrv&&$('settings-panel').style.display!=='block'){
+    cfg=s.settings;cfgSrv=sj;layoutKey='';schedule();
+  }
   const modeChanged=lastMode!==null&&lastMode!==s.mode;
   lastMode=s.mode;
   document.body.classList.toggle('gaming',s.mode==='gaming');
@@ -1182,7 +1233,6 @@ function render(s){
     $('torpor-line').textContent=s.torpor
       ?`dev stack buried · 🧊 ${s.torpor} agent session${s.torpor>1?'s':''} in torpor (RAM kept, zero CPU)`
       :'dev stack buried · no agent sessions held';
-  if(!cfg){cfg=s.settings;schedule();}
   if(modeChanged)schedule();
   const k=JSON.stringify([cfg.panel_order,cfg.hidden_panels,activeTab]);
   if(k!==layoutKey){layoutKey=k;applyLayout();}
@@ -1370,7 +1420,8 @@ $('console').addEventListener('click',e=>{if(e.target.id==='console')closeConsol
 $('game-confirm').addEventListener('click',e=>{
   if(e.target.id==='game-confirm')e.currentTarget.style.display='none';});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){
-  closeConsole();$('game-confirm').style.display='none';}});
+  closeConsole();$('game-confirm').style.display='none';
+  $('settings-panel').style.display='none';$('kill-dlg').style.display='none';}});
 $('console-close').onclick=()=>{$('console').style.display='none'};
 // ---------- gaming confirm dialog ----------
 function openGameConfirm(){
@@ -1485,7 +1536,60 @@ $('gear').onclick=()=>{
   buildSettings();p.style.display='block';
 };
 $('close-set').onclick=()=>{$('settings-panel').style.display='none'};
+$('settings-x').onclick=()=>{$('settings-panel').style.display='none'};
+$('settings-panel').addEventListener('click',e=>{
+  if(e.target.id==='settings-panel')e.currentTarget.style.display='none';});
+// ---------- kill-sessions dialog ----------
+function buildKillList(){
+  $('kill-list').innerHTML=lastTmux.length?lastTmux.map(x=>`<div class="setrow">
+    <span class="setlabel">🤖 ${esc(x.name)} <span class="dim2">· ${esc(x.windows)} win · ${esc(x.attached)}</span></span>
+    <button class="mini" data-kill-one="${esc(x.name)}">✕ kill</button>
+  </div>`).join('')
+  :'<div class="setrow dim2">no sessions running</div>';
+}
+async function killSession(n){
+  const r=await fetch('api/session-kill',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});
+  return (await r.json()).ok;
+}
+$('kill-open').onclick=()=>{buildKillList();$('kill-msg').textContent='';$('kill-dlg').style.display='block';};
+$('kill-x').onclick=()=>{$('kill-dlg').style.display='none'};
+$('kill-dlg').addEventListener('click',async e=>{
+  if(e.target.id==='kill-dlg'){e.currentTarget.style.display='none';return;}
+  const n=e.target.dataset&&e.target.dataset.killOne;
+  if(!n)return;
+  e.target.disabled=true;
+  const ok=await killSession(n);
+  $('kill-msg').textContent=ok?`killed ${n}`:'kill failed';
+  lastTmux=lastTmux.filter(x=>x.name!==n);buildKillList();poll();
+});
+$('kill-all').onclick=async()=>{
+  if(!lastTmux.length){$('kill-msg').textContent='nothing to kill';return;}
+  if(!confirm(`Kill ALL ${lastTmux.length} session(s)?`))return;
+  for(const x of lastTmux)await killSession(x.name);
+  $('kill-msg').textContent='all sessions killed ☠️';
+  lastTmux=[];buildKillList();poll();
+};
 $('t3-pair-btn').onclick=()=>runStream('t3-pair','t3 pairing token — enter it on the new device (15 min)');
+// boot mode toggle (quick POST, not a console stream)
+let bootMode=null;
+function paintBoot(){
+  $('boot-dev').classList.toggle('activebtn',bootMode==='developer');
+  $('boot-game').classList.toggle('activebtn',bootMode==='gaming');
+}
+async function setBoot(m){
+  $('boot-state').textContent='saving…';
+  try{
+    const r=await fetch('api/action',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({action:'bootmode-'+m})});
+    const j=await r.json();
+    $('boot-state').textContent=j.ok?'saved ✓':(j.output||'failed');
+    if(j.ok){bootMode=m;paintBoot();}
+  }catch(e){$('boot-state').textContent='failed: '+e;}
+}
+$('boot-dev').onclick=()=>setBoot('developer');
+$('boot-game').onclick=()=>setBoot('gaming');
 $('add-app').onclick=()=>{
   const n=$('new-app-name').value.trim(),u=$('new-app-url').value.trim();
   if(!u){$('set-msg').textContent='tile needs a URL';return;}
@@ -1505,7 +1609,7 @@ $('save-set').onclick=async()=>{
     const r=await fetch('api/settings',{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const j=await r.json();
-    if(j.ok){cfg=j.settings;layoutKey='';schedule();
+    if(j.ok){cfg=j.settings;cfgSrv=JSON.stringify(j.settings);layoutKey='';schedule();
       linearConfigured=!!j.linear_configured;
       $('set-linear').value='';
       $('linear-state').textContent=linearConfigured?'✓ configured':'(not set)';
