@@ -814,7 +814,10 @@ function buildSettings(existing){
     [draft.panel_order[i+1],draft.panel_order[i]]=[draft.panel_order[i],draft.panel_order[i+1]];
     buildSettings(draft);});
   const ap=$('set-apps');
-  ap.innerHTML=allApps().map((a,i)=>`<div class="setrow">
+  // list must reflect the DRAFT being edited, not the last-saved cfg —
+  // otherwise a freshly added tile never shows up until after a save
+  const draftApps=envApps.concat(draft.custom_apps||[]);
+  ap.innerHTML=draftApps.map((a,i)=>`<div class="setrow">
     <input type="checkbox" data-app-vis="${esc(a.name)}" ${draft.hidden_apps.includes(a.name)?'':'checked'}>
     <span class="setlabel">${esc(a.name)} <span style="color:var(--muted)">${esc(a.url)}</span></span>
     ${i>=envApps.length?`<button class="mini" data-del-app="${i-envApps.length}">✕</button>`:''}
@@ -842,10 +845,13 @@ $('gear').onclick=()=>{
 $('close-set').onclick=()=>{$('settings-panel').style.display='none'};
 $('add-app').onclick=()=>{
   const n=$('new-app-name').value.trim(),u=$('new-app-url').value.trim();
-  if(!u)return;
+  if(!u){$('set-msg').textContent='tile needs a URL';return;}
   syncVis();draft.custom_apps.push({name:n||u,url:u});
-  $('new-app-name').value='';$('new-app-url').value='';buildSettings(draft);
+  $('new-app-name').value='';$('new-app-url').value='';
+  $('set-msg').textContent='tile added — hit 💾 Save';
+  buildSettings(draft);
 };
+$('new-app-url').addEventListener('keydown',e=>{if(e.key==='Enter')$('add-app').click()});
 $('save-set').onclick=async()=>{
   syncVis();
   const payload={...draft};
