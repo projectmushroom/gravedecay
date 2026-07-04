@@ -1002,6 +1002,10 @@ body.gaming #panels>[data-panel="stats"]{display:grid!important}
   padding-top:calc(14px + env(safe-area-inset-top));overflow-y:auto;
   -webkit-overflow-scrolling:touch;overscroll-behavior:contain}
 .sec-toggle{cursor:pointer;user-select:none;-webkit-user-select:none}
+#foot{margin:34px 0 6px;text-align:center;color:var(--muted);font-size:11px;
+  letter-spacing:.06em}
+#foot #epitaph{font-style:italic}
+body.gaming #foot{display:none}
 .dlg{max-width:860px;margin:5vh auto;background:var(--inset);border:1px solid var(--ring);
   padding:16px;position:relative}
 #console-title{font-size:13px;font-weight:700;color:var(--title);margin-bottom:10px;
@@ -1167,8 +1171,20 @@ body.gaming #panels>[data-panel="stats"]{display:grid!important}
   <div class="panel" data-panel="docker"><h2>🐳 Docker</h2><table id="docker"></table></div>
   <div class="panel w-full" data-panel="journal"><h2>📋 Journal errors (24 h)</h2><pre id="journal"></pre></div>
 </div>
+<footer id="foot">🪦 gravedecay © 2026 — <span id="epitaph"></span></footer>
 <script>
 const $=id=>document.getElementById(id);
+// one epitaph per visit
+$('epitaph').textContent=[
+  'the box never sleeps. neither do they.',
+  'six feet down, five nines up.',
+  'what is dead may never idle.',
+  'your agents work the graveyard shift.',
+  'rest in production.',
+  'no rest for the deployed.',
+  'dig once, ship forever.',
+  'buried, not broken.',
+][Math.floor(Math.random()*8)];
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const hist={load:[],cpu:[]};   // client-side sparkline history (last 60 polls)
 function push(k,v){if(v==null)return;hist[k].push(v);if(hist[k].length>60)hist[k].shift();}
