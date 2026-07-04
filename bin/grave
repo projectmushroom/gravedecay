@@ -1,0 +1,379 @@
+#!/usr/bin/env bash
+# grave — unified control tool for a gravedecay appliance.
+# Docs: $GRAVE_ROOT/docs (or the gravedecay repo)   Config: /etc/gravedecay/grave.conf
+set -euo pipefail
+
+CONF="${GRAVE_CONF:-/etc/gravedecay/grave.conf}"
+[[ -r "$CONF" ]] || { echo "grave: config not found at $CONF (run raise.sh first)"; exit 1; }
+# shellcheck disable=SC1090
+source "$CONF"
+
+LOG_FILE="$GRAVE_ROOT/logs/grave.log"
+RED=$'\e[31m'; GRN=$'\e[32m'; YLW=$'\e[33m'; BLD=$'\e[1m'; RST=$'\e[0m'
+
+log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG_FILE" 2>/dev/null || true; }
+say() { printf '%s\n' "$*"; }
+ok()  { printf '  %b✓%b %s\n' "$GRN" "$RST" "$*"; }
+bad() { printf '  %b✗%b %s\n' "$RED" "$RST" "$*"; }
+hdr() { printf '\n%b%s%b\n' "$BLD" "$*" "$RST"; }
+
+need_root_helper() { sudo -n true 2>/dev/null || { say "grave needs passwordless sudo for this (see docs/SECURITY.md)"; exit 1; }; }
+
+tmuxa() { tmux -L "$TMUX_SOCKET" "$@"; }
+
+compose() { # compose <stack> <args...>
+  local stack="$1"; shift
+  sudo docker compose --project-directory "$GRAVE_ROOT/docker/$stack" "$@"
+}
+
+mem_available_mib() { awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo; }
+
+pkg_mgr() {
+  if command -v pacman >/dev/null; then echo pacman
+  elif command -v apt-get >/dev/null; then echo apt
+  elif command -v dnf >/dev/null; then echo dnf
+  else echo none; fi
+}
+
+# ---------------------------------------------------------------- status ----
+cmd_status() {
+  hdr "Always-on services"
+  local s
+  for s in "${ALWAYS_ON[@]}"; do
+    if systemctl is-active --quiet "$s"; then ok "$s"; else bad "$s (inactive)"; fi
+  done
+
+  hdr "Developer services"
+  for s in "${DEV_SERVICES[@]}"; do
+    if systemctl is-active --quiet "$s"; then ok "$s"; else bad "$s (stopped)"; fi
+  done
+  if systemctl is-active --quiet docker; then
+    ok "docker"
+    sudo docker ps --format '    {{.Names}}: {{.Status}}' 2>/dev/null || true
+  else
+    bad "docker (stopped)"
+  fi
+
+  hdr "Agent tmux sessions ($TMUX_SOCKET)"
+  local sessions
+  sessions=$(tmuxa list-sessions 2>/dev/null || true)
+  if [[ -n "$sessions" ]]; then sed 's/^/    /' <<<"$sessions"; else say "    (none)"; fi
+
+  hdr "Tailscale"
+  if command -v tailscale >/dev/null && tailscale status --peers=false >/dev/null 2>&1; then
+    tailscale status --peers=false | sed 's/^/    /'
+  else
+    bad "tailscale not connected"
+  fi
+
+  hdr "System"
+  printf '    uptime:%s\n' "$(uptime -p | sed 's/^up//')"
+  printf '    mem available: %s MiB\n' "$(mem_available_mib)"
+  printf '    disk %s: %s free\n' "$GRAVE_ROOT" "$(df -h "$GRAVE_ROOT" | awk 'NR==2{print $4}')"
+  if command -v sensors >/dev/null; then
+    sensors 2>/dev/null | awk '/^Package id 0|^Tctl|junction|^edge/ {printf "    temp %s\n", $0}' | head -3
+  fi
+}
+
+# ------------------------------------------------------------- start/stop ----
+start_dev() {
+  need_root_helper
+  say "Starting developer services..."
+  sudo systemctl start docker
+  local stack
+  for stack in "${DEV_STACKS[@]}"; do
+    compose "$stack" up -d --wait 2>/dev/null || compose "$stack" up -d
+    ok "stack $stack"
+  done
+  local s
+  for s in "${DEV_SERVICES[@]}"; do sudo systemctl start "$s"; ok "$s"; done
+  log "developer mode: started"
+}
+
+stop_dev() {
+  need_root_helper
+  say "Stopping developer services..."
+  local s
+  for s in "${DEV_SERVICES[@]}"; do sudo systemctl stop "$s" 2>/dev/null || true; ok "stopped $s"; done
+  if tmuxa list-sessions >/dev/null 2>&1; then
+    tmuxa kill-server 2>/dev/null || true
+    ok "stopped agent tmux sessions"
+  fi
+  if systemctl is-active --quiet docker; then
+    local stack idx
+    for (( idx=${#DEV_STACKS[@]}-1; idx>=0; idx-- )); do
+      stack="${DEV_STACKS[$idx]}"
+      compose "$stack" stop 2>/dev/null || true
+      ok "stopped stack $stack"
+    done
+    # stop any remaining containers so docker can shut down cleanly
+    local rest; rest=$(sudo docker ps -q)
+    [[ -n "$rest" ]] && sudo docker stop $rest >/dev/null
+    sudo systemctl stop docker.service docker.socket
+    ok "stopped docker"
+  fi
+  log "developer mode: stopped"
+}
+
+cmd_gaming() {
+  local before after
+  before=$(mem_available_mib)
+  stop_dev
+  after=$(mem_available_mib)
+  say ""
+  say "${BLD}🎮 Gaming mode.${RST} Freed ~$(( after - before )) MiB RAM."
+  say "Remote access (Tailscale + SSH) is untouched. Run 'grave developer' to restore."
+  log "gaming mode: active (freed $(( after - before )) MiB)"
+}
+
+cmd_developer() {
+  start_dev
+  say ""
+  say "${BLD}💻 Developer mode.${RST} All services up. 'grave status' for details."
+  log "developer mode: active"
+}
+
+# ---------------------------------------------------------------- agents ----
+cmd_agents() {
+  local sub="${1:-list}"; shift || true
+  case "$sub" in
+    list)
+      tmuxa list-sessions 2>/dev/null || say "No agent sessions. Start one: grave agents new <name> [dir]" ;;
+    new)
+      local name="${1:?usage: grave agents new <name> [dir]}"
+      local dir="${2:-$GRAVE_ROOT/repos}"
+      tmuxa -f "$TMUX_CONF" new-session -d -s "$name" -c "$dir"
+      mkdir -p "$GRAVE_ROOT/agents/$name"
+      tmuxa pipe-pane -t "$name" -o "cat >> $GRAVE_ROOT/agents/$name/session-\$(date +%%Y%%m%%d).log" 2>/dev/null || true
+      ok "session '$name' created in $dir (attach: grave agents attach $name)" ;;
+    attach)
+      exec tmux -L "$TMUX_SOCKET" attach -t "${1:?usage: grave agents attach <name>}" ;;
+    kill)
+      tmuxa kill-session -t "${1:?usage: grave agents kill <name>}"; ok "killed ${1}" ;;
+    *) say "usage: grave agents [list|new|attach|kill]"; exit 1 ;;
+  esac
+}
+
+# ---------------------------------------------------------------- docker ----
+cmd_docker() {
+  local sub="${1:-ps}"; shift || true
+  case "$sub" in
+    ps)    sudo docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' ;;
+    up)    compose "${1:?stack name}" up -d ;;
+    down)  compose "${1:?stack name}" down ;;
+    logs)  sudo docker logs --tail 100 -f "${1:?container name}" ;;
+    stacks) ls -1 "$GRAVE_ROOT/docker" ;;
+    disk)  sudo docker system df ;;
+    *) say "usage: grave docker [ps|up <stack>|down <stack>|logs <container>|stacks|disk]"; exit 1 ;;
+  esac
+}
+
+# ---------------------------------------------------------------- update ----
+cmd_update() {
+  need_root_helper
+  if command -v snapper >/dev/null; then
+    say "Snapshotting before update..."
+    sudo snapper -c root create --description "grave-pre-update" --cleanup-algorithm number || true
+  fi
+  say "Updating system packages..."
+  case "$(pkg_mgr)" in
+    pacman) sudo pacman -Syu --noconfirm
+            if command -v paru >/dev/null; then paru -Sua --noconfirm || say "${YLW}AUR update had issues (non-fatal)${RST}"; fi ;;
+    apt)    sudo apt-get update && sudo apt-get -y upgrade ;;
+    dnf)    sudo dnf -y upgrade ;;
+    *)      say "${YLW}no known package manager — skipping system update${RST}" ;;
+  esac
+  say "Updating npm-global tools..."
+  sudo npm update -g "${NPM_GLOBAL_TOOLS[@]}" 2>&1 | tail -1 || true
+  if systemctl is-active --quiet docker; then
+    say "Pulling docker images..."
+    local stack; for stack in "${DEV_STACKS[@]}"; do compose "$stack" pull -q || true; done
+  fi
+  say "Agent CLIs (claude/codex) self-update on launch."
+  log "update: completed"
+  ok "update complete — reboot only if the kernel changed"
+}
+
+# ------------------------------------------------------------------ logs ----
+cmd_logs() {
+  local target="${1:-grave}"
+  case "$target" in
+    t3|t3code)  sudo journalctl -u t3code -n 100 -f ;;
+    dash|gravedash) sudo journalctl -u gravedash -n 100 -f ;;
+    ssh|sshd)   sudo journalctl -u sshd -n 100 -f ;;
+    tailscale)  sudo journalctl -u tailscaled -n 100 -f ;;
+    system)     sudo journalctl -p warning -n 100 -f ;;
+    grave)      tail -n 50 -f "$LOG_FILE" ;;
+    agent)      tail -n 100 -f "$GRAVE_ROOT"/agents/"${2:?agent name}"/session-*.log ;;
+    *)          sudo docker logs --tail 100 -f "$target" 2>/dev/null || \
+                sudo journalctl -u "$target" -n 100 -f ;;
+  esac
+}
+
+# ---------------------------------------------------------------- doctor ----
+check() { # check <description> <command...>
+  if "${@:2}" >/dev/null 2>&1; then ok "$1"; else bad "$1"; FAILURES=$((FAILURES+1)); fi
+}
+firewall_active() {
+  if command -v ufw >/dev/null; then sudo ufw status | grep -q "Status: active"
+  elif command -v firewall-cmd >/dev/null; then firewall-cmd --state >/dev/null 2>&1
+  else return 1; fi
+}
+cmd_doctor() {
+  FAILURES=0
+  hdr "grave doctor"
+  check "tailscaled running"            systemctl is-active --quiet tailscaled
+  check "tailscale logged in"           tailscale status --peers=false
+  check "sshd running"                  systemctl is-active --quiet sshd
+  check "firewall active"               firewall_active
+  check "ssh password auth disabled"    bash -c "sudo sshd -T | grep -qi 'passwordauthentication no'"
+  if [[ "${CHECK_SLEEP_MASKED:-0}" == 1 ]]; then
+    check "sleep targets masked"        bash -c '[[ $(systemctl is-enabled sleep.target) == masked ]]'
+  fi
+  if [[ "${CHECK_LID_IGNORED:-0}" == 1 ]]; then
+    check "lid switch ignored"          bash -c '[[ $(busctl get-property org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager HandleLidSwitch) == *ignore* ]]'
+  fi
+  if [[ "${CHECK_DOCKER_SUBVOL:-0}" == 1 ]]; then
+    check "/var/lib/docker on own subvol" bash -c 'findmnt -n /var/lib/docker | grep -q subvol'
+  fi
+  if [[ "${CHECK_SNAPPER:-0}" == 1 ]]; then
+    check "snapper config for GRAVE_ROOT" sudo snapper -c "${SNAPPER_CONFIG:-srv}" list
+  fi
+  if systemctl is-active --quiet docker; then
+    check "docker healthy"              sudo docker info
+    check "no LAN-exposed containers"   bash -c '! sudo docker ps --format "{{.Ports}}" | grep -E "0\.0\.0\.0|\[::\]"'
+  else
+    say "  ${YLW}– docker stopped (gaming mode?)${RST}"
+  fi
+  if systemctl is-active --quiet t3code; then
+    check "t3code answering"            curl -sf -o /dev/null "http://127.0.0.1:$T3_PORT/"
+  else
+    say "  ${YLW}– t3code stopped (gaming mode?)${RST}"
+  fi
+  if systemctl is-active --quiet gravedash; then
+    check "gravedash answering"         curl -sf -o /dev/null "http://127.0.0.1:$DASH_PORT/healthz"
+  else
+    say "  ${YLW}– gravedash stopped${RST}"
+  fi
+  check "backups dir writable"          test -w "$BACKUP_DIR"
+  echo
+  if (( FAILURES == 0 )); then say "${GRN}${BLD}All checks passed.${RST}"; else say "${RED}${BLD}$FAILURES check(s) failed.${RST}"; exit 1; fi
+}
+
+# ---------------------------------------------------------------- backup ----
+cmd_backup() {
+  need_root_helper
+  local ts dest; ts=$(date +%Y%m%d-%H%M%S); dest="$BACKUP_DIR/$ts"
+  mkdir -p "$dest"/{repos,volumes,configs}
+  say "Backing up to $dest"
+
+  local repo name
+  for repo in "$GRAVE_ROOT"/repos/*/; do
+    [[ -d "$repo/.git" ]] || continue
+    name=$(basename "$repo")
+    git -C "$repo" bundle create "$dest/repos/$name.bundle" --all 2>/dev/null && ok "repo $name (git bundle)"
+  done
+
+  tar -C "$GRAVE_ROOT" -czf "$dest/configs/grave-platform.tar.gz" config docker docs scripts 2>/dev/null && ok "platform config"
+  local d
+  for d in "${AGENT_CONFIG_DIRS[@]}"; do
+    [[ -e "$HOME/$d" ]] && tar -C "$HOME" -czf "$dest/configs/${d#.}.tar.gz" "$d" 2>/dev/null && ok "agent config $d"
+  done
+  [[ -d "$GRAVE_ROOT/agents/t3code" ]] && tar -C "$GRAVE_ROOT/agents" -czf "$dest/configs/t3code-state.tar.gz" t3code && ok "t3code state"
+
+  if systemctl is-active --quiet docker; then
+    local vol
+    for vol in $(sudo docker volume ls -q | grep -vE '^[0-9a-f]{64}$'); do
+      sudo docker run --rm -v "$vol":/data:ro -v "$dest/volumes":/backup alpine \
+        tar -czf "/backup/$vol.tar.gz" -C /data . && ok "volume $vol"
+    done
+  else
+    say "  ${YLW}docker stopped — volumes skipped this run${RST}"
+  fi
+
+  # retention
+  local old
+  while IFS= read -r old; do
+    rm -rf "$BACKUP_DIR/${old:?}"; say "  pruned old backup $old"
+  done < <(ls -1 "$BACKUP_DIR" | sort | head -n -"$BACKUP_KEEP")
+  log "backup: $ts complete"
+  ok "backup complete: $dest"
+}
+
+cmd_restore() {
+  local ts="${1:-}"
+  if [[ -z "$ts" ]]; then
+    hdr "Available backups"
+    ls -1 "$BACKUP_DIR" 2>/dev/null || say "(none)"
+    say ""
+    say "usage: grave restore <backup> [volume <name> | repo <name>]"
+    say "Full procedures: $GRAVE_ROOT/docs/RECOVERY.md"
+    return
+  fi
+  local dest="$BACKUP_DIR/$ts"
+  [[ -d "$dest" ]] || { bad "no such backup: $ts"; exit 1; }
+  case "${2:-}" in
+    volume)
+      local vol="${3:?volume name}"
+      sudo docker volume create "$vol" >/dev/null
+      sudo docker run --rm -v "$vol":/data -v "$dest/volumes":/backup:ro alpine \
+        sh -c "cd /data && tar -xzf /backup/$vol.tar.gz"
+      ok "volume $vol restored from $ts" ;;
+    repo)
+      local name="${3:?repo name}"
+      git clone "$dest/repos/$name.bundle" "$GRAVE_ROOT/repos/$name-restored"
+      ok "repo restored to $GRAVE_ROOT/repos/$name-restored" ;;
+    *)
+      say "Backup contents of $ts:"; find "$dest" -type f | sed "s|$dest/|  |"
+      say ""; say "Restore a piece: grave restore $ts volume <name> | repo <name>"
+      say "Full procedures: $GRAVE_ROOT/docs/RECOVERY.md" ;;
+  esac
+}
+
+# ------------------------------------------------------------------ help ----
+cmd_help() {
+  cat <<'EOF'
+grave — gravedecay appliance control 🪦
+
+  grave status               overview: services, containers, agents, system
+  grave doctor               verify every platform invariant
+
+  grave gaming               🎮 free resources for gaming (keeps SSH/Tailscale)
+  grave developer            💻 restore full development mode
+  grave start | stop         same as developer / gaming (without the banner)
+  grave restart              stop + start developer services
+
+  grave agents               list agent tmux sessions
+  grave agents new <n> [dir]    create persistent agent session
+  grave agents attach <n>       attach (detach: Ctrl-b d)
+  grave agents kill <n>         kill session
+
+  grave docker [ps|up <stack>|down <stack>|logs <c>|stacks|disk]
+  grave logs [t3|dash|ssh|tailscale|system|grave|agent <n>|<container/unit>]
+
+  grave update               snapshot (if snapper), update pkgs/npm/images
+  grave backup               bundle repos, configs, docker volumes
+  grave restore [backup]     list / restore backups
+
+Docs: $GRAVE_ROOT/docs   Config: /etc/gravedecay/grave.conf
+EOF
+}
+
+# ------------------------------------------------------------------ main ----
+case "${1:-help}" in
+  status)     cmd_status ;;
+  gaming)     cmd_gaming ;;
+  developer)  cmd_developer ;;
+  start)      start_dev ;;
+  stop)       stop_dev ;;
+  restart)    stop_dev; start_dev ;;
+  agents)     shift; cmd_agents "$@" ;;
+  docker)     shift; cmd_docker "$@" ;;
+  update)     cmd_update ;;
+  logs)       shift; cmd_logs "$@" ;;
+  doctor)     cmd_doctor ;;
+  backup)     cmd_backup ;;
+  restore)    shift || true; cmd_restore "$@" ;;
+  help|--help|-h) cmd_help ;;
+  *) say "unknown command: $1"; cmd_help; exit 1 ;;
+esac

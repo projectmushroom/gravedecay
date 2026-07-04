@@ -1,0 +1,48 @@
+# Core development services: PostgreSQL + Redis.
+# Ports bind to 127.0.0.1 only — reachable locally and via `tailscale serve`
+# if ever needed remotely. Never expose these on the LAN.
+name: core
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: core-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-dev}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-dev}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [devnet]
+
+  redis:
+    image: redis:8-alpine
+    container_name: core-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [devnet]
+
+volumes:
+  postgres-data:
+  redis-data:
+
+networks:
+  devnet:
+    external: true

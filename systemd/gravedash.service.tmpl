@@ -1,0 +1,24 @@
+[Unit]
+Description=gravedash - gravedecay appliance status dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+Group=@USER@
+ExecStart=/usr/bin/python3 @GRAVE_ROOT@/scripts/gravedash.py
+Restart=always
+RestartSec=3
+SyslogIdentifier=gravedash
+Environment=GRAVE_ROOT=@GRAVE_ROOT@
+Environment=GRAVEDASH_PORT=@DASH_PORT@
+# Comma-separated Tailscale logins allowed to press action buttons.
+# Empty = tailnet viewers are read-only. Add yours in a drop-in or here.
+Environment=GRAVEDASH_ALLOWED_USERS=@ALLOWED_USERS@
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

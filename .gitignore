@@ -1,0 +1,7 @@
+# secrets never enter git
+config/secrets/
+*.env
+!*.env.example
+
+__pycache__/
+node_modules/

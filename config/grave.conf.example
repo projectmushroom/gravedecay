@@ -1,0 +1,41 @@
+# grave configuration — sourced by /usr/local/bin/grave (bash syntax).
+# raise.sh installs this to /etc/gravedecay/grave.conf with @TOKENS@ filled in.
+
+# Root of the dev platform
+GRAVE_ROOT="@GRAVE_ROOT@"
+
+# systemd services that are part of "developer mode" (stopped by gaming mode)
+DEV_SERVICES=(t3code)
+
+# Docker compose stacks under $GRAVE_ROOT/docker started in developer mode.
+# Order matters: started in this order, stopped in reverse.
+DEV_STACKS=(core browsers)
+
+# systemd services that must NEVER be touched by grave gaming/stop.
+# Host profiles may append machine-specific units (GPU pinning etc.).
+ALWAYS_ON=(tailscaled sshd NetworkManager gravedash)
+
+# tmux socket name used for agent sessions
+TMUX_SOCKET="agents"
+TMUX_CONF="$GRAVE_ROOT/config/tmux.conf"
+
+# Agent configs (in $HOME) included in backups
+AGENT_CONFIG_DIRS=(.claude .codex .gemini)
+
+# npm -g tools refreshed by `grave update`
+NPM_GLOBAL_TOOLS=(t3)
+
+# Backups
+BACKUP_DIR="$GRAVE_ROOT/backups"
+BACKUP_KEEP=7
+
+# Ports (documented in docs/PORTS.md)
+T3_PORT=4711
+DASH_PORT=4712
+
+# Doctor toggles — set to 1 when the host profile establishes the invariant
+CHECK_SLEEP_MASKED=0     # sleep/suspend targets masked (always-on box)
+CHECK_LID_IGNORED=0      # laptop lid close ignored at logind level
+CHECK_DOCKER_SUBVOL=0    # /var/lib/docker on its own btrfs subvolume
+CHECK_SNAPPER=0          # snapper timeline for $GRAVE_ROOT
+SNAPPER_CONFIG=srv

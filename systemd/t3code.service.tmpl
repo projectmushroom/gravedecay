@@ -1,0 +1,28 @@
+[Unit]
+Description=T3 Code server (AI coding agent web UI)
+Documentation=https://github.com/pingdotgg/t3code
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+Group=@USER@
+WorkingDirectory=@GRAVE_ROOT@/repos
+ExecStart=/usr/bin/t3 serve --mode web --host 127.0.0.1 --port @T3_PORT@ --base-dir @GRAVE_ROOT@/agents/t3code @GRAVE_ROOT@/repos
+Restart=always
+RestartSec=3
+SyslogIdentifier=t3code
+SuccessExitStatus=130 143 SIGTERM SIGINT
+# Agent CLIs (claude/codex in ~/.local/bin) must be reachable from T3 sessions
+Environment=PATH=@HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=@HOME@
+# Per-integration secrets (Linear, etc.) — see docs/SECRETS.md
+EnvironmentFile=-@GRAVE_ROOT@/config/secrets/t3.env
+
+# Hardening (mild: T3 spawns agents that legitimately edit @GRAVE_ROOT@ and $HOME configs)
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

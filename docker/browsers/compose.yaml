@@ -1,0 +1,21 @@
+# Browser automation for AI agents: Playwright server.
+# Agents connect with: playwright.chromium.connect("ws://127.0.0.1:3050/")
+# Stopped by `grave gaming` to free RAM.
+name: browsers
+
+services:
+  playwright:
+    image: mcr.microsoft.com/playwright:v1.54.0-noble
+    container_name: browsers-playwright
+    restart: unless-stopped
+    init: true
+    command: >
+      /bin/sh -c "npx -y playwright@1.54.0 run-server --port 3050 --host 0.0.0.0"
+    ports:
+      - "127.0.0.1:3050:3050"
+    ipc: host
+    networks: [devnet]
+
+networks:
+  devnet:
+    external: true
