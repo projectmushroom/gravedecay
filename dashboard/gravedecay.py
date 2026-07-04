@@ -1171,10 +1171,11 @@ body.gaming #foot{display:none}
   <div class="panel" data-panel="docker"><h2>🐳 Docker</h2><table id="docker"></table></div>
   <div class="panel w-full" data-panel="journal"><h2>📋 Journal errors (24 h)</h2><pre id="journal"></pre></div>
 </div>
-<footer id="foot">🪦 gravedecay © 2026 — <span id="epitaph"></span></footer>
+<footer id="foot">🪦 gravedecay © <span id="footyear"></span> — <span id="epitaph"></span></footer>
 <script>
 const $=id=>document.getElementById(id);
 // one epitaph per visit
+$('footyear').textContent=new Date().getFullYear();
 $('epitaph').textContent=[
   'the box never sleeps. neither do they.',
   'six feet down, five nines up.',
