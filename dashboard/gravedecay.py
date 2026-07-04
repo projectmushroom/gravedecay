@@ -50,7 +50,8 @@ APPS = [{"name": name.strip(), "url": url.strip()}
 # exactly like actions). Stored beside the other appliance config.
 SETTINGS_PATH = os.path.join(GRAVE_ROOT, "config", "gravedecay-settings.json")
 DEFAULT_SETTINGS = {
-    "panel_order": ["stats", "prs", "linear", "services", "docker", "tmux", "repos", "journal"],
+    "panel_order": ["prs", "reviews", "ci", "linear", "tmux", "repos",
+                    "stats", "actions", "services", "docker", "journal"],
     "hidden_panels": [],   # panel ids to hide
     "hidden_apps": [],     # launcher tile names to hide
     "custom_apps": [],     # extra tiles: [{"name": ..., "url": ...}]
@@ -321,21 +322,59 @@ def collect_github():
         if not login:
             return {"login": None, "prs": [],
                     "error": "gh not authenticated — ⚙️ settings → Re-auth GitHub"}
-        rc, out, _ = sh(["gh", "search", "prs", "--state=open", "--owner", login,
-                         "--json", "number,title,repository,url"], timeout=15)
-        prs = []
-        if rc == 0:
-            try:
-                for p in json.loads(out):
-                    repo = (p.get("repository") or {}).get("nameWithOwner", "?")
-                    prs.append({"repo": repo.split("/")[-1], "number": p.get("number"),
-                                "title": str(p.get("title", ""))[:80], "url": p.get("url", "")})
-            except ValueError:
-                pass
+        def search(*extra):
+            rc, out, _ = sh(["gh", "search", "prs", "--state=open", *extra,
+                             "--json", "number,title,repository,url"], timeout=15)
+            rows = []
+            if rc == 0:
+                try:
+                    for p in json.loads(out):
+                        repo = (p.get("repository") or {}).get("nameWithOwner", "?")
+                        rows.append({"repo": repo.split("/")[-1], "number": p.get("number"),
+                                     "title": str(p.get("title", ""))[:80], "url": p.get("url", "")})
+                except ValueError:
+                    pass
+            return rows[:15]
         more = (f"https://github.com/search?q=owner%3A{login}+is%3Apr+is%3Aopen"
                 "&type=pullrequests")
-        return {"login": login, "prs": prs[:15], "more_url": more, "error": None}
+        return {"login": login, "error": None,
+                "prs": search("--owner", login), "more_url": more,
+                "reviews": search(f"--review-requested={login}"),
+                "reviews_url": "https://github.com/pulls/review-requested"}
     return cached("github", 120, fetch)
+
+
+def collect_ci():
+    """Latest workflow run per repo under $GRAVE_ROOT/repos with a GitHub remote."""
+    def fetch():
+        rows = []
+        base = f"{GRAVE_ROOT}/repos"
+        try:
+            entries = sorted(os.listdir(base))
+        except OSError:
+            entries = []
+        for name in entries[:12]:
+            path = f"{base}/{name}"
+            if not os.path.isdir(f"{path}/.git"):
+                continue
+            rc, out, _ = sh(["git", "-C", path, "remote", "get-url", "origin"])
+            m = re.search(r"github\.com[:/]([^/\s]+/[^/.\s]+)", out)
+            if rc != 0 or not m:
+                continue
+            rc, out, _ = sh(["gh", "run", "list", "-R", m.group(1), "-L", "1",
+                             "--json", "workflowName,conclusion,status,url,headBranch"],
+                            timeout=15)
+            try:
+                runs = json.loads(out) if rc == 0 else []
+            except ValueError:
+                runs = []
+            if runs:
+                r = runs[0]
+                rows.append({"repo": name, "workflow": r.get("workflowName", ""),
+                             "branch": r.get("headBranch", ""), "status": r.get("status", ""),
+                             "conclusion": r.get("conclusion") or "", "url": r.get("url", "")})
+        return {"rows": rows}
+    return cached("ci", 180, fetch)
 
 
 LINEAR_ENV = os.path.join(GRAVE_ROOT, "config", "secrets", "linear.env")
@@ -379,6 +418,46 @@ def collect_linear():
     return cached("linear", 120, fetch)
 
 
+def linear_gql(payload):
+    req = urllib.request.Request(
+        "https://api.linear.app/graphql", data=json.dumps(payload).encode(),
+        headers={"Authorization": linear_key() or "", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.load(r)["data"]
+
+
+def linear_meta():
+    """Viewer id + default (first) team, for quick-create. Cached an hour."""
+    def fetch():
+        if not linear_key():
+            return None
+        try:
+            v = linear_gql({"query":
+                "{ viewer { id teams(first: 1) { nodes { id key } } } }"})["viewer"]
+            return {"viewer_id": v["id"], "team_id": v["teams"]["nodes"][0]["id"]}
+        except Exception:
+            return None
+    return cached("linear-meta", 3600, fetch)
+
+
+def linear_create(title):
+    meta = linear_meta()
+    if not meta:
+        return {"ok": False, "output": "linear not configured"}
+    try:
+        res = linear_gql({
+            "query": """mutation($input: IssueCreateInput!) {
+                issueCreate(input: $input) { success issue { identifier url } } }""",
+            "variables": {"input": {"teamId": meta["team_id"], "title": title[:200],
+                                    "assigneeId": meta["viewer_id"]}}})["issueCreate"]
+    except Exception as e:
+        return {"ok": False, "output": f"linear: {e}"}
+    if not res.get("success"):
+        return {"ok": False, "output": "issue create failed"}
+    _ttl_cache.pop("linear", None)
+    return {"ok": True, "issue": res["issue"]}
+
+
 def save_linear_key(key):
     os.makedirs(os.path.dirname(LINEAR_ENV), mode=0o700, exist_ok=True)
     fd = os.open(LINEAR_ENV, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -411,6 +490,7 @@ def state(headers):
         "mode": mode,
         "apps": apps,
         "github": gh,
+        "ci": collect_ci(),
         "linear": collect_linear(),
         "settings": load_settings(),
         "services": collect_services(),
@@ -483,10 +563,14 @@ class Handler(BaseHTTPRequestHandler):
                 "ok": False,
                 "output": f"forbidden for {viewer} — add to GRAVEDECAY_ALLOWED_USERS"}))
             return
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            data = json.loads(self.rfile.read(length)) if length else {}
+        except ValueError:
+            self._send(400, json.dumps({"ok": False, "output": "bad payload"}))
+            return
         if p == "/api/settings":
             try:
-                length = int(self.headers.get("Content-Length", 0))
-                data = json.loads(self.rfile.read(length))
                 key = data.pop("linear_key", "")
                 if isinstance(key, str) and key.strip():
                     save_linear_key(key)
@@ -496,19 +580,29 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(200, json.dumps({"ok": True, "settings": merged,
                                         "linear_configured": bool(linear_key())}))
-            return
-        if p != "/api/action":
+        elif p == "/api/linear-issue":
+            title = str(data.get("title", "")).strip()
+            if not title:
+                self._send(400, json.dumps({"ok": False, "output": "title required"}))
+                return
+            self._send(200, json.dumps(linear_create(title)))
+        elif p == "/api/session-kill":
+            name = str(data.get("name", ""))
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,50}", name):
+                self._send(400, json.dumps({"ok": False, "output": "bad session name"}))
+                return
+            rc, out, err = sh(["tmux", "-L", "agents", "kill-session", "-t", name])
+            self._send(200, json.dumps({"ok": rc == 0, "output": out + err}))
+        elif p == "/api/action":
+            try:
+                cmd = ACTIONS[data["action"]]
+            except KeyError:
+                self._send(400, json.dumps({"ok": False, "output": "unknown action"}))
+                return
+            rc, out, err = sh(cmd, timeout=120)
+            self._send(200, json.dumps({"ok": rc == 0, "output": ANSI.sub("", out + err)}))
+        else:
             self._send(404, '{"error":"not found"}')
-            return
-        try:
-            length = int(self.headers.get("Content-Length", 0))
-            action = json.loads(self.rfile.read(length))["action"]
-            cmd = ACTIONS[action]
-        except (ValueError, KeyError):
-            self._send(400, json.dumps({"ok": False, "output": "unknown action"}))
-            return
-        rc, out, err = sh(cmd, timeout=120)
-        self._send(200, json.dumps({"ok": rc == 0, "output": ANSI.sub("", out + err)}))
 
 
 PAGE = r"""<!doctype html>
@@ -551,8 +645,12 @@ h1{font-size:17px;font-weight:600;color:var(--ink)}
   font:600 15px system-ui,sans-serif;color:var(--ink);text-decoration:none}
 .app:hover{border-color:var(--accent)}
 .app:active{transform:scale(.97)}
-.actions{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
+.actions{display:flex;flex-wrap:wrap;gap:8px}
 @media(max-width:640px){.actions{display:grid;grid-template-columns:1fr 1fr}}
+.tabs{display:flex;gap:8px;margin-bottom:10px}
+.tab{flex:1;min-height:40px;padding:6px 12px;border-radius:99px;color:var(--muted);font-weight:600}
+.tab.active{border-color:var(--accent);color:var(--ink)}
+.kill{color:var(--crit);cursor:pointer;text-decoration:none;padding:0 6px}
 button{background:var(--surface);color:var(--ink);border:1px solid var(--ring);
   border-radius:10px;padding:10px 16px;min-height:46px;font:600 14px system-ui,sans-serif;
   cursor:pointer;touch-action:manipulation}
@@ -605,16 +703,14 @@ a{color:var(--accent-soft)}
 </style></head><body>
 <div class="topbar">
   <h1>gravedecay</h1>
-  <span class="badge" id="mode">…</span>
+  <span class="badge" id="mode" role="button" title="Tap to switch mode" style="cursor:pointer">…</span>
   <button class="gear" id="gear" title="Settings" aria-label="Settings">⚙️</button>
   <span class="meta" id="meta">connecting…</span>
 </div>
 <div class="apps" id="apps"></div>
-<div class="actions">
-  <button data-act="gaming" data-confirm="Stop dev services and free RAM for gaming?">🎮 Gaming mode</button>
-  <button data-act="developer" data-confirm="Start all developer services?">💻 Developer mode</button>
-  <button data-act="restart-t3" data-confirm="Restart T3 Code? Active agent sessions survive, the UI reconnects.">↻ Restart T3 Code</button>
-  <button data-act="doctor">🩺 Run doctor</button>
+<div class="tabs">
+  <button class="tab" data-tab="work">🛠️ Work</button>
+  <button class="tab" data-tab="system">📟 System</button>
 </div>
 <div class="panel" id="settings-panel">
   <h2>⚙️ Settings</h2>
@@ -649,13 +745,26 @@ a{color:var(--accent-soft)}
 </div>
 <div class="panel" id="out-panel"><h2 id="out-title">output</h2><pre id="out"></pre></div>
 <div id="panels">
-  <div class="tiles w-full" data-panel="stats" id="tiles"></div>
   <div class="panel" data-panel="prs"><h2>🔀 Open pull requests</h2><table id="prs"></table></div>
-  <div class="panel" data-panel="linear"><h2>📐 Linear — assigned to me</h2><table id="linear"></table></div>
+  <div class="panel" data-panel="reviews"><h2>👀 Review requests</h2><table id="reviews"></table></div>
+  <div class="panel" data-panel="ci"><h2>🏗️ CI status</h2><table id="ci"></table></div>
+  <div class="panel" data-panel="linear"><h2>📐 Linear — assigned to me</h2><table id="linear"></table>
+    <div class="setrow"><input id="new-linear" placeholder="new issue title…" style="flex:1">
+      <button class="mini" id="add-linear">➕</button></div>
+  </div>
+  <div class="panel" data-panel="tmux"><h2>🤖 Agent sessions — tap to open</h2><table id="tmux"></table></div>
+  <div class="panel" data-panel="repos"><h2>📦 Repos</h2><table id="repos"></table></div>
+  <div class="tiles w-full" data-panel="stats" id="tiles"></div>
+  <div class="panel w-full" data-panel="actions"><h2>🕹️ Actions</h2>
+    <div class="actions">
+      <button data-act="gaming" data-confirm="Stop dev services and free RAM for gaming?">🎮 Gaming mode</button>
+      <button data-act="developer" data-confirm="Start all developer services?">💻 Developer mode</button>
+      <button data-act="restart-t3" data-confirm="Restart T3 Code? Active agent sessions survive, the UI reconnects.">↻ Restart T3 Code</button>
+      <button data-act="doctor">🩺 Run doctor</button>
+    </div>
+  </div>
   <div class="panel" data-panel="services"><h2>⚙️ Services</h2><table id="services"></table></div>
   <div class="panel" data-panel="docker"><h2>🐳 Docker</h2><table id="docker"></table></div>
-  <div class="panel" data-panel="tmux"><h2>🤖 Agent sessions (tmux)</h2><table id="tmux"></table></div>
-  <div class="panel" data-panel="repos"><h2>📦 Repos</h2><table id="repos"></table></div>
   <div class="panel w-full" data-panel="journal"><h2>📋 Journal errors (24 h)</h2><pre id="journal"></pre></div>
 </div>
 <script>
@@ -690,10 +799,14 @@ function statusDot(state){
 // viewed on a bare port (localhost:4712) rather than mounted at /dash/
 const appUrl=u=>(location.port&&location.port!=='443'&&u.startsWith('/'))
   ?`https://${location.hostname}${u}`:u;
-const PANEL_NAMES={stats:'Stats tiles',prs:'Open pull requests',linear:'Linear issues',
-  services:'Services',docker:'Docker',tmux:'Agent sessions',repos:'Repos',journal:'Journal errors'};
-let linearConfigured=false;
+const PANEL_NAMES={prs:'Open pull requests',reviews:'Review requests',ci:'CI status',
+  linear:'Linear issues',tmux:'Agent sessions',repos:'Repos',stats:'Stats tiles',
+  actions:'Actions',services:'Services',docker:'Docker',journal:'Journal errors'};
+const PANEL_TABS={prs:'work',reviews:'work',ci:'work',linear:'work',tmux:'work',repos:'work',
+  stats:'system',actions:'system',services:'system',docker:'system',journal:'system'};
+let linearConfigured=false,lastMode=null;
 let cfg=null,envApps=[],layoutKey='';
+let activeTab=localStorage.getItem('grave-tab')||'work';
 function allApps(){return envApps.concat(cfg&&cfg.custom_apps||[])}
 function applyLayout(){
   const c=$('panels'),order=(cfg.panel_order||[]).slice();
@@ -701,14 +814,22 @@ function applyLayout(){
   order.forEach(id=>{
     const el=document.querySelector(`[data-panel="${id}"]`);
     if(!el)return;
-    el.style.display=cfg.hidden_panels.includes(id)?'none':'';
+    el.style.display=(cfg.hidden_panels.includes(id)||(PANEL_TABS[id]||'system')!==activeTab)
+      ?'none':'';
     c.appendChild(el);
   });
+  document.querySelectorAll('.tab').forEach(t=>
+    t.classList.toggle('active',t.dataset.tab===activeTab));
 }
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
+  activeTab=t.dataset.tab;localStorage.setItem('grave-tab',activeTab);
+  if(cfg)applyLayout();
+});
 function render(s){
   envApps=s.apps||[];
+  lastMode=s.mode;
   if(!cfg){cfg=s.settings;schedule();}
-  const k=JSON.stringify([cfg.panel_order,cfg.hidden_panels]);
+  const k=JSON.stringify([cfg.panel_order,cfg.hidden_panels,activeTab]);
   if(k!==layoutKey){layoutKey=k;applyLayout();}
   $('apps').innerHTML=allApps().filter(a=>!cfg.hidden_apps.includes(a.name)).map(a=>
     `<a class="app" href="${esc(appUrl(a.url))}">${esc(a.name)}</a>`).join('');
@@ -737,10 +858,11 @@ function render(s){
         <td>${statusDot(c.state==='running'?'active':'failed')}${esc(c.name)}</td>
         <td class="dim">${esc(c.status)}</td></tr>`).join('')||'<tr><td class="dim">no containers</td></tr>');
   $('tmux').innerHTML=s.tmux.length?s.tmux.map(x=>`<tr>
-      <td>${statusDot('active')}${esc(x.name)}</td>
+      <td>${statusDot('active')}<a href="${esc(appUrl('/term/?arg='+encodeURIComponent(x.name)))}">${esc(x.name)}</a></td>
       <td class="num">${esc(x.windows)} win</td>
-      <td class="dim">${esc(x.attached)}</td></tr>`).join('')
-    :'<tr><td class="dim">no agent sessions — <code>grave agents new</code></td></tr>';
+      <td class="dim">${esc(x.attached)}</td>
+      <td class="num"><a class="kill" data-kill="${esc(x.name)}" title="kill session">✕</a></td></tr>`).join('')
+    :'<tr><td class="dim">no agent sessions — use the Terminal/Claude/Codex tiles</td></tr>';
   $('repos').innerHTML=s.repos.length?s.repos.map(r=>`<tr>
       <td>${statusDot(r.dirty?'inactive':'active')}${esc(r.name)}</td>
       <td class="dim">${esc(r.branch)}${r.dirty?` · ${r.dirty} dirty`:''}</td>
@@ -758,6 +880,19 @@ function render(s){
         <td class="dim">${esc(p.title)}</td></tr>`).join('')
        +moreRow(5,(gh.prs||[]).length,gh.more_url)
        ||'<tr><td class="dim">no open PRs 🎉</td></tr>');
+  $('reviews').innerHTML=gh.error
+    ? `<tr><td class="dim">${esc(gh.error)}</td></tr>`
+    : ((gh.reviews||[]).slice(0,5).map(p=>`<tr>
+        <td><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.repo)} #${p.number}</a></td>
+        <td class="dim">${esc(p.title)}</td></tr>`).join('')
+       +moreRow(5,(gh.reviews||[]).length,gh.reviews_url)
+       ||'<tr><td class="dim">nobody is waiting on you 🎉</td></tr>');
+  $('ci').innerHTML=((s.ci||{}).rows||[]).map(r=>{
+    const st=r.status!=='completed'?'inactive':(r.conclusion==='success'?'active':'failed');
+    return `<tr><td>${statusDot(st)}<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.repo)}</a></td>
+      <td class="dim">${esc(r.workflow)}</td>
+      <td class="dim">${esc(r.branch)} · ${esc(r.conclusion||r.status)}</td></tr>`;
+  }).join('')||'<tr><td class="dim">no workflow runs in any repo</td></tr>';
   const li=s.linear||{};
   linearConfigured=!!li.configured;
   $('linear').innerHTML=!li.configured
@@ -791,6 +926,42 @@ document.querySelectorAll('button[data-act]').forEach(b=>b.onclick=async()=>{
   }catch(e){ $('out').textContent='request failed: '+e; }
   b.classList.remove('busy'); poll();
 });
+// tap a session name to open it in the terminal; ✕ kills it (event
+// delegation — rows are rebuilt every poll)
+$('tmux').addEventListener('click',async e=>{
+  const n=e.target.dataset&&e.target.dataset.kill;
+  if(!n)return;
+  e.preventDefault();
+  if(!confirm(`Kill session "${n}"? Anything running in it dies.`))return;
+  try{
+    const r=await fetch('api/session-kill',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});
+    const j=await r.json();
+    if(!j.ok)alert(j.output||'kill failed');
+  }catch(err){alert('kill failed: '+err);}
+  poll();
+});
+// linear quick-create
+$('add-linear').onclick=async()=>{
+  const t=$('new-linear').value.trim();
+  if(!t)return;
+  $('add-linear').disabled=true;
+  try{
+    const r=await fetch('api/linear-issue',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({title:t})});
+    const j=await r.json();
+    if(j.ok){$('new-linear').value='';poll();}
+    else alert(j.output||'create failed');
+  }catch(err){alert('create failed: '+err);}
+  $('add-linear').disabled=false;
+};
+$('new-linear').addEventListener('keydown',e=>{if(e.key==='Enter')$('add-linear').click()});
+// mode badge = one-tap mode flip (delegates to the action button, incl. confirm)
+$('mode').onclick=()=>{
+  const target=lastMode==='developer'?'gaming':'developer';
+  const b=document.querySelector(`[data-act="${target}"]`);
+  if(b&&!b.disabled)b.click();
+};
 // ---------- settings panel ----------
 let draft=null;
 function buildSettings(existing){
@@ -801,7 +972,8 @@ function buildSettings(existing){
   draft.panel_order=order;
   w.innerHTML=order.map((id,i)=>`<div class="setrow">
     <input type="checkbox" data-panel-vis="${id}" ${draft.hidden_panels.includes(id)?'':'checked'}>
-    <span class="setlabel">${esc(PANEL_NAMES[id]||id)}</span>
+    <span class="setlabel">${esc(PANEL_NAMES[id]||id)}
+      <span style="color:var(--muted)">· ${PANEL_TABS[id]==='work'?'🛠️':'📟'}</span></span>
     <button class="mini" data-up="${i}" ${i===0?'disabled':''}>↑</button>
     <button class="mini" data-down="${i}" ${i===order.length-1?'disabled':''}>↓</button>
   </div>`).join('');

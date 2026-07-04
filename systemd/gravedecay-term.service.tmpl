@@ -22,7 +22,8 @@ Environment=HOME=@HOME@
 Environment=GRAVE_ROOT=@GRAVE_ROOT@
 
 NoNewPrivileges=yes
-PrivateTmp=yes
+# NO PrivateTmp: tmux sockets live in /tmp/tmux-<uid>/ — a private /tmp
+# would hide agent sessions (dashboard) / strand them in a namespace (ttyd)
 
 [Install]
 WantedBy=multi-user.target
