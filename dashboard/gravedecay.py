@@ -893,8 +893,7 @@ body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:98;
 a{color:var(--accent);text-decoration:none}
 a:hover{background:var(--accent);color:#000}
 h1{font-size:15px;font-weight:700;color:var(--ink);text-shadow:var(--glow)}
-h1::before{content:'> ';color:var(--accent)}
-#toplogo{width:24px;height:24px;display:block;border:1px solid var(--ring)}
+#toplogo{width:24px;height:24px;display:block}
 .topbar{position:sticky;top:0;z-index:101;display:flex;flex-wrap:wrap;gap:10px;align-items:center;
   background:var(--page);margin:0 -14px 16px;
   padding:calc(10px + env(safe-area-inset-top)) 14px 8px;
@@ -907,7 +906,10 @@ h1::before{content:'> ';color:var(--accent)}
 .topbar .meta{color:var(--muted);font-size:12px;margin-left:auto}
 .badge{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;
   border:1px solid var(--ring);font-size:12px;font-weight:700;color:var(--ink)}
-#mode:hover{border-color:var(--accent);color:var(--accent)}
+/* header controls: borderless, quiet — hover brings the color */
+.topbar .badge,.topbar .gear{border:none;background:transparent}
+#mode:hover{color:var(--accent)}
+.topbar .gear:hover{background:var(--surface);color:var(--ink)}
 /* launcher tiles */
 .apps{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:14px}
 .app{display:flex;align-items:center;justify-content:center;gap:8px;min-height:52px;
