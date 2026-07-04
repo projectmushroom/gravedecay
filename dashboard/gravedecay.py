@@ -1115,7 +1115,7 @@ body.gaming #foot{display:none}
 
   <div class="setrow" style="position:sticky;bottom:0;background:var(--inset);padding-top:8px">
     <button id="save-set">💾 Save</button>
-    <button class="mini" id="close-set">Close</button><span id="set-msg" class="setlabel"></span></div>
+    <button id="close-set">Close</button><span id="set-msg" class="setlabel"></span></div>
  </div>
 </div>
 <div class="overlay" id="kill-dlg" style="display:none">
@@ -1134,7 +1134,7 @@ body.gaming #foot{display:none}
       style="position:absolute;top:10px;right:10px;z-index:2">✕</button>
     <div id="console-title">▚ grave</div>
     <pre id="console-out"></pre><span id="ccur">▮</span>
-    <div class="setrow"><button class="mini" id="console-close" style="display:none">close</button></div>
+    <div class="setrow"><button id="console-close" style="display:none">Close</button></div>
   </div>
 </div>
 <div class="overlay" id="game-confirm" style="display:none">
@@ -1146,7 +1146,7 @@ body.gaming #foot{display:none}
     <div class="setrow">
       <button id="gc-freeze">🧊 Freeze sessions &amp; game</button>
       <button id="gc-kill">☠️ Kill sessions &amp; game</button>
-      <button class="mini" id="gc-cancel">Cancel</button>
+      <button id="gc-cancel">Cancel</button>
     </div>
   </div>
 </div>
