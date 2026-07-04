@@ -894,19 +894,25 @@ a{color:var(--accent);text-decoration:none}
 a:hover{background:var(--accent);color:#000}
 h1{font-size:17px;font-weight:700;color:var(--ink);text-shadow:var(--glow)}
 #toplogo{width:36px;height:36px;display:block}
-.topbar{position:sticky;top:0;z-index:101;display:flex;flex-wrap:wrap;gap:10px;align-items:center;
+.topbar{position:sticky;top:0;z-index:101;display:flex;flex-wrap:nowrap;gap:10px;align-items:center;
   background:var(--page);margin:0 -14px 16px;
   padding:calc(16px + env(safe-area-inset-top)) 14px 14px;
   border-bottom:1px solid var(--ring)}
+.topbar h1{white-space:nowrap}
 /* iOS PWA: an opaque strip over the status-bar/dynamic-island area — content
    must never be readable up there while scrolling. Sits above the scanline
    overlays (z 98/99); zero height on devices without an inset. */
+/* z 97: below the scanline/vignette overlays (98/99) so the safe-area strip
+   gets the same texture as the rest of the page — no faint seam — while
+   still covering scrolled content (z auto). */
 #topcover{position:fixed;top:0;left:0;right:0;height:env(safe-area-inset-top);
-  background:var(--page);z-index:102}
-.topbar .meta{color:var(--muted);font-size:12px}
+  background:var(--page);z-index:97}
+/* meta takes the slack and truncates — the controls can never wrap off-row */
+.topbar .meta{color:var(--muted);font-size:12px;flex:1;min-width:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .badge{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;
   border:1px solid var(--ring);font-size:12px;font-weight:700;color:var(--ink)}
-#mode{margin-left:auto} /* controls sit on the right, uptime rides the title */
+#mode{flex-shrink:0} .topbar .gear{flex-shrink:0}
 #mode:hover{border-color:var(--accent);color:var(--accent)}
 /* launcher tiles */
 .apps{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:14px}
@@ -967,7 +973,7 @@ td.num{text-align:right;font-variant-numeric:tabular-nums;color:var(--ink-2)}
 td.dim{color:var(--muted)}
 /* keys/ids in the first column (WEC-24, repo #3, …) must never wrap */
 #linear td:first-child,#prs td:first-child,#reviews td:first-child,
-#ci td:first-child{white-space:nowrap;padding-right:14px}
+#ci td:first-child,#usage td:first-child{white-space:nowrap;padding-right:14px}
 /* status squares (■), not dots */
 .dot{display:inline-block;width:8px;height:8px;margin-right:7px;vertical-align:-1px}
 .st-good{background:var(--good);box-shadow:0 0 5px var(--good)}
@@ -992,7 +998,10 @@ body.gaming #panels>*{display:none!important}
 body.gaming #panels>[data-panel="stats"]{display:grid!important}
 /* overlays: console + dialogs */
 .overlay{position:fixed;inset:0;z-index:110;background:rgba(3,5,3,.9);
-  backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);padding:14px;overflow-y:auto}
+  backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);padding:14px;
+  padding-top:calc(14px + env(safe-area-inset-top));overflow-y:auto;
+  -webkit-overflow-scrolling:touch;overscroll-behavior:contain}
+.sec-toggle{cursor:pointer;user-select:none;-webkit-user-select:none}
 .dlg{max-width:860px;margin:5vh auto;background:var(--inset);border:1px solid var(--ring);
   padding:16px;position:relative}
 #console-title{font-size:13px;font-weight:700;color:var(--title);margin-bottom:10px;
@@ -1053,16 +1062,20 @@ body.gaming #panels>[data-panel="stats"]{display:grid!important}
     style="position:absolute;top:10px;right:10px;z-index:2">✕</button>
   <h2 style="color:var(--ink);font-size:15px;margin-bottom:10px">⚙️ Settings</h2>
 
-  <div class="sethead">Launcher tiles — 👁 show · ↗ open in new tab</div>
-  <div id="set-apps"></div>
-  <div class="setrow">
-    <input id="new-app-name" placeholder="label (e.g. 🎬 Jellyfin)" size="16">
-    <input id="new-app-url" placeholder="/path or https://…" size="20">
-    <button class="mini" id="add-app">＋ add tile</button>
+  <div class="sethead sec-toggle" data-sec="sec-apps">▸ Launcher tiles — 👁 show · ↗ new tab</div>
+  <div id="sec-apps" style="display:none">
+    <div id="set-apps"></div>
+    <div class="setrow">
+      <input id="new-app-name" placeholder="label (e.g. 🎬 Jellyfin)" size="16">
+      <input id="new-app-url" placeholder="/path or https://…" size="20">
+      <button class="mini" id="add-app">＋ add tile</button>
+    </div>
   </div>
 
-  <div class="sethead">Widgets — show &amp; order</div>
-  <div id="set-widgets"></div>
+  <div class="sethead sec-toggle" data-sec="sec-widgets">▸ Widgets — show &amp; order</div>
+  <div id="sec-widgets" style="display:none">
+    <div id="set-widgets"></div>
+  </div>
 
   <div class="sethead">Boot mode — what a reboot starts</div>
   <div class="setrow">
@@ -1344,6 +1357,7 @@ function closeConsole(){
   // closing only detaches the console — the action always finishes on the box
   if(aborter){aborter.abort();aborter=null;}
   $('console').style.display='none';
+  unlockBody();
 }
 async function runStream(act,title){
   if(streaming)return;
@@ -1351,7 +1365,7 @@ async function runStream(act,title){
   const myRun=++runId;
   aborter=new AbortController();
   $('game-confirm').style.display='none';
-  $('console').style.display='block';
+  $('console').style.display='block';lockBody();
   $('console-title').textContent='▚ '+(title||('grave '+act));
   const out=$('console-out');out.innerHTML='';
   $('console-close').style.display='none';
@@ -1421,10 +1435,11 @@ $('console-out').addEventListener('click',async e=>{
 $('console-x').onclick=closeConsole;
 $('console').addEventListener('click',e=>{if(e.target.id==='console')closeConsole();});
 $('game-confirm').addEventListener('click',e=>{
-  if(e.target.id==='game-confirm')e.currentTarget.style.display='none';});
+  if(e.target.id==='game-confirm'){e.currentTarget.style.display='none';unlockBody();}});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){
   closeConsole();$('game-confirm').style.display='none';
-  $('settings-panel').style.display='none';$('kill-dlg').style.display='none';}});
+  $('settings-panel').style.display='none';$('kill-dlg').style.display='none';
+  unlockBody();}});
 $('console-close').onclick=()=>{$('console').style.display='none'};
 // ---------- gaming confirm dialog ----------
 function openGameConfirm(){
@@ -1432,11 +1447,11 @@ function openGameConfirm(){
     ?`Agent sessions: <b>${lastTmux.map(x=>esc(x.name)).join(', ')}</b><br>
       <span class="dim2">🧊 keeps them frozen in RAM (zero CPU, thawed on wake) · ☠️ destroys them for maximum free RAM</span>`
     :'<span class="dim2">No agent sessions running — both options behave the same.</span>';
-  $('game-confirm').style.display='block';
+  $('game-confirm').style.display='block';lockBody();
 }
 $('gc-freeze').onclick=()=>runStream('gaming','burial sequence — freeze');
 $('gc-kill').onclick=()=>runStream('gaming-kill','burial sequence — full kill');
-$('gc-cancel').onclick=()=>{$('game-confirm').style.display='none'};
+$('gc-cancel').onclick=()=>{$('game-confirm').style.display='none';unlockBody();};
 $('wake').onclick=()=>runStream('developer','startup sequence');
 document.querySelectorAll('button[data-act]').forEach(b=>b.onclick=()=>{
   const act=b.dataset.act;
@@ -1532,16 +1547,36 @@ function syncVis(){
     .filter(c=>c.checked).map(c=>c.dataset.appNewtab);
   draft.poll_ms=+$('set-poll').value;
 }
+// body scroll-lock while any overlay is open — without this, iOS scrolls
+// the page underneath the modal ("intermixed" scrolling)
+const lockBody=()=>{document.body.style.overflow='hidden'};
+const unlockBody=()=>{
+  if(![...document.querySelectorAll('.overlay')].some(o=>o.style.display==='block'))
+    document.body.style.overflow='';
+};
+document.querySelectorAll('.sec-toggle').forEach(h=>h.onclick=()=>{
+  const sec=$(h.dataset.sec);
+  const open=sec.style.display!=='none';
+  sec.style.display=open?'none':'block';
+  h.textContent=(open?'▸':'▾')+h.textContent.slice(1);
+});
+function closeSettings(){$('settings-panel').style.display='none';unlockBody();}
 $('gear').onclick=()=>{
   const p=$('settings-panel');
-  if(p.style.display==='block'){p.style.display='none';return;}
+  if(p.style.display==='block'){closeSettings();return;}
   if(!cfg)return;
-  buildSettings();p.style.display='block';
+  buildSettings();
+  // sections start collapsed — the modal opens phone-sized
+  document.querySelectorAll('.sec-toggle').forEach(h=>{
+    $(h.dataset.sec).style.display='none';
+    h.textContent='▸'+h.textContent.slice(1);
+  });
+  p.style.display='block';p.scrollTop=0;lockBody();
 };
-$('close-set').onclick=()=>{$('settings-panel').style.display='none'};
-$('settings-x').onclick=()=>{$('settings-panel').style.display='none'};
+$('close-set').onclick=closeSettings;
+$('settings-x').onclick=closeSettings;
 $('settings-panel').addEventListener('click',e=>{
-  if(e.target.id==='settings-panel')e.currentTarget.style.display='none';});
+  if(e.target.id==='settings-panel')closeSettings();});
 // ---------- kill-sessions dialog ----------
 function buildKillList(){
   $('kill-list').innerHTML=lastTmux.length?lastTmux.map(x=>`<div class="setrow">
@@ -1555,10 +1590,10 @@ async function killSession(n){
     headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});
   return (await r.json()).ok;
 }
-$('kill-open').onclick=()=>{buildKillList();$('kill-msg').textContent='';$('kill-dlg').style.display='block';};
-$('kill-x').onclick=()=>{$('kill-dlg').style.display='none'};
+$('kill-open').onclick=()=>{buildKillList();$('kill-msg').textContent='';$('kill-dlg').style.display='block';lockBody();};
+$('kill-x').onclick=()=>{$('kill-dlg').style.display='none';unlockBody();};
 $('kill-dlg').addEventListener('click',async e=>{
-  if(e.target.id==='kill-dlg'){e.currentTarget.style.display='none';return;}
+  if(e.target.id==='kill-dlg'){e.currentTarget.style.display='none';unlockBody();return;}
   const n=e.target.dataset&&e.target.dataset.killOne;
   if(!n)return;
   e.target.disabled=true;
