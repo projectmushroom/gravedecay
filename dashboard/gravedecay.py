@@ -892,24 +892,22 @@ body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:98;
 ::selection{background:var(--accent);color:#000}
 a{color:var(--accent);text-decoration:none}
 a:hover{background:var(--accent);color:#000}
-h1{font-size:15px;font-weight:700;color:var(--ink);text-shadow:var(--glow)}
-#toplogo{width:24px;height:24px;display:block}
+h1{font-size:17px;font-weight:700;color:var(--ink);text-shadow:var(--glow)}
+#toplogo{width:36px;height:36px;display:block}
 .topbar{position:sticky;top:0;z-index:101;display:flex;flex-wrap:wrap;gap:10px;align-items:center;
   background:var(--page);margin:0 -14px 16px;
-  padding:calc(10px + env(safe-area-inset-top)) 14px 8px;
+  padding:calc(16px + env(safe-area-inset-top)) 14px 14px;
   border-bottom:1px solid var(--ring)}
 /* iOS PWA: an opaque strip over the status-bar/dynamic-island area — content
    must never be readable up there while scrolling. Sits above the scanline
    overlays (z 98/99); zero height on devices without an inset. */
 #topcover{position:fixed;top:0;left:0;right:0;height:env(safe-area-inset-top);
   background:var(--page);z-index:102}
-.topbar .meta{color:var(--muted);font-size:12px;margin-left:auto}
-.badge{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;
+.topbar .meta{color:var(--muted);font-size:12px}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;
   border:1px solid var(--ring);font-size:12px;font-weight:700;color:var(--ink)}
-/* header controls: borderless, quiet — hover brings the color */
-.topbar .badge,.topbar .gear{border:none;background:transparent}
-#mode:hover{color:var(--accent)}
-.topbar .gear:hover{background:var(--surface);color:var(--ink)}
+#mode{margin-left:auto} /* controls sit on the right, uptime rides the title */
+#mode:hover{border-color:var(--accent);color:var(--accent)}
 /* launcher tiles */
 .apps{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:14px}
 .app{display:flex;align-items:center;justify-content:center;gap:8px;min-height:52px;
@@ -1035,9 +1033,9 @@ body.gaming #panels>[data-panel="stats"]{display:grid!important}
 <div class="topbar">
   <img id="toplogo" src="icon-180.png" alt="">
   <h1>gravedecay</h1>
+  <span class="meta" id="meta">connecting…</span>
   <span class="badge" id="mode" role="button" title="Tap to switch mode" style="cursor:pointer">…</span>
   <button class="gear" id="gear" title="Settings" aria-label="Settings">⚙️</button>
-  <span class="meta" id="meta">connecting…</span>
 </div>
 <div class="apps" id="apps"></div>
 <div id="game-banner">
@@ -1246,7 +1244,7 @@ function render(s){
       (cfg.newtab_apps||[]).includes(a.name)?' target="_blank" rel="noopener"':''
     }>${esc(a.name)}</a>`).join('');
   $('mode').textContent=(s.mode==='developer'?'💻 developer':'🎮 gaming');
-  $('meta').textContent=`up ${fmtUp(s.system.uptime_s)} · ${s.now}`;
+  $('meta').textContent=`up ${fmtUp(s.system.uptime_s)}`;
   // the mode you're already in isn't a button you can press
   document.querySelector('[data-act="gaming"]').disabled=(s.mode==='gaming');
   document.querySelector('[data-act="developer"]').disabled=(s.mode==='developer');
