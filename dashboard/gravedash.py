@@ -46,16 +46,23 @@ ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 @functools.cache
 def icon_png(size):
-    """Home-screen icon: mini bar chart on the dashboard surface. Pillow if
-    available, otherwise a plain accent-colored square — never a 404."""
+    """Home-screen icon: the gravedecay horned tombstone (assets/gravedecay.svg
+    rendered in Pillow). Falls back to a plain accent square — never a 404."""
     try:
         from PIL import Image, ImageDraw
         img = Image.new("RGB", (size, size), "#1a1a19")
         d = ImageDraw.Draw(img)
         s = size / 512
-        for x, h, color in ((132, 190, "#3987e5"), (226, 290, "#0ca30c"), (320, 230, "#fab219")):
-            d.rounded_rectangle([x * s, (400 - h) * s, (x + 60) * s, 400 * s],
-                                radius=18 * s, fill=color)
+        d.polygon([(76*s, 452*s), (76*s, 428*s), (256*s, 390*s),
+                   (436*s, 428*s), (436*s, 452*s)], fill="#2c2c2a")
+        d.polygon([(158*s, 160*s), (134*s, 62*s), (208*s, 148*s)], fill="#c22f27")
+        d.polygon([(354*s, 160*s), (378*s, 62*s), (304*s, 148*s)], fill="#c22f27")
+        d.ellipse([146*s, 118*s, 366*s, 322*s], fill="#8f8d84")
+        d.rectangle([146*s, 220*s, 366*s, 428*s], fill="#8f8d84")
+        d.polygon([(192*s, 218*s), (240*s, 228*s), (238*s, 242*s), (190*s, 232*s)], fill="#1a1a19")
+        d.polygon([(320*s, 218*s), (272*s, 228*s), (274*s, 242*s), (322*s, 232*s)], fill="#1a1a19")
+        for x, y, w in ((196, 292, 120), (212, 330, 88), (228, 368, 56)):
+            d.rounded_rectangle([x*s, y*s, (x+w)*s, (y+14)*s], radius=7*s, fill="#1a1a19")
     except ImportError:
         from struct import pack
         import zlib
