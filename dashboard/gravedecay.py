@@ -54,6 +54,7 @@ DEFAULT_SETTINGS = {
                     "stats", "actions", "services", "docker", "journal"],
     "hidden_panels": [],   # panel ids to hide
     "hidden_apps": [],     # launcher tile names to hide
+    "newtab_apps": [],     # tile names that open in a new tab instead of in-PWA
     "custom_apps": [],     # extra tiles: [{"name": ..., "url": ...}]
     "poll_ms": 5000,       # dashboard refresh interval
 }
@@ -832,7 +833,9 @@ function render(s){
   const k=JSON.stringify([cfg.panel_order,cfg.hidden_panels,activeTab]);
   if(k!==layoutKey){layoutKey=k;applyLayout();}
   $('apps').innerHTML=allApps().filter(a=>!cfg.hidden_apps.includes(a.name)).map(a=>
-    `<a class="app" href="${esc(appUrl(a.url))}">${esc(a.name)}</a>`).join('');
+    `<a class="app" href="${esc(appUrl(a.url))}"${
+      (cfg.newtab_apps||[]).includes(a.name)?' target="_blank" rel="noopener"':''
+    }>${esc(a.name)}</a>`).join('');
   $('mode').textContent=(s.mode==='developer'?'💻 developer':'🎮 gaming');
   $('meta').textContent=`${s.viewer} · up ${fmtUp(s.system.uptime_s)} · ${s.now}`;
   // the mode you're already in isn't a button you can press
@@ -989,9 +992,13 @@ function buildSettings(existing){
   // list must reflect the DRAFT being edited, not the last-saved cfg —
   // otherwise a freshly added tile never shows up until after a save
   const draftApps=envApps.concat(draft.custom_apps||[]);
-  ap.innerHTML=draftApps.map((a,i)=>`<div class="setrow">
+  ap.innerHTML=`<div class="setrow" style="color:var(--muted)">
+      <span style="width:16px">👁</span><span class="setlabel">tile</span>
+      <span title="open in a new tab instead of inside the PWA">↗ new tab</span></div>`
+    +draftApps.map((a,i)=>`<div class="setrow">
     <input type="checkbox" data-app-vis="${esc(a.name)}" ${draft.hidden_apps.includes(a.name)?'':'checked'}>
     <span class="setlabel">${esc(a.name)} <span style="color:var(--muted)">${esc(a.url)}</span></span>
+    <label title="open in a new tab"><input type="checkbox" data-app-newtab="${esc(a.name)}" ${(draft.newtab_apps||[]).includes(a.name)?'checked':''}> ↗</label>
     ${i>=envApps.length?`<button class="mini" data-del-app="${i-envApps.length}">✕</button>`:''}
   </div>`).join('');
   ap.querySelectorAll('[data-del-app]').forEach(b=>b.onclick=()=>{
@@ -1006,6 +1013,8 @@ function syncVis(){
     .filter(c=>!c.checked).map(c=>c.dataset.panelVis);
   draft.hidden_apps=[...document.querySelectorAll('[data-app-vis]')]
     .filter(c=>!c.checked).map(c=>c.dataset.appVis);
+  draft.newtab_apps=[...document.querySelectorAll('[data-app-newtab]')]
+    .filter(c=>c.checked).map(c=>c.dataset.appNewtab);
   draft.poll_ms=+$('set-poll').value;
 }
 $('gear').onclick=()=>{
