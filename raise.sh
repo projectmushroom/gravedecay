@@ -15,6 +15,7 @@ RUN_USER="${SUDO_USER:-$USER}"
 HOME_DIR=$(getent passwd "$RUN_USER" | cut -d: -f6)
 T3_PORT=4711
 DASH_PORT=4712
+TERM_PORT=4713
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -37,14 +38,15 @@ sudo -n true 2>/dev/null || sudo -v || { echo "sudo access required"; exit 1; }
 step "Packages"
 if command -v pacman >/dev/null; then
   sudo pacman -S --needed --noconfirm git tmux curl jq python docker docker-compose \
-    nodejs npm ufw lm_sensors python-pillow
+    nodejs npm ufw lm_sensors python-pillow ttyd
 elif command -v apt-get >/dev/null; then
   sudo apt-get update -qq
   sudo apt-get install -y git tmux curl jq python3 docker.io docker-compose-v2 \
-    nodejs npm ufw lm-sensors python3-pil || skip "some packages failed — fix names for your distro and rerun"
+    nodejs npm ufw lm-sensors python3-pil ttyd || skip "some packages failed — fix names for your distro and rerun"
 elif command -v dnf >/dev/null; then
   sudo dnf install -y git tmux curl jq python3 docker docker-compose nodejs npm \
     lm_sensors python3-pillow || skip "some packages failed — fix names for your distro and rerun"
+  command -v ttyd >/dev/null || skip "ttyd not in Fedora repos — build/install it manually for the web terminal"
 else
   skip "unknown package manager — install git tmux curl jq python3 docker nodejs npm manually"
 fi
@@ -96,6 +98,20 @@ sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
 sudo systemctl daemon-reload
 sudo systemctl enable --now gravedecay
 curl -sf -o /dev/null "http://127.0.0.1:$DASH_PORT/healthz" && ok "gravedecay answering on :$DASH_PORT"
+
+# --------------------------------------------------------- 5b. web terminal ----
+step "Web terminal (ttyd → tmux agents socket)"
+if command -v ttyd >/dev/null; then
+  install -m 755 "$REPO_DIR/bin/webterm" "$GRAVE_ROOT/scripts/webterm"
+  sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
+      -e "s|@TERM_PORT@|$TERM_PORT|g" -e "s|@HOME@|$HOME_DIR|g" \
+      "$REPO_DIR/systemd/gravedecay-term.service.tmpl" | sudo tee /etc/systemd/system/gravedecay-term.service >/dev/null
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now gravedecay-term
+  curl -sf -o /dev/null "http://127.0.0.1:$TERM_PORT/" && ok "web terminal answering on :$TERM_PORT"
+else
+  skip "ttyd missing — web terminal not installed"
+fi
 
 # ------------------------------------------------------------- 6. T3 Code ----
 step "T3 Code"
@@ -157,6 +173,7 @@ else
   # entry point (install the PWA from /dash/), apps hop stays same-origin
   tailscale serve --bg --https=443 "http://127.0.0.1:$T3_PORT" >/dev/null && ok "T3 → https / on tailnet"
   tailscale serve --bg --https=443 --set-path=/dash "http://127.0.0.1:$DASH_PORT" >/dev/null && ok "gravedecay → https /dash on tailnet"
+  command -v ttyd >/dev/null && tailscale serve --bg --https=443 --set-path=/term "http://127.0.0.1:$TERM_PORT" >/dev/null && ok "web terminal → https /term on tailnet"
 fi
 
 # ------------------------------------------------------------ 10. profile ----

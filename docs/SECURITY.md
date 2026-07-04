@@ -33,6 +33,14 @@ root-equivalent for *your* user (systemctl alone gets you there); the point is
 convenience for a single-human box, not privilege separation. If your box has
 other human users, tighten it.
 
+## The web terminal
+
+`/term` (ttyd → the shared `tmux -L agents` socket) is an interactive shell as
+your user for **anyone who can reach it** — ttyd does not check the
+`Tailscale-User-Login` header. On a personal tailnet this is the same trust
+you already extend via Tailscale SSH; on a shared tailnet, restrict who can
+reach this node with Tailscale ACLs or disable `gravedecay-term`.
+
 ## What gaming mode does NOT change
 
 Remote access (tailscaled, sshd), the firewall, and gravedecay stay up in

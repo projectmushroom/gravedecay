@@ -122,6 +122,20 @@ grave restore [ts]               # list / restore backups
 The dashboard (add to your phone's home screen) shows mode, services,
 containers, agent sessions, repo status, journal errors, temps — with buttons
 for mode flips, doctor, and T3 restart, gated to your Tailscale identity.
+A ⚙️ settings panel (same identity gating) lets you show/hide/reorder the
+widgets, hide launcher tiles, add custom tiles, and set the refresh rate —
+stored in `$GRAVE_ROOT/config/gravedecay-settings.json`.
+
+## Web terminal
+
+`https://<box>/term/` is a full terminal in the browser (ttyd + xterm.js)
+attached to the same `tmux -L agents` socket as `grave agents` — sessions
+survive closed tabs, and the browser, SSH, and phone all reach the SAME
+session. The launcher ships three tiles: 🖥️ Terminal, 🤖 Claude, 🧠 Codex —
+the agent tiles drop you straight into a persistent `claude` / `codex` CLI
+session. TUIs render pixel-correct (xterm.js is what VS Code uses); on
+desktop it feels native, on iOS the soft keyboard lacks Esc/Ctrl so treat it
+as a quick-look tool there.
 
 ## Host profiles
 

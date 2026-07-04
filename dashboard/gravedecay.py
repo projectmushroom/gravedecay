@@ -45,6 +45,48 @@ APPS = [{"name": name.strip(), "url": url.strip()}
         for name, _, url in (p.partition("=") for p in os.environ.get(
             "GRAVEDECAY_APPS", "⌨️ T3 Code=/").split(";"))
         if url.strip()]
+# User preferences, editable from the ⚙️ panel (writes gated to ALLOWED_USERS
+# exactly like actions). Stored beside the other appliance config.
+SETTINGS_PATH = os.path.join(GRAVE_ROOT, "config", "gravedecay-settings.json")
+DEFAULT_SETTINGS = {
+    "panel_order": ["stats", "services", "docker", "tmux", "repos", "journal"],
+    "hidden_panels": [],   # panel ids to hide
+    "hidden_apps": [],     # launcher tile names to hide
+    "custom_apps": [],     # extra tiles: [{"name": ..., "url": ...}]
+    "poll_ms": 5000,       # dashboard refresh interval
+}
+
+
+def load_settings():
+    try:
+        with open(SETTINGS_PATH) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        data = {}
+    s = dict(DEFAULT_SETTINGS)
+    for k, default in DEFAULT_SETTINGS.items():
+        if k in data and isinstance(data[k], type(default)):
+            s[k] = data[k]
+    s["poll_ms"] = max(2000, min(60000, int(s["poll_ms"])))
+    return s
+
+
+def save_settings(data):
+    merged = load_settings()
+    for k, default in DEFAULT_SETTINGS.items():
+        if k in data and isinstance(data[k], type(default)):
+            merged[k] = data[k]
+    merged["poll_ms"] = max(2000, min(60000, int(merged["poll_ms"])))
+    merged["custom_apps"] = [
+        {"name": str(a.get("name", "app"))[:40], "url": str(a.get("url", ""))[:200]}
+        for a in merged["custom_apps"] if isinstance(a, dict) and a.get("url")][:12]
+    tmp = SETTINGS_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(merged, f, indent=2)
+    os.replace(tmp, SETTINGS_PATH)
+    return merged
+
+
 GRAVE = "/usr/local/bin/grave"
 ACTIONS = {
     "gaming": ["sudo", "-n", GRAVE, "gaming"],
@@ -274,6 +316,7 @@ def state(headers):
         "viewer": headers.get("Tailscale-User-Login", "local"),
         "mode": mode,
         "apps": APPS,
+        "settings": load_settings(),
         "services": collect_services(),
         "docker": collect_docker(),
         "tmux": collect_tmux(),
@@ -344,6 +387,15 @@ class Handler(BaseHTTPRequestHandler):
                 "ok": False,
                 "output": f"forbidden for {viewer} — add to GRAVEDECAY_ALLOWED_USERS"}))
             return
+        if p == "/api/settings":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                merged = save_settings(json.loads(self.rfile.read(length)))
+            except (ValueError, TypeError, OSError):
+                self._send(400, json.dumps({"ok": False, "output": "bad settings payload"}))
+                return
+            self._send(200, json.dumps({"ok": True, "settings": merged}))
+            return
         if p != "/api/action":
             self._send(404, '{"error":"not found"}')
             return
@@ -408,7 +460,7 @@ button:active{transform:scale(.97)}
 button:disabled{opacity:.45;cursor:default;transform:none}
 button.busy{opacity:.6;cursor:wait}
 @media(pointer:coarse){td{padding-top:9px;padding-bottom:9px}}
-.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
 .tile{background:var(--surface);border:1px solid var(--ring);border-radius:10px;padding:12px 14px}
 .tile .label{font-size:12px;color:var(--muted);margin-bottom:4px}
 .tile .value{font-size:25px;font-weight:600;color:var(--ink)}
@@ -417,8 +469,18 @@ button.busy{opacity:.6;cursor:wait}
 .meter i{display:block;height:100%;border-radius:3px;background:var(--accent)}
 .meter.warn{background:var(--track-warn)} .meter.warn i{background:var(--warn)}
 .meter.crit{background:var(--track-crit)} .meter.crit i{background:var(--crit)}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
-@media(max-width:760px){.grid{grid-template-columns:1fr}}
+#panels{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
+@media(max-width:760px){#panels{grid-template-columns:1fr}}
+.w-full{grid-column:1/-1}
+.gear{min-height:0;padding:4px 10px;border-radius:99px;font-size:14px}
+#settings-panel{display:none;margin-bottom:14px}
+.setrow{display:flex;gap:8px;align-items:center;margin:7px 0;flex-wrap:wrap;font-size:13px}
+.setrow input,.setrow select{background:var(--page);border:1px solid var(--hairline);
+  color:var(--ink);border-radius:8px;padding:7px 9px;font:13px system-ui,sans-serif}
+.mini{min-height:30px;padding:2px 9px;font-size:13px;border-radius:8px}
+.setlabel{flex:1 1 130px;color:var(--ink-2)}
+.sethead{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;
+  letter-spacing:.05em;margin:12px 0 2px}
 .panel{background:var(--surface);border:1px solid var(--ring);border-radius:10px;padding:12px 14px}
 .panel h2{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;
   letter-spacing:.05em;margin-bottom:8px}
@@ -440,6 +502,7 @@ a{color:var(--accent-soft)}
 <div class="topbar">
   <h1>gravedecay</h1>
   <span class="badge" id="mode">…</span>
+  <button class="gear" id="gear" title="Settings" aria-label="Settings">⚙️</button>
   <span class="meta" id="meta">connecting…</span>
 </div>
 <div class="apps" id="apps"></div>
@@ -449,15 +512,36 @@ a{color:var(--accent-soft)}
   <button data-act="restart-t3" data-confirm="Restart T3 Code? Active agent sessions survive, the UI reconnects.">↻ Restart T3 Code</button>
   <button data-act="doctor">🩺 Run doctor</button>
 </div>
-<div class="panel" id="out-panel"><h2 id="out-title">output</h2><pre id="out"></pre></div>
-<div class="tiles" id="tiles"></div>
-<div class="grid">
-  <div class="panel"><h2>⚙️ Services</h2><table id="services"></table></div>
-  <div class="panel"><h2>🐳 Docker</h2><table id="docker"></table></div>
-  <div class="panel"><h2>🤖 Agent sessions (tmux)</h2><table id="tmux"></table></div>
-  <div class="panel"><h2>📦 Repos</h2><table id="repos"></table></div>
+<div class="panel" id="settings-panel">
+  <h2>⚙️ Settings</h2>
+  <div class="sethead">Widgets — show &amp; order</div>
+  <div id="set-widgets"></div>
+  <div class="sethead">Launcher tiles</div>
+  <div id="set-apps"></div>
+  <div class="setrow">
+    <input id="new-app-name" placeholder="label (e.g. 🎬 Jellyfin)" size="18">
+    <input id="new-app-url" placeholder="/path or https://…" size="22">
+    <button class="mini" id="add-app">＋ add tile</button>
+  </div>
+  <div class="sethead">Refresh</div>
+  <div class="setrow"><span class="setlabel">poll interval</span>
+    <select id="set-poll">
+      <option value="2000">2 s</option><option value="5000">5 s</option>
+      <option value="10000">10 s</option><option value="30000">30 s</option>
+    </select>
+  </div>
+  <div class="setrow"><button id="save-set">💾 Save</button>
+    <button class="mini" id="close-set">Close</button><span id="set-msg" class="setlabel"></span></div>
 </div>
-<div class="panel full"><h2>📋 Journal errors (24 h)</h2><pre id="journal"></pre></div>
+<div class="panel" id="out-panel"><h2 id="out-title">output</h2><pre id="out"></pre></div>
+<div id="panels">
+  <div class="tiles w-full" data-panel="stats" id="tiles"></div>
+  <div class="panel" data-panel="services"><h2>⚙️ Services</h2><table id="services"></table></div>
+  <div class="panel" data-panel="docker"><h2>🐳 Docker</h2><table id="docker"></table></div>
+  <div class="panel" data-panel="tmux"><h2>🤖 Agent sessions (tmux)</h2><table id="tmux"></table></div>
+  <div class="panel" data-panel="repos"><h2>📦 Repos</h2><table id="repos"></table></div>
+  <div class="panel w-full" data-panel="journal"><h2>📋 Journal errors (24 h)</h2><pre id="journal"></pre></div>
+</div>
 <script>
 const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -490,8 +574,26 @@ function statusDot(state){
 // viewed on a bare port (localhost:4712) rather than mounted at /dash/
 const appUrl=u=>(location.port&&location.port!=='443'&&u.startsWith('/'))
   ?`https://${location.hostname}${u}`:u;
+const PANEL_NAMES={stats:'Stats tiles',services:'Services',docker:'Docker',
+  tmux:'Agent sessions',repos:'Repos',journal:'Journal errors'};
+let cfg=null,envApps=[],layoutKey='';
+function allApps(){return envApps.concat(cfg&&cfg.custom_apps||[])}
+function applyLayout(){
+  const c=$('panels'),order=(cfg.panel_order||[]).slice();
+  Object.keys(PANEL_NAMES).forEach(k=>{if(!order.includes(k))order.push(k)});
+  order.forEach(id=>{
+    const el=document.querySelector(`[data-panel="${id}"]`);
+    if(!el)return;
+    el.style.display=cfg.hidden_panels.includes(id)?'none':'';
+    c.appendChild(el);
+  });
+}
 function render(s){
-  $('apps').innerHTML=(s.apps||[]).map(a=>
+  envApps=s.apps||[];
+  if(!cfg){cfg=s.settings;schedule();}
+  const k=JSON.stringify([cfg.panel_order,cfg.hidden_panels]);
+  if(k!==layoutKey){layoutKey=k;applyLayout();}
+  $('apps').innerHTML=allApps().filter(a=>!cfg.hidden_apps.includes(a.name)).map(a=>
     `<a class="app" href="${esc(appUrl(a.url))}">${esc(a.name)}</a>`).join('');
   $('mode').textContent=(s.mode==='developer'?'💻 developer':'🎮 gaming');
   $('meta').textContent=`${s.viewer} · up ${fmtUp(s.system.uptime_s)} · ${s.now}`;
@@ -550,9 +652,76 @@ document.querySelectorAll('button[data-act]').forEach(b=>b.onclick=async()=>{
   }catch(e){ $('out').textContent='request failed: '+e; }
   b.classList.remove('busy'); poll();
 });
+// ---------- settings panel ----------
+let draft=null;
+function buildSettings(existing){
+  draft=existing||JSON.parse(JSON.stringify(cfg));
+  const w=$('set-widgets');
+  const order=draft.panel_order.slice();
+  Object.keys(PANEL_NAMES).forEach(k=>{if(!order.includes(k))order.push(k)});
+  draft.panel_order=order;
+  w.innerHTML=order.map((id,i)=>`<div class="setrow">
+    <input type="checkbox" data-panel-vis="${id}" ${draft.hidden_panels.includes(id)?'':'checked'}>
+    <span class="setlabel">${esc(PANEL_NAMES[id]||id)}</span>
+    <button class="mini" data-up="${i}" ${i===0?'disabled':''}>↑</button>
+    <button class="mini" data-down="${i}" ${i===order.length-1?'disabled':''}>↓</button>
+  </div>`).join('');
+  w.querySelectorAll('[data-up]').forEach(b=>b.onclick=()=>{const i=+b.dataset.up;
+    syncVis();
+    [draft.panel_order[i-1],draft.panel_order[i]]=[draft.panel_order[i],draft.panel_order[i-1]];
+    buildSettings(draft);});
+  w.querySelectorAll('[data-down]').forEach(b=>b.onclick=()=>{const i=+b.dataset.down;
+    syncVis();
+    [draft.panel_order[i+1],draft.panel_order[i]]=[draft.panel_order[i],draft.panel_order[i+1]];
+    buildSettings(draft);});
+  const ap=$('set-apps');
+  ap.innerHTML=allApps().map((a,i)=>`<div class="setrow">
+    <input type="checkbox" data-app-vis="${esc(a.name)}" ${draft.hidden_apps.includes(a.name)?'':'checked'}>
+    <span class="setlabel">${esc(a.name)} <span style="color:var(--muted)">${esc(a.url)}</span></span>
+    ${i>=envApps.length?`<button class="mini" data-del-app="${i-envApps.length}">✕</button>`:''}
+  </div>`).join('');
+  ap.querySelectorAll('[data-del-app]').forEach(b=>b.onclick=()=>{
+    syncVis();draft.custom_apps.splice(+b.dataset.delApp,1);buildSettings(draft);});
+  $('set-poll').value=String(draft.poll_ms);
+}
+function syncVis(){
+  draft.hidden_panels=[...document.querySelectorAll('[data-panel-vis]')]
+    .filter(c=>!c.checked).map(c=>c.dataset.panelVis);
+  draft.hidden_apps=[...document.querySelectorAll('[data-app-vis]')]
+    .filter(c=>!c.checked).map(c=>c.dataset.appVis);
+  draft.poll_ms=+$('set-poll').value;
+}
+$('gear').onclick=()=>{
+  const p=$('settings-panel');
+  if(p.style.display==='block'){p.style.display='none';return;}
+  if(!cfg)return;
+  buildSettings();p.style.display='block';
+};
+$('close-set').onclick=()=>{$('settings-panel').style.display='none'};
+$('add-app').onclick=()=>{
+  const n=$('new-app-name').value.trim(),u=$('new-app-url').value.trim();
+  if(!u)return;
+  syncVis();draft.custom_apps.push({name:n||u,url:u});
+  $('new-app-name').value='';$('new-app-url').value='';buildSettings(draft);
+};
+$('save-set').onclick=async()=>{
+  syncVis();
+  $('set-msg').textContent='saving…';
+  try{
+    const r=await fetch('api/settings',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(draft)});
+    const j=await r.json();
+    if(j.ok){cfg=j.settings;layoutKey='';schedule();poll();
+      $('set-msg').textContent='saved ✓';}
+    else $('set-msg').textContent=j.output||'save failed';
+  }catch(e){$('set-msg').textContent='save failed: '+e;}
+};
+// ---------- boot ----------
+let timer=null;
+function schedule(){clearInterval(timer);timer=setInterval(poll,(cfg&&cfg.poll_ms)||5000);}
 const BOOT=/*BOOT*/null;   // server-rendered initial state: instant first paint
 if(BOOT)render(BOOT);else poll();
-setInterval(poll,5000);
+schedule();
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)poll()});
 </script></body></html>
 """.replace("@HOST@", HOST)

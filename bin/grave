@@ -200,6 +200,7 @@ cmd_logs() {
   case "$target" in
     t3|t3code)  sudo journalctl -u t3code -n 100 -f ;;
     dash|gravedecay) sudo journalctl -u gravedecay -n 100 -f ;;
+    term)       sudo journalctl -u gravedecay-term -n 100 -f ;;
     ssh|sshd)   sudo journalctl -u sshd -n 100 -f ;;
     tailscale)  sudo journalctl -u tailscaled -n 100 -f ;;
     system)     sudo journalctl -p warning -n 100 -f ;;
@@ -254,6 +255,11 @@ cmd_doctor() {
     check "gravedecay answering"         curl -sf -o /dev/null "http://127.0.0.1:$DASH_PORT/healthz"
   else
     say "  ${YLW}– gravedecay stopped${RST}"
+  fi
+  if systemctl is-active --quiet gravedecay-term; then
+    check "web terminal answering"       curl -sf -o /dev/null "http://127.0.0.1:${TERM_PORT:-4713}/"
+  else
+    say "  ${YLW}– web terminal stopped${RST}"
   fi
   check "backups dir writable"          test -w "$BACKUP_DIR"
   echo
