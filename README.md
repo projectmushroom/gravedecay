@@ -29,6 +29,8 @@ and *gaming* mode.
                      └── gravedecay PWA (/dash/) — THE entry point ──┘
 ```
 
+![the gravedecay dashboard — terminal skin](assets/dashboard.png)
+
 **gravedecay is the front door.** Install the PWA / macOS web app from
 `https://<box>.<tailnet>.ts.net/dash/` — it launches every app on the box
 (T3 Code today, whatever you mount tomorrow via `GRAVEDECAY_APPS` tiles), all
