@@ -29,6 +29,11 @@ NPM_GLOBAL_TOOLS=(t3)
 BACKUP_DIR="$GRAVE_ROOT/backups"
 BACKUP_KEEP=7
 
+# `grave upgrade` — where the gravedecay checkout lives, and which channel:
+# release = latest v* tag (recommended), edge = main branch (for developers)
+REPO_DIR="$GRAVE_ROOT/repos/gravedecay"
+UPGRADE_CHANNEL=release
+
 # Ports (documented in docs/PORTS.md)
 T3_PORT=4711
 DASH_PORT=4712
