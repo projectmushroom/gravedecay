@@ -11,7 +11,7 @@
 # masked — a Steam Machine drawing a few watts idle IS the appliance.
 #
 # STATUS: initial cut — refine on real hardware (fan/temp sensor names for
-# gravedash, controller-wake behavior, HDMI-CEC, VRAM pressure in game mode).
+# gravedecay, controller-wake behavior, HDMI-CEC, VRAM pressure in game mode).
 conf_set() { sudo sed -i "s|^$1=.*|$1=$2|" /etc/gravedecay/grave.conf; }
 
 profile_apply() {
@@ -20,6 +20,6 @@ profile_apply() {
   conf_set CHECK_SLEEP_MASKED 1
 
   # keep the box reachable when a game session is hogging the GPU: nothing to
-  # do — ALWAYS_ON services (tailscaled, sshd, gravedash) are never touched by
+  # do — ALWAYS_ON services (tailscaled, sshd, gravedecay) are never touched by
   # gaming mode. Verify after first game night with: grave doctor
 }

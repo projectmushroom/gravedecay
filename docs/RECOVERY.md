@@ -29,7 +29,7 @@ grave restore <ts> volume <name>  # recreate + fill docker volume (stop stack fi
 2. Copy the latest backup dir onto the new box.
 3. Untar `configs/*` into place (`$GRAVE_ROOT`, `$HOME`), restore volumes,
    clone repo bundles.
-4. `sudo systemctl restart t3code gravedash && grave doctor`.
+4. `sudo systemctl restart t3code gravedecay && grave doctor`.
 5. Re-pair devices with T3; `tailscale up --ssh` with the same account.
 
 ## Btrfs snapshots (if configured)

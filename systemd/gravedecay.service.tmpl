@@ -1,0 +1,27 @@
+[Unit]
+Description=gravedecay - gravedecay appliance status dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+Group=@USER@
+ExecStart=/usr/bin/python3 @GRAVE_ROOT@/scripts/gravedecay.py
+Restart=always
+RestartSec=3
+SyslogIdentifier=gravedecay
+Environment=GRAVE_ROOT=@GRAVE_ROOT@
+Environment=GRAVEDECAY_PORT=@DASH_PORT@
+# Comma-separated Tailscale logins allowed to press action buttons.
+# Empty = tailnet viewers are read-only. Add yours in a drop-in or here.
+Environment=GRAVEDECAY_ALLOWED_USERS=@ALLOWED_USERS@
+# Launcher tiles ("label=url;label=url") — gravedecay is the entry point;
+# every app mounted on this box gets a tile here.
+Environment="GRAVEDECAY_APPS=⌨️ T3 Code=/"
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

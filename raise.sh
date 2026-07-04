@@ -80,22 +80,22 @@ fi
 # ------------------------------------------------------------- 4. sudoers ----
 step "Scoped passwordless sudo (see docs/SECURITY.md)"
 sudo tee /etc/sudoers.d/50-gravedecay >/dev/null <<EOF
-# gravedecay: let $RUN_USER (and gravedash action buttons) drive the platform
+# gravedecay: let $RUN_USER (and gravedecay action buttons) drive the platform
 $RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker, /usr/local/bin/grave, /usr/bin/journalctl, /usr/bin/ufw, /usr/bin/snapper, /usr/sbin/sshd -T, /usr/bin/sshd -T, /usr/bin/tee /etc/systemd/system/*, /usr/bin/npm update -g *
 EOF
 sudo chmod 440 /etc/sudoers.d/50-gravedecay
 sudo visudo -c -f /etc/sudoers.d/50-gravedecay >/dev/null && ok "sudoers valid"
 
-# ----------------------------------------------------------- 5. gravedash ----
-step "gravedash"
-install -m 755 "$REPO_DIR/dashboard/gravedash.py" "$GRAVE_ROOT/scripts/gravedash.py"
+# ----------------------------------------------------------- 5. gravedecay ----
+step "gravedecay"
+install -m 755 "$REPO_DIR/dashboard/gravedecay.py" "$GRAVE_ROOT/scripts/gravedecay.py"
 install -m 644 "$REPO_DIR/assets/gravedecay.png" "$GRAVE_ROOT/config/gravedecay.png"
 sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
     -e "s|@DASH_PORT@|$DASH_PORT|g" -e "s|@ALLOWED_USERS@||g" \
-    "$REPO_DIR/systemd/gravedash.service.tmpl" | sudo tee /etc/systemd/system/gravedash.service >/dev/null
+    "$REPO_DIR/systemd/gravedecay.service.tmpl" | sudo tee /etc/systemd/system/gravedecay.service >/dev/null
 sudo systemctl daemon-reload
-sudo systemctl enable --now gravedash
-curl -sf -o /dev/null "http://127.0.0.1:$DASH_PORT/healthz" && ok "gravedash answering on :$DASH_PORT"
+sudo systemctl enable --now gravedecay
+curl -sf -o /dev/null "http://127.0.0.1:$DASH_PORT/healthz" && ok "gravedecay answering on :$DASH_PORT"
 
 # ------------------------------------------------------------- 6. T3 Code ----
 step "T3 Code"
@@ -153,8 +153,10 @@ elif ! tailscale status --peers=false >/dev/null 2>&1; then
   skip "tailscale not logged in — run 'sudo tailscale up --ssh', rerun raise.sh"
 else
   sudo tailscale set --operator="$RUN_USER" 2>/dev/null || true
-  tailscale serve --bg --https=443  "http://127.0.0.1:$T3_PORT"  >/dev/null && ok "T3 → https 443 on tailnet"
-  tailscale serve --bg --https=8443 "http://127.0.0.1:$DASH_PORT" >/dev/null && ok "gravedash → https 8443 on tailnet"
+  # one origin: T3 at the root, gravedecay mounted at /dash — gravedecay is the
+  # entry point (install the PWA from /dash/), apps hop stays same-origin
+  tailscale serve --bg --https=443 "http://127.0.0.1:$T3_PORT" >/dev/null && ok "T3 → https / on tailnet"
+  tailscale serve --bg --https=443 --set-path=/dash "http://127.0.0.1:$DASH_PORT" >/dev/null && ok "gravedecay → https /dash on tailnet"
 fi
 
 # ------------------------------------------------------------ 10. profile ----

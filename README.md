@@ -16,17 +16,25 @@ and *gaming* mode.
         │  systemd (native, no containers)          docker (backing svcs only)   │
         │  ├─ t3code.service      web UI :4711      ├─ postgres  127.0.0.1:5432  │
         │  │    └─ spawns claude / codex CLIs       ├─ redis     127.0.0.1:6379  │
-        │  ├─ gravedash.service   dashboard :4712   └─ playwright browsers       │
+        │  ├─ gravedecay.service   dashboard :4712   └─ playwright browsers       │
         │  └─ tmux -L agents      persistent CLI agent sessions                  │
         │                                                                        │
         │  /srv/dev/{repos,agents,docker,config,logs,scripts,backups,docs}       │
         │  grave <cmd> — one CLI to rule the box                                 │
         └────────────────────────────┬───────────────────────────────────────────┘
                                      │ tailscale serve (HTTPS, tailnet-only)
+                                     │ one origin: /dash = gravedecay, / = T3
                      ┌───────────────┼───────────────┐
                   laptop           iPhone          iPad
-               (T3 web UI)     (gravedash PWA)   (T3 web UI)
+                     └── gravedecay PWA (/dash/) — THE entry point ──┘
 ```
+
+**gravedecay is the front door.** Install the PWA / macOS web app from
+`https://<box>.<tailnet>.ts.net/dash/` — it launches every app on the box
+(T3 Code today, whatever you mount tomorrow via `GRAVEDECAY_APPS` tiles), all
+same-origin so the hop never leaves the installed app. Inside T3, a tiny
+translucent gauge pill (bottom-left, standalone-mode only — regular browser
+tabs never see it) brings you back to the dashboard.
 
 ## Design principles
 
@@ -81,7 +89,7 @@ Each step is idempotent — rerun it any time:
 2. Lays out `$GRAVE_ROOT` and symlinks `~/Projects → $GRAVE_ROOT/repos`.
 3. Installs the `grave` CLI to `/usr/local/bin` and its config to
    `/etc/gravedecay/grave.conf`.
-4. Installs **gravedash** (single-file stdlib-Python dashboard, mobile PWA)
+4. Installs **gravedecay** (single-file stdlib-Python dashboard, mobile PWA)
    and **T3 Code** (`npm i -g t3`, web UI that spawns claude/codex sessions)
    as systemd services on `127.0.0.1`.
 5. Prepares Docker: `devnet` network, `core` stack (Postgres 17 + Redis 8,
@@ -89,11 +97,11 @@ Each step is idempotent — rerun it any time:
    stack (Playwright).
 6. Firewall: default-deny incoming, allow SSH + the `tailscale0` interface
    (SSH is allowed *before* enabling — you won't be locked out).
-7. Installs a scoped sudoers file so `grave` and gravedash's action buttons
+7. Installs a scoped sudoers file so `grave` and gravedecay's action buttons
    work without a password (see `docs/SECURITY.md`).
 8. Applies the host profile (quirks like "never suspend", GPU pinning).
 9. Publishes both UIs on your tailnet if Tailscale is up:
-   T3 on `https://<box>.<tailnet>.ts.net`, gravedash on `:8443`.
+   T3 on `https://<box>.<tailnet>.ts.net`, gravedecay on `:8443`.
 10. Runs `grave doctor`.
 
 ## Daily driving
