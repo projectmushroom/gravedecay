@@ -1026,7 +1026,11 @@ body.gaming #foot{display:none}
   color:var(--ink);border-radius:0;padding:7px 9px;
   font:13px ui-monospace,Menlo,monospace}
 .setrow input:focus,.setrow select:focus{outline:1px solid var(--accent)}
-.mini{min-height:28px;padding:2px 9px;font-size:12px}
+/* text-only buttons must not render smaller than their emoji-bearing
+   siblings — normalize mini height; corner ✕ gets a fixed square */
+.mini{min-height:32px;padding:4px 10px;font-size:13px}
+.xbtn{width:34px;height:34px;min-height:34px;padding:0;font-size:16px;
+  line-height:1;display:inline-flex;align-items:center;justify-content:center}
 .mini.activebtn{background:var(--ink-2);color:#000;border-color:var(--ink-2)}
 .abtn{display:inline-flex;align-items:center;background:transparent;color:var(--ink);
   border:1px solid var(--ring);cursor:pointer}
@@ -1062,7 +1066,7 @@ body.gaming #foot{display:none}
 </div>
 <div class="overlay" id="settings-panel" style="display:none">
  <div class="dlg">
-  <button class="mini" id="settings-x" title="close (Esc)" aria-label="close"
+  <button class="mini xbtn" id="settings-x" title="close (Esc)" aria-label="close"
     style="position:absolute;top:10px;right:10px;z-index:2">✕</button>
   <h2 style="color:var(--ink);font-size:15px;margin-bottom:10px">⚙️ Settings</h2>
 
@@ -1116,7 +1120,7 @@ body.gaming #foot{display:none}
 </div>
 <div class="overlay" id="kill-dlg" style="display:none">
  <div class="dlg" id="gc-box2">
-  <button class="mini" id="kill-x" style="position:absolute;top:10px;right:10px;z-index:2">✕</button>
+  <button class="mini xbtn" id="kill-x" style="position:absolute;top:10px;right:10px;z-index:2">✕</button>
   <h2 style="color:var(--ink);font-size:15px;margin-bottom:8px">🗡️ Kill sessions</h2>
   <p class="dim2" style="font-size:13px;margin-bottom:8px">Pick what dies. Anything running inside dies with it.</p>
   <div id="kill-list"></div>
@@ -1126,7 +1130,7 @@ body.gaming #foot{display:none}
 </div>
 <div class="overlay" id="console" style="display:none">
   <div class="dlg">
-    <button class="mini" id="console-x" title="close (Esc)" aria-label="close"
+    <button class="mini xbtn" id="console-x" title="close (Esc)" aria-label="close"
       style="position:absolute;top:10px;right:10px;z-index:2">✕</button>
     <div id="console-title">▚ grave</div>
     <pre id="console-out"></pre><span id="ccur">▮</span>
