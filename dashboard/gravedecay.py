@@ -927,6 +927,9 @@ td{padding:4px 8px 4px 0;border-top:1px dashed var(--hairline);vertical-align:to
 tr:first-child td{border-top:none}
 td.num{text-align:right;font-variant-numeric:tabular-nums;color:var(--ink-2)}
 td.dim{color:var(--muted)}
+/* keys/ids in the first column (WEC-24, repo #3, …) must never wrap */
+#linear td:first-child,#prs td:first-child,#reviews td:first-child,
+#ci td:first-child{white-space:nowrap;padding-right:14px}
 /* status squares (■), not dots */
 .dot{display:inline-block;width:8px;height:8px;margin-right:7px;vertical-align:-1px}
 .st-good{background:var(--good);box-shadow:0 0 5px var(--good)}
