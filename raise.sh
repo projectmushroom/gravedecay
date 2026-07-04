@@ -31,7 +31,7 @@ ok()   { printf '  %b✓%b %s\n' "$GRN" "$RST" "$*"; }
 skip() { printf '  %b–%b %s\n' "$YLW" "$RST" "$*"; }
 
 [[ $EUID -eq 0 ]] && { echo "Run as your normal user, not root (sudo is used internally)."; exit 1; }
-sudo -v || { echo "sudo access required"; exit 1; }
+sudo -n true 2>/dev/null || sudo -v || { echo "sudo access required"; exit 1; }
 
 # ------------------------------------------------------------ 1. packages ----
 step "Packages"
