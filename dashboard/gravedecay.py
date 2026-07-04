@@ -332,7 +332,9 @@ def collect_github():
                                 "title": str(p.get("title", ""))[:80], "url": p.get("url", "")})
             except ValueError:
                 pass
-        return {"login": login, "prs": prs[:15], "error": None}
+        more = (f"https://github.com/search?q=owner%3A{login}+is%3Apr+is%3Aopen"
+                "&type=pullrequests")
+        return {"login": login, "prs": prs[:15], "more_url": more, "error": None}
     return cached("github", 120, fetch)
 
 
@@ -355,7 +357,8 @@ def collect_linear():
         key = linear_key()
         if not key:
             return {"configured": False, "issues": [], "error": None}
-        query = json.dumps({"query": """{ viewer { assignedIssues(
+        query = json.dumps({"query": """{ organization { urlKey }
+          viewer { assignedIssues(
             first: 15, filter: {state: {type: {nin: ["completed", "canceled"]}}}
         ) { nodes { identifier title url state { name } } } } }"""})
         try:
@@ -363,10 +366,14 @@ def collect_linear():
                 "https://api.linear.app/graphql", data=query.encode(),
                 headers={"Authorization": key, "Content-Type": "application/json"})
             with urllib.request.urlopen(req, timeout=10) as r:
-                nodes = json.load(r)["data"]["viewer"]["assignedIssues"]["nodes"]
+                data = json.load(r)["data"]
+            nodes = data["viewer"]["assignedIssues"]["nodes"]
+            slug = (data.get("organization") or {}).get("urlKey")
         except Exception as e:
             return {"configured": True, "issues": [], "error": f"linear: {e}"}
-        return {"configured": True, "error": None, "issues": [
+        return {"configured": True, "error": None,
+                "more_url": f"https://linear.app/{slug}/my-issues" if slug else "https://linear.app",
+                "issues": [
             {"id": n["identifier"], "title": n["title"][:80], "url": n["url"],
              "state": (n.get("state") or {}).get("name", "")} for n in nodes]}
     return cached("linear", 120, fetch)
@@ -740,22 +747,27 @@ function render(s){
       <td class="dim">${esc(r.last_when)}</td></tr>`).join('')
     :'<tr><td class="dim">no repos</td></tr>';
   $('journal').textContent=s.journal.join('\n');
+  // integration lists: recent 5 inline, "show all" jumps to the real app
+  const moreRow=(shown,total,url)=>total>shown&&url
+    ? `<tr><td colspan="3"><a href="${esc(url)}" target="_blank" rel="noopener">show all (${total}${total>=15?'+':''}) →</a></td></tr>`:'';
   const gh=s.github||{};
   $('prs').innerHTML=gh.error
     ? `<tr><td class="dim">${esc(gh.error)}</td></tr>`
-    : ((gh.prs||[]).map(p=>`<tr>
+    : ((gh.prs||[]).slice(0,5).map(p=>`<tr>
         <td><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.repo)} #${p.number}</a></td>
         <td class="dim">${esc(p.title)}</td></tr>`).join('')
+       +moreRow(5,(gh.prs||[]).length,gh.more_url)
        ||'<tr><td class="dim">no open PRs 🎉</td></tr>');
   const li=s.linear||{};
   linearConfigured=!!li.configured;
   $('linear').innerHTML=!li.configured
     ? '<tr><td class="dim">add a Linear API key in ⚙️ settings</td></tr>'
     : li.error?`<tr><td class="dim">${esc(li.error)}</td></tr>`
-    : ((li.issues||[]).map(i=>`<tr>
+    : ((li.issues||[]).slice(0,5).map(i=>`<tr>
         <td><a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.id)}</a></td>
         <td class="dim">${esc(i.title)}</td>
         <td class="dim">${esc(i.state)}</td></tr>`).join('')
+       +moreRow(5,(li.issues||[]).length,li.more_url)
        ||'<tr><td class="dim">nothing assigned 🎉</td></tr>');
 }
 async function poll(){
