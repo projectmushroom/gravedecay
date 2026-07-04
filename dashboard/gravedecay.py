@@ -1304,7 +1304,16 @@ async function runStream(act,title){
   $('console-close').style.display='none';
   const add=(t,cls)=>{const d=document.createElement('div');
     d.className=cls||(t.includes('✗')?'err':(/🎮|💻|🪦|Gaming|Developer/.test(t)?'hl':''));
-    d.textContent=t||' ';out.appendChild(d);out.scrollTop=out.scrollHeight;};
+    // token/URL lines get a copy button and a real link — selecting text on
+    // a phone is misery, and secrets must be copyable in one tap
+    const m=/^(Token|Pair URL): (\S+)$/.exec(t||'');
+    if(m){
+      const v=m[2],isUrl=m[1]==='Pair URL';
+      d.innerHTML=esc(m[1])+': '
+        +(isUrl?`<a href="${esc(v)}">${esc(v)}</a>`:`<b>${esc(v)}</b>`)
+        +` <button class="mini copybtn" data-copy="${esc(v)}">📋 copy</button>`;
+    }else d.textContent=t||' ';
+    out.appendChild(d);out.scrollTop=out.scrollHeight;};
   let gotData=false,okDone=false;
   try{
     const r=await fetch('api/action-stream?action='+encodeURIComponent(act),
@@ -1344,9 +1353,18 @@ async function runStream(act,title){
   streaming=false;aborter=null;
   $('console-close').style.display='';
   poll();
-  // success: linger briefly so the ✓ registers, then get out of the way
-  if(okDone)setTimeout(()=>{if(runId===myRun)closeConsole();},3500);
+  // success: linger briefly so the ✓ registers, then get out of the way —
+  // EXCEPT for output the user needs to read or copy (tokens, doctor)
+  const KEEP_OPEN=['t3-pair','doctor'];
+  if(okDone&&!KEEP_OPEN.includes(act))
+    setTimeout(()=>{if(runId===myRun)closeConsole();},3500);
 }
+$('console-out').addEventListener('click',async e=>{
+  const v=e.target.dataset&&e.target.dataset.copy;
+  if(!v)return;
+  try{await navigator.clipboard.writeText(v);e.target.textContent='✓ copied';}
+  catch(_){e.target.textContent='copy failed';}
+});
 $('console-x').onclick=closeConsole;
 $('console').addEventListener('click',e=>{if(e.target.id==='console')closeConsole();});
 $('game-confirm').addEventListener('click',e=>{
