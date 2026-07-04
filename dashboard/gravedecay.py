@@ -743,6 +743,11 @@ class Handler(BaseHTTPRequestHandler):
             print(f"stream: TIMEOUT action={action}", file=sys.stderr, flush=True)
             proc.kill()
         finally:
+            # Close the connection so the client sees EOF. Without this,
+            # HTTP/1.1 keep-alive leaves the socket open after the stream —
+            # iOS Safari buffers small streamed bodies until EOF, so the
+            # console showed one line and then "hung" forever on iPhone.
+            self.close_connection = True
             ACTION_LOCK.release()
 
     def do_GET(self):
@@ -1310,8 +1315,8 @@ async function runStream(act,title){
       add(`— HTTP ${r.status}: ${msg}`,'err');
     }else{
       const rd=r.body.getReader(),dec=new TextDecoder();
-      let buf='';
-      for(;;){
+      let buf='',finished=false;
+      for(;!finished;){
         const{done,value}=await rd.read();
         if(done)break;
         buf+=dec.decode(value,{stream:true});
@@ -1324,10 +1329,12 @@ async function runStream(act,title){
             const rc=da?da[1]:'?';
             okDone=(rc==='0');
             add(okDone?'— sequence complete ✓':'— exited with code '+rc,okDone?'hl':'err');
+            finished=true;  // don't wait for EOF — proxies/Safari may hold it
           }else if(da){gotData=true;add(JSON.parse(da[1]));}
         }
       }
-      if(!gotData)add('— connection closed before any output arrived','err');
+      try{rd.cancel();}catch(_){}
+      if(!gotData&&!finished)add('— connection closed before any output arrived','err');
     }
   }catch(e){
     if(e.name!=='AbortError')
