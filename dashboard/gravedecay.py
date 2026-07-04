@@ -51,7 +51,7 @@ APPS = [{"name": name.strip(), "url": url.strip()}
 # exactly like actions). Stored beside the other appliance config.
 SETTINGS_PATH = os.path.join(GRAVE_ROOT, "config", "gravedecay-settings.json")
 DEFAULT_SETTINGS = {
-    "panel_order": ["prs", "reviews", "ci", "linear", "usage", "tmux", "repos",
+    "panel_order": ["prs", "linear", "ci", "tmux", "usage", "repos",
                     "stats", "actions", "services", "docker", "journal"],
     "hidden_panels": [],   # panel ids to hide
     "hidden_apps": [],     # launcher tile names to hide
@@ -338,10 +338,16 @@ def collect_github():
             return rows[:15]
         more = (f"https://github.com/search?q=owner%3A{login}+is%3Apr+is%3Aopen"
                 "&type=pullrequests")
-        return {"login": login, "error": None,
-                "prs": search("--owner", login), "more_url": more,
-                "reviews": search(f"--review-requested={login}"),
-                "reviews_url": "https://github.com/pulls/review-requested"}
+        # one merged list: my repos' open PRs, flagged 👀 where my review is
+        # requested — plus review requests from OTHER people's repos on top
+        reviews = search(f"--review-requested={login}")
+        rurls = {r["url"] for r in reviews}
+        prs = search("--owner", login)
+        purls = {p["url"] for p in prs}
+        for p in prs:
+            p["mine"] = p["url"] in rurls
+        prs = [dict(r, mine=True) for r in reviews if r["url"] not in purls] + prs
+        return {"login": login, "error": None, "prs": prs[:15], "more_url": more}
     return cached("github", 120, fetch)
 
 
@@ -612,7 +618,7 @@ def state(headers):
             "mode": mode, "apps": list(APPS), "settings": load_settings(),
             "tmux": tmux, "torpor": len(tmux) if frozen else 0,
             "system": collect_system(),
-            "github": {"login": None, "prs": [], "reviews": [], "error": "paused in game mode"},
+            "github": {"login": None, "prs": [], "error": "paused in game mode"},
             "linear": {"configured": False, "issues": [], "error": None},
             "ci": {"rows": []}, "usage": None, "services": [], "repos": [],
             "docker": {"error": "docker stopped (gaming)", "containers": []},
@@ -897,7 +903,8 @@ button.busy{opacity:.6;cursor:wait}
 .gear{min-height:0;padding:3px 9px;font-size:13px}
 @media(pointer:coarse){td{padding-top:9px;padding-bottom:9px}}
 /* panels: title sits ON the border, like a TUI frame */
-#panels{display:grid;grid-template-columns:1fr 1fr;gap:18px 12px;margin-bottom:12px}
+#panels{display:grid;grid-template-columns:1fr 1fr;gap:18px 12px;margin-bottom:12px;
+  align-items:start} /* panels hug their content instead of stretching rows */
 @media(max-width:760px){#panels{grid-template-columns:1fr}}
 .w-full{grid-column:1/-1}
 .panel{position:relative;background:var(--surface);border:1px solid var(--ring);
@@ -1060,8 +1067,7 @@ body.gaming #panels>[data-panel="stats"]{display:grid!important}
   </div>
 </div>
 <div id="panels">
-  <div class="panel" data-panel="prs"><h2>🔀 Open pull requests</h2><table id="prs"></table></div>
-  <div class="panel" data-panel="reviews"><h2>👀 Review requests</h2><table id="reviews"></table></div>
+  <div class="panel" data-panel="prs"><h2>🔀 Pull requests</h2><table id="prs"></table></div>
   <div class="panel" data-panel="ci"><h2>🏗️ CI status</h2><table id="ci"></table></div>
   <div class="panel" data-panel="linear"><h2>📐 Linear — assigned to me</h2><table id="linear"></table>
     <div class="setrow"><input id="new-linear" placeholder="new issue title…" style="flex:1">
@@ -1115,11 +1121,11 @@ function statusDot(state){
 // viewed on a bare port (localhost:4712) rather than mounted at /dash/
 const appUrl=u=>(location.port&&location.port!=='443'&&u.startsWith('/'))
   ?`https://${location.hostname}${u}`:u;
-const PANEL_NAMES={prs:'Open pull requests',reviews:'Review requests',ci:'CI status',
+const PANEL_NAMES={prs:'Pull requests',ci:'CI status',
   linear:'Linear issues',usage:'Agent usage',tmux:'Agent sessions',repos:'Repos',
   stats:'Stats tiles',actions:'Actions',services:'Services',docker:'Docker',
   journal:'Journal errors'};
-const PANEL_TABS={prs:'work',reviews:'work',ci:'work',linear:'work',usage:'work',
+const PANEL_TABS={prs:'work',ci:'work',linear:'work',usage:'work',
   tmux:'work',repos:'work',
   stats:'system',actions:'system',services:'system',docker:'system',journal:'system'};
 let linearConfigured=false,lastMode=null,lastTmux=[];
@@ -1202,20 +1208,15 @@ function render(s){
   const moreRow=(shown,total,url)=>total>shown&&url
     ? `<tr><td colspan="3"><a href="${esc(url)}" target="_blank" rel="noopener">show all (${total}${total>=15?'+':''}) →</a></td></tr>`:'';
   const gh=s.github||{};
+  const anyMine=(gh.prs||[]).some(p=>p.mine);
   $('prs').innerHTML=gh.error
     ? `<tr><td class="dim">${esc(gh.error)}</td></tr>`
     : ((gh.prs||[]).slice(0,5).map(p=>`<tr>
-        <td><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.repo)} #${p.number}</a></td>
+        <td>${p.mine?'<span title="your review is requested">👀 </span>':''}<a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.repo)} #${p.number}</a></td>
         <td class="dim">${esc(p.title)}</td></tr>`).join('')
        +moreRow(5,(gh.prs||[]).length,gh.more_url)
+       +(anyMine?'<tr><td class="dim" colspan="2">👀 = your review requested</td></tr>':'')
        ||'<tr><td class="dim">no open PRs 🎉</td></tr>');
-  $('reviews').innerHTML=gh.error
-    ? `<tr><td class="dim">${esc(gh.error)}</td></tr>`
-    : ((gh.reviews||[]).slice(0,5).map(p=>`<tr>
-        <td><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.repo)} #${p.number}</a></td>
-        <td class="dim">${esc(p.title)}</td></tr>`).join('')
-       +moreRow(5,(gh.reviews||[]).length,gh.reviews_url)
-       ||'<tr><td class="dim">nobody is waiting on you 🎉</td></tr>');
   $('ci').innerHTML=((s.ci||{}).rows||[]).map(r=>{
     const st=r.status!=='completed'?'inactive':(r.conclusion==='success'?'active':'failed');
     return `<tr><td>${statusDot(st)}<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.repo)}</a></td>
