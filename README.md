@@ -30,10 +30,6 @@ and *gaming* mode, freezing your agent sessions in place until you're done.
 ```
 
 ![the gravedecay dashboard — Work tab](assets/dashboard.png)
-
-<summary>📟 System tab — vitals, actions, services, docker, journal</summary>
-
-
 ![the gravedecay dashboard — System tab](assets/dashboard-system.png)
 
 ## Design principles
