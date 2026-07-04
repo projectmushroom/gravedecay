@@ -51,7 +51,7 @@ APPS = [{"name": name.strip(), "url": url.strip()}
 # exactly like actions). Stored beside the other appliance config.
 SETTINGS_PATH = os.path.join(GRAVE_ROOT, "config", "gravedecay-settings.json")
 DEFAULT_SETTINGS = {
-    "panel_order": ["prs", "reviews", "ci", "linear", "tmux", "repos",
+    "panel_order": ["prs", "reviews", "ci", "linear", "usage", "tmux", "repos",
                     "stats", "actions", "services", "docker", "journal"],
     "hidden_panels": [],   # panel ids to hide
     "hidden_apps": [],     # launcher tile names to hide
@@ -475,6 +475,124 @@ def save_linear_key(key):
     _ttl_cache.pop("linear", None)
 
 
+HOME = os.path.expanduser("~")
+# $/MTok (input, output) by model-id substring, first match wins. Cache read
+# bills 0.1x input; cache write 1.25x (5m TTL) / 2x (1h TTL).
+CLAUDE_PRICES = [
+    ("fable", (10, 50)), ("mythos", (10, 50)), ("opus-4-1", (15, 75)),
+    ("opus", (5, 25)), ("sonnet", (3, 15)), ("haiku", (1, 5)),
+]
+
+
+def _claude_cost(model, u):
+    p = next((v for k, v in CLAUDE_PRICES if k in (model or "")), (5, 25))
+    cc = u.get("cache_creation") or {}
+    w5, w1 = cc.get("ephemeral_5m_input_tokens"), cc.get("ephemeral_1h_input_tokens")
+    if w5 is None and w1 is None:
+        w5, w1 = u.get("cache_creation_input_tokens", 0), 0
+    return (u.get("input_tokens", 0) * p[0]
+            + u.get("output_tokens", 0) * p[1]
+            + u.get("cache_read_input_tokens", 0) * p[0] * 0.1
+            + (w5 or 0) * p[0] * 1.25 + (w1 or 0) * p[0] * 2) / 1e6
+
+
+def collect_agent_usage():
+    """Local-first usage stats: Claude Code transcripts (~/.claude/projects,
+    per-message usage with dedupe) and Codex rollouts (~/.codex/sessions,
+    cumulative totals per session + the latest rate-limit windows)."""
+    def fetch():
+        import datetime
+        now = time.time()
+        cutoffs = {"today": now - 86400, "week": now - 7 * 86400}
+        claude = {k: {"in": 0, "out": 0, "cache": 0, "cost": 0.0, "msgs": 0}
+                  for k in cutoffs}
+        seen = set()
+        for f in glob.glob(f"{HOME}/.claude/projects/*/*.jsonl"):
+            try:
+                if os.path.getmtime(f) < cutoffs["week"]:
+                    continue
+                with open(f) as fh:
+                    for line in fh:
+                        if '"usage"' not in line:
+                            continue
+                        try:
+                            d = json.loads(line)
+                        except ValueError:
+                            continue
+                        if d.get("type") != "assistant":
+                            continue
+                        m = d.get("message") or {}
+                        u = m.get("usage") or {}
+                        if not (u.get("output_tokens") or u.get("input_tokens")):
+                            continue
+                        key = (m.get("id"), d.get("requestId"))
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        try:
+                            ts = datetime.datetime.fromisoformat(
+                                d.get("timestamp", "").replace("Z", "+00:00")).timestamp()
+                        except ValueError:
+                            continue
+                        cost = _claude_cost(m.get("model"), u)
+                        for k, cut in cutoffs.items():
+                            if ts >= cut:
+                                b = claude[k]
+                                b["in"] += u.get("input_tokens", 0)
+                                b["out"] += u.get("output_tokens", 0)
+                                b["cache"] += u.get("cache_read_input_tokens", 0)
+                                b["cost"] += cost
+                                b["msgs"] += 1
+            except OSError:
+                continue
+        codex = {k: {"in": 0, "cached": 0, "out": 0, "sessions": 0} for k in cutoffs}
+        limits, newest = None, 0
+        for f in glob.glob(f"{HOME}/.codex/sessions/*/*/*/rollout-*.jsonl"):
+            try:
+                mt = os.path.getmtime(f)
+                if mt < cutoffs["week"]:
+                    continue
+                last_u = last_rl = None
+                with open(f) as fh:
+                    for line in fh:
+                        if '"token_count"' not in line:
+                            continue
+                        try:
+                            d = json.loads(line)
+                        except ValueError:
+                            continue
+                        p = d.get("payload") or {}
+                        if p.get("type") != "token_count":
+                            continue
+                        info = p.get("info") or {}
+                        if info.get("total_token_usage"):
+                            last_u = info["total_token_usage"]
+                        if p.get("rate_limits"):
+                            last_rl = p["rate_limits"]
+                if last_u:  # cumulative per session file — count the final total
+                    for k, cut in cutoffs.items():
+                        if mt >= cut:
+                            b = codex[k]
+                            b["in"] += last_u.get("input_tokens", 0)
+                            b["cached"] += last_u.get("cached_input_tokens", 0)
+                            b["out"] += last_u.get("output_tokens", 0)
+                            b["sessions"] += 1
+                if last_rl and mt > newest:
+                    newest, limits = mt, last_rl
+            except OSError:
+                continue
+        slim = None
+        if limits:
+            slim = {"plan": limits.get("plan_type")}
+            for name in ("primary", "secondary"):
+                w = limits.get(name) or {}
+                slim[name] = {"pct": w.get("used_percent"),
+                              "mins": w.get("window_minutes"),
+                              "resets_at": w.get("resets_at")}
+        return {"claude": claude, "codex": codex, "codex_limits": slim}
+    return cached("agent-usage", 300, fetch)
+
+
 def collect_backups():
     base = f"{GRAVE_ROOT}/backups"
     try:
@@ -504,7 +622,7 @@ def state(headers):
             "system": collect_system(),
             "github": {"login": None, "prs": [], "reviews": [], "error": "paused in game mode"},
             "linear": {"configured": False, "issues": [], "error": None},
-            "ci": {"rows": []}, "services": [], "repos": [],
+            "ci": {"rows": []}, "usage": None, "services": [], "repos": [],
             "docker": {"error": "docker stopped (gaming)", "containers": []},
             "journal": [], "backups": {"count": 0, "latest": None},
         }
@@ -522,6 +640,7 @@ def state(headers):
         "github": gh,
         "ci": collect_ci(),
         "linear": collect_linear(),
+        "usage": collect_agent_usage(),
         "settings": load_settings(),
         "services": collect_services(),
         "docker": collect_docker(),
@@ -953,6 +1072,7 @@ body.gaming #panels>[data-panel="stats"]{display:grid!important}
     <div class="setrow"><input id="new-linear" placeholder="new issue title…" style="flex:1">
       <button class="mini" id="add-linear">➕</button></div>
   </div>
+  <div class="panel" data-panel="usage"><h2>🧾 Agent usage</h2><table id="usage"></table></div>
   <div class="panel" data-panel="tmux"><h2>🤖 Agent sessions — tap to open</h2><table id="tmux"></table></div>
   <div class="panel" data-panel="repos"><h2>📦 Repos</h2><table id="repos"></table></div>
   <div class="tiles w-full" data-panel="stats" id="tiles"></div>
@@ -1001,9 +1121,11 @@ function statusDot(state){
 const appUrl=u=>(location.port&&location.port!=='443'&&u.startsWith('/'))
   ?`https://${location.hostname}${u}`:u;
 const PANEL_NAMES={prs:'Open pull requests',reviews:'Review requests',ci:'CI status',
-  linear:'Linear issues',tmux:'Agent sessions',repos:'Repos',stats:'Stats tiles',
-  actions:'Actions',services:'Services',docker:'Docker',journal:'Journal errors'};
-const PANEL_TABS={prs:'work',reviews:'work',ci:'work',linear:'work',tmux:'work',repos:'work',
+  linear:'Linear issues',usage:'Agent usage',tmux:'Agent sessions',repos:'Repos',
+  stats:'Stats tiles',actions:'Actions',services:'Services',docker:'Docker',
+  journal:'Journal errors'};
+const PANEL_TABS={prs:'work',reviews:'work',ci:'work',linear:'work',usage:'work',
+  tmux:'work',repos:'work',
   stats:'system',actions:'system',services:'system',docker:'system',journal:'system'};
 let linearConfigured=false,lastMode=null,lastTmux=[];
 let cfg=null,envApps=[],layoutKey='';
@@ -1046,7 +1168,7 @@ function render(s){
       (cfg.newtab_apps||[]).includes(a.name)?' target="_blank" rel="noopener"':''
     }>${esc(a.name)}</a>`).join('');
   $('mode').textContent=(s.mode==='developer'?'💻 developer':'🎮 gaming');
-  $('meta').textContent=`${s.viewer} · up ${fmtUp(s.system.uptime_s)} · ${s.now}`;
+  $('meta').textContent=`up ${fmtUp(s.system.uptime_s)} · ${s.now}`;
   // the mode you're already in isn't a button you can press
   document.querySelector('[data-act="gaming"]').disabled=(s.mode==='gaming');
   document.querySelector('[data-act="developer"]').disabled=(s.mode==='developer');
@@ -1105,6 +1227,24 @@ function render(s){
       <td class="dim">${esc(r.workflow)}</td>
       <td class="dim">${esc(r.branch)} · ${esc(r.conclusion||r.status)}</td></tr>`;
   }).join('')||'<tr><td class="dim">no workflow runs in any repo</td></tr>';
+  const us=s.usage;
+  if(us){
+    const fk=n=>n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?Math.round(n/1e3)+'k':''+n;
+    const win=m=>m===300?'5h window':m===10080?'weekly':Math.round(m/60)+'h window';
+    const rst=t=>t?new Date(t*1000).toLocaleString(undefined,{weekday:'short',hour:'2-digit',minute:'2-digit'}):'';
+    const lim=(w,label)=>w&&w.pct!=null?`<tr><td class="dim">${label}</td>
+      <td><div class="meter ${meterClass(w.pct)}" style="margin-top:5px"><i style="width:${Math.min(w.pct,100)}%"></i></div></td>
+      <td class="num">${w.pct}%${w.resets_at?'<span class="dim"> · resets '+esc(rst(w.resets_at))+'</span>':''}</td></tr>`:'';
+    const c=us.claude,x=us.codex,L=us.codex_limits;
+    $('usage').innerHTML=
+      `<tr><td>🤖 Claude 24h</td><td class="dim">${fk(c.today.in)} in · ${fk(c.today.out)} out · ${fk(c.today.cache)} cached</td><td class="num">≈$${c.today.cost.toFixed(2)}</td></tr>`
+      +`<tr><td class="dim">&nbsp;&nbsp;7 days</td><td class="dim">${fk(c.week.in)} in · ${fk(c.week.out)} out · ${c.week.msgs} msgs</td><td class="num">≈$${c.week.cost.toFixed(2)}</td></tr>`
+      +`<tr><td>🧠 Codex 24h</td><td class="dim">${fk(x.today.in)} in (${fk(x.today.cached)} cached) · ${fk(x.today.out)} out</td><td class="num">${x.today.sessions} sess</td></tr>`
+      +`<tr><td class="dim">&nbsp;&nbsp;7 days</td><td class="dim">${fk(x.week.in)} in · ${fk(x.week.out)} out</td><td class="num">${x.week.sessions} sess</td></tr>`
+      +(L?lim(L.primary,`codex ${win(L.primary.mins)}`)+lim(L.secondary,`codex ${win(L.secondary.mins)}`)
+          +`<tr><td class="dim" colspan="3">plan: ${esc(L.plan||'?')} · $ = est. API value (subscriptions bill flat)</td></tr>`
+        :'<tr><td class="dim" colspan="3">$ = est. API value (subscriptions bill flat)</td></tr>');
+  }
   const li=s.linear||{};
   linearConfigured=!!li.configured;
   $('linear').innerHTML=!li.configured
