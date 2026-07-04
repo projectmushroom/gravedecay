@@ -66,6 +66,15 @@ The agent runs the ritual, fixes distro quirks, walks you through the two
 interactive steps (Tailscale login, T3 pairing), and hands you a passing
 `grave doctor`.
 
+### The one-liner
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/projectmushroom/gravedecay/master/install.sh | bash -s -- --profile generic
+```
+
+Clones to `$GRAVE_ROOT/repos/gravedecay`, checks out the **latest release**,
+and runs the ritual. `GRAVEDECAY_CHANNEL=edge` follows main instead.
+
 ### The manual way
 
 ```sh
@@ -78,6 +87,19 @@ grave doctor                      # verify every invariant
 Requirements: a systemd-based distro (Arch-family is first-class; Debian/Fedora
 best-effort), ~8 GB RAM, and a [Tailscale](https://tailscale.com) account
 (free tier is fine).
+
+### Updating
+
+```sh
+grave upgrade           # pull the latest release tag, re-run the ritual
+grave upgrade --edge    # follow main instead (UPGRADE_CHANNEL=edge to default)
+```
+
+`raise.sh` is idempotent, so updating *is* re-raising: your config is never
+clobbered (conf, stacks, and secrets are create-if-missing), while services,
+templates, and the dashboard refresh — and doctor verifies the result.
+Releases are plain git tags (`v0.1.0`, …) with notes on GitHub: pin to them
+for stability, or ride main if the box is also where you hack on gravedecay.
 
 ## Connecting a device (phone, laptop, tablet)
 

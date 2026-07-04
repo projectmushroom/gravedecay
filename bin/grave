@@ -239,6 +239,48 @@ cmd_update() {
   ok "update complete — reboot only if the kernel changed"
 }
 
+# --------------------------------------------------------------- upgrade ----
+cmd_upgrade() { # grave upgrade [--edge|--release] — update gravedecay itself
+  local channel="${UPGRADE_CHANNEL:-release}"
+  local repo="${REPO_DIR:-$GRAVE_ROOT/repos/gravedecay}"
+  case "${1:-}" in
+    --edge) channel=edge ;;
+    --release) channel=release ;;
+    "") ;;
+    *) say "usage: grave upgrade [--edge|--release]"; exit 1 ;;
+  esac
+  [[ -d "$repo/.git" ]] || { bad "gravedecay checkout not found at $repo (set REPO_DIR in grave.conf)"; exit 1; }
+  if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then
+    bad "checkout at $repo has local changes — commit or stash them first"
+    exit 1
+  fi
+  say "Fetching updates (${channel} channel)..."
+  git -C "$repo" fetch --tags --prune -q origin
+  git -C "$repo" remote set-head origin -a >/dev/null 2>&1 || true
+  local target=""
+  if [[ "$channel" == release ]]; then
+    target=$(git -C "$repo" tag -l 'v*' --sort=-v:refname | head -1)
+    if [[ -z "$target" ]]; then
+      say "${YLW}no release tags found — following main instead${RST}"
+      channel=edge
+    fi
+  fi
+  if [[ "$channel" == edge ]]; then
+    local branch
+    branch=$(git -C "$repo" symbolic-ref -q --short refs/remotes/origin/HEAD || echo origin/master)
+    branch=${branch#origin/}
+    git -C "$repo" checkout -q "$branch"
+    git -C "$repo" pull -q --ff-only origin "$branch"
+    target="$branch"
+  else
+    git -C "$repo" checkout -q --detach "$target"
+  fi
+  ok "checked out $target ($(git -C "$repo" rev-parse --short HEAD))"
+  say "Re-running the ritual (idempotent)..."
+  bash "$repo/raise.sh"
+  log "upgrade: $target"
+}
+
 # ------------------------------------------------------------------ logs ----
 cmd_logs() {
   local target="${1:-grave}"
@@ -405,6 +447,8 @@ grave — gravedecay appliance control 🪦
   grave logs [t3|dash|ssh|tailscale|system|grave|agent <n>|<container/unit>]
 
   grave update               snapshot (if snapper), update pkgs/npm/images
+  grave upgrade              update gravedecay itself: pull latest release
+                             (or --edge for main), re-run the ritual
   grave backup               bundle repos, configs, docker volumes
   grave restore [backup]     list / restore backups
 
@@ -423,6 +467,7 @@ case "${1:-help}" in
   agents)     shift; cmd_agents "$@" ;;
   docker)     shift; cmd_docker "$@" ;;
   update)     cmd_update ;;
+  upgrade)    shift || true; cmd_upgrade "$@" ;;
   logs)       shift; cmd_logs "$@" ;;
   doctor)     cmd_doctor ;;
   backup)     cmd_backup ;;
