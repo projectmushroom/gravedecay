@@ -884,6 +884,8 @@ body.gaming #panels>[data-panel="stats"]{display:grid!important}
 </div>
 <div class="overlay" id="console" style="display:none">
   <div class="dlg">
+    <button class="mini" id="console-x" title="close (Esc)" aria-label="close"
+      style="position:absolute;top:10px;right:10px;z-index:2">✕</button>
     <div id="console-title">▚ grave</div>
     <pre id="console-out"></pre><span id="ccur">▮</span>
     <div class="setrow"><button class="mini" id="console-close" style="display:none">close</button></div>
@@ -1085,10 +1087,17 @@ async function poll(){
 // fetch instead of EventSource: real HTTP errors become readable (through
 // EventSource a 403 and a dead box look identical) and there is no browser
 // auto-retry that could silently re-trigger a mode switch.
-let streaming=false;
+let streaming=false,aborter=null,runId=0;
+function closeConsole(){
+  // closing only detaches the console — the action always finishes on the box
+  if(aborter){aborter.abort();aborter=null;}
+  $('console').style.display='none';
+}
 async function runStream(act,title){
   if(streaming)return;
   streaming=true;
+  const myRun=++runId;
+  aborter=new AbortController();
   $('game-confirm').style.display='none';
   $('console').style.display='block';
   $('console-title').textContent='▚ '+(title||('grave '+act));
@@ -1097,9 +1106,10 @@ async function runStream(act,title){
   const add=(t,cls)=>{const d=document.createElement('div');
     d.className=cls||(t.includes('✗')?'err':(/🎮|💻|🪦|Gaming|Developer/.test(t)?'hl':''));
     d.textContent=t||' ';out.appendChild(d);out.scrollTop=out.scrollHeight;};
-  let gotData=false;
+  let gotData=false,okDone=false;
   try{
-    const r=await fetch('api/action-stream?action='+encodeURIComponent(act));
+    const r=await fetch('api/action-stream?action='+encodeURIComponent(act),
+      {signal:aborter.signal});
     if(!r.ok){
       let msg=await r.text();
       try{msg=JSON.parse(msg).output||msg;}catch(_){}
@@ -1118,20 +1128,30 @@ async function runStream(act,title){
           const da=/^data: (.*)$/m.exec(chunk);
           if(ev&&ev[1]==='done'){
             const rc=da?da[1]:'?';
-            add(rc==='0'?'— sequence complete ✓':'— exited with code '+rc,rc==='0'?'hl':'err');
+            okDone=(rc==='0');
+            add(okDone?'— sequence complete ✓':'— exited with code '+rc,okDone?'hl':'err');
           }else if(da){gotData=true;add(JSON.parse(da[1]));}
         }
       }
       if(!gotData)add('— connection closed before any output arrived','err');
     }
   }catch(e){
-    add(gotData?'— stream lost: '+e+' (the action keeps running on the box)'
-               :'— request failed: '+e,'err');
+    if(e.name!=='AbortError')
+      add(gotData?'— stream lost: '+e+' (the action keeps running on the box)'
+                 :'— request failed: '+e,'err');
   }
-  streaming=false;
+  streaming=false;aborter=null;
   $('console-close').style.display='';
   poll();
+  // success: linger briefly so the ✓ registers, then get out of the way
+  if(okDone)setTimeout(()=>{if(runId===myRun)closeConsole();},3500);
 }
+$('console-x').onclick=closeConsole;
+$('console').addEventListener('click',e=>{if(e.target.id==='console')closeConsole();});
+$('game-confirm').addEventListener('click',e=>{
+  if(e.target.id==='game-confirm')e.currentTarget.style.display='none';});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){
+  closeConsole();$('game-confirm').style.display='none';}});
 $('console-close').onclick=()=>{$('console').style.display='none'};
 // ---------- gaming confirm dialog ----------
 function openGameConfirm(){
