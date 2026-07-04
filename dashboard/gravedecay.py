@@ -1042,10 +1042,14 @@ async function poll(){
     render(await r.json());
   }catch(e){ $('meta').textContent='unreachable — retrying'; }
 }
-// ---------- boot console (SSE) ----------
-let es=null;
-function runStream(act,title){
-  if(es){es.close();es=null;}
+// ---------- boot console (fetch-streamed SSE) ----------
+// fetch instead of EventSource: real HTTP errors become readable (through
+// EventSource a 403 and a dead box look identical) and there is no browser
+// auto-retry that could silently re-trigger a mode switch.
+let streaming=false;
+async function runStream(act,title){
+  if(streaming)return;
+  streaming=true;
   $('game-confirm').style.display='none';
   $('console').style.display='block';
   $('console-title').textContent='▚ '+(title||('grave '+act));
@@ -1053,24 +1057,41 @@ function runStream(act,title){
   $('console-close').style.display='none';
   const add=(t,cls)=>{const d=document.createElement('div');
     d.className=cls||(t.includes('✗')?'err':(/🎮|💻|🪦|Gaming|Developer/.test(t)?'hl':''));
-    d.textContent=t||' ';out.appendChild(d);out.scrollTop=out.scrollHeight;};
-  let gotData=false,retries=0;
-  es=new EventSource('api/action-stream?action='+encodeURIComponent(act));
-  es.onmessage=e=>{gotData=true;add(JSON.parse(e.data));};
-  es.addEventListener('done',e=>{es.close();es=null;
-    add(e.data==='0'?'— sequence complete ✓':'— exited with code '+e.data,e.data==='0'?'hl':'err');
-    $('console-close').style.display='';poll();});
-  es.onerror=()=>{
-    if(!es)return;
-    // Before any output arrived the GET hasn't done anything yet — let
-    // EventSource auto-retry a few times (rides out service restarts).
-    // After output arrived, retrying would re-run the action: bail instead.
-    if(!gotData&&retries++<3&&es.readyState!==EventSource.CLOSED){
-      add('— connecting… (retry '+retries+')');return;}
-    es.close();es=null;
-    add(gotData?'— stream lost (the action keeps running on the box)'
-               :'— could not reach the box (try again)','err');
-    $('console-close').style.display='';setTimeout(poll,2500);};
+    d.textContent=t||' ';out.appendChild(d);out.scrollTop=out.scrollHeight;};
+  let gotData=false;
+  try{
+    const r=await fetch('api/action-stream?action='+encodeURIComponent(act));
+    if(!r.ok){
+      let msg=await r.text();
+      try{msg=JSON.parse(msg).output||msg;}catch(_){}
+      add(`— HTTP ${r.status}: ${msg}`,'err');
+    }else{
+      const rd=r.body.getReader(),dec=new TextDecoder();
+      let buf='';
+      for(;;){
+        const{done,value}=await rd.read();
+        if(done)break;
+        buf+=dec.decode(value,{stream:true});
+        let i;
+        while((i=buf.indexOf('\n\n'))>=0){
+          const chunk=buf.slice(0,i);buf=buf.slice(i+2);
+          const ev=/^event: (.*)$/m.exec(chunk);
+          const da=/^data: (.*)$/m.exec(chunk);
+          if(ev&&ev[1]==='done'){
+            const rc=da?da[1]:'?';
+            add(rc==='0'?'— sequence complete ✓':'— exited with code '+rc,rc==='0'?'hl':'err');
+          }else if(da){gotData=true;add(JSON.parse(da[1]));}
+        }
+      }
+      if(!gotData)add('— connection closed before any output arrived','err');
+    }
+  }catch(e){
+    add(gotData?'— stream lost: '+e+' (the action keeps running on the box)'
+               :'— request failed: '+e,'err');
+  }
+  streaming=false;
+  $('console-close').style.display='';
+  poll();
 }
 $('console-close').onclick=()=>{$('console').style.display='none'};
 // ---------- gaming confirm dialog ----------
