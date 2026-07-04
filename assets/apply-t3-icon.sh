@@ -2,7 +2,7 @@
 # Brand the T3 Code web UI with the gravedecay tombstone favicon.
 # T3 is a pinned npm package — updating it overwrites dist/client, so rerun
 # this after every `npm update -g t3`. Regenerate the PNGs from
-# ../gravedecay.svg (rsvg-convert + imagemagick) if the logo changes.
+# ../gravedecay.png (imagemagick) if the logo changes.
 set -e
 SRC="$(cd "$(dirname "$0")/t3-icon" && pwd)"
 DIST="${1:-$(npm root -g)/t3/dist/client}"

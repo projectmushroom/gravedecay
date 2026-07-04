@@ -27,6 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("GRAVEDASH_PORT", "4712"))
 GRAVE_ROOT = os.environ.get("GRAVE_ROOT", "/srv/dev")
+ICON_PATH = os.environ.get("GRAVEDASH_ICON", os.path.join(GRAVE_ROOT, "config", "gravedecay.png"))
 HOST = socket.gethostname()
 # Tailscale serve injects Tailscale-User-Login for tailnet requests; POSTs
 # (actions) are restricted to these identities. Requests with no header can
@@ -46,27 +47,23 @@ ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 @functools.cache
 def icon_png(size):
-    """Home-screen icon: the gravedecay horned tombstone (assets/gravedecay.svg
-    rendered in Pillow). Falls back to a plain accent square — never a 404."""
+    """Home-screen icon from the installed gravedecay PNG. Never returns 404."""
     try:
-        from PIL import Image, ImageDraw
-        img = Image.new("RGB", (size, size), "#1a1a19")
-        d = ImageDraw.Draw(img)
-        s = size / 512
-        d.polygon([(76*s, 452*s), (76*s, 428*s), (256*s, 390*s),
-                   (436*s, 428*s), (436*s, 452*s)], fill="#2c2c2a")
-        d.polygon([(158*s, 160*s), (134*s, 62*s), (208*s, 148*s)], fill="#c22f27")
-        d.polygon([(354*s, 160*s), (378*s, 62*s), (304*s, 148*s)], fill="#c22f27")
-        d.ellipse([146*s, 118*s, 366*s, 322*s], fill="#8f8d84")
-        d.rectangle([146*s, 220*s, 366*s, 428*s], fill="#8f8d84")
-        d.polygon([(192*s, 218*s), (240*s, 228*s), (238*s, 242*s), (190*s, 232*s)], fill="#1a1a19")
-        d.polygon([(320*s, 218*s), (272*s, 228*s), (274*s, 242*s), (322*s, 232*s)], fill="#1a1a19")
-        for x, y, w in ((196, 292, 120), (212, 330, 88), (228, 368, 56)):
-            d.rounded_rectangle([x*s, y*s, (x+w)*s, (y+14)*s], radius=7*s, fill="#1a1a19")
-    except ImportError:
+        from PIL import Image
+        with Image.open(ICON_PATH) as src:
+            src = src.convert("RGB")
+            src.thumbnail((size, size), Image.LANCZOS)
+            img = Image.new("RGB", (size, size), "#000000")
+            img.paste(src, ((size - src.width) // 2, (size - src.height) // 2))
+    except Exception:
+        try:
+            with open(ICON_PATH, "rb") as f:
+                return f.read()
+        except OSError:
+            pass
         from struct import pack
         import zlib
-        row = b"\x00" + bytes.fromhex("3987e5") * size
+        row = b"\x00" + bytes.fromhex("000000") * size
         idat = zlib.compress(row * size)
         def chunk(tag, data):
             c = pack(">I", len(data)) + tag + data

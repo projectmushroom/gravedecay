@@ -89,6 +89,7 @@ sudo visudo -c -f /etc/sudoers.d/50-gravedecay >/dev/null && ok "sudoers valid"
 # ----------------------------------------------------------- 5. gravedash ----
 step "gravedash"
 install -m 755 "$REPO_DIR/dashboard/gravedash.py" "$GRAVE_ROOT/scripts/gravedash.py"
+install -m 644 "$REPO_DIR/assets/gravedecay.png" "$GRAVE_ROOT/config/gravedecay.png"
 sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
     -e "s|@DASH_PORT@|$DASH_PORT|g" -e "s|@ALLOWED_USERS@||g" \
     "$REPO_DIR/systemd/gravedash.service.tmpl" | sudo tee /etc/systemd/system/gravedash.service >/dev/null
