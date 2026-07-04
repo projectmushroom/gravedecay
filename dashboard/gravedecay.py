@@ -869,10 +869,15 @@ a{color:var(--accent);text-decoration:none}
 a:hover{background:var(--accent);color:#000}
 h1{font-size:15px;font-weight:700;color:var(--ink);text-shadow:var(--glow)}
 h1::before{content:'> ';color:var(--accent)}
-.topbar{position:sticky;top:0;z-index:10;display:flex;flex-wrap:wrap;gap:10px;align-items:center;
+.topbar{position:sticky;top:0;z-index:101;display:flex;flex-wrap:wrap;gap:10px;align-items:center;
   background:var(--page);margin:0 -14px 16px;
   padding:calc(10px + env(safe-area-inset-top)) 14px 8px;
   border-bottom:1px solid var(--ring)}
+/* iOS PWA: an opaque strip over the status-bar/dynamic-island area — content
+   must never be readable up there while scrolling. Sits above the scanline
+   overlays (z 98/99); zero height on devices without an inset. */
+#topcover{position:fixed;top:0;left:0;right:0;height:env(safe-area-inset-top);
+  background:var(--page);z-index:102}
 .topbar .meta{color:var(--muted);font-size:12px;margin-left:auto}
 .badge{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;
   border:1px solid var(--ring);font-size:12px;font-weight:700;color:var(--ink)}
@@ -997,6 +1002,7 @@ body.gaming #panels>[data-panel="stats"]{display:grid!important}
 .actions{display:flex;flex-wrap:wrap;gap:8px}
 @media(max-width:640px){.actions{display:grid;grid-template-columns:1fr 1fr}}
 </style></head><body>
+<div id="topcover"></div>
 <div class="topbar">
   <h1>gravedecay</h1>
   <span class="badge" id="mode" role="button" title="Tap to switch mode" style="cursor:pointer">…</span>
