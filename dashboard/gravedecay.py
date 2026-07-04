@@ -1054,14 +1054,23 @@ function runStream(act,title){
   const add=(t,cls)=>{const d=document.createElement('div');
     d.className=cls||(t.includes('✗')?'err':(/🎮|💻|🪦|Gaming|Developer/.test(t)?'hl':''));
     d.textContent=t||' ';out.appendChild(d);out.scrollTop=out.scrollHeight;};
+  let gotData=false,retries=0;
   es=new EventSource('api/action-stream?action='+encodeURIComponent(act));
-  es.onmessage=e=>add(JSON.parse(e.data));
+  es.onmessage=e=>{gotData=true;add(JSON.parse(e.data));};
   es.addEventListener('done',e=>{es.close();es=null;
     add(e.data==='0'?'— sequence complete ✓':'— exited with code '+e.data,e.data==='0'?'hl':'err');
     $('console-close').style.display='';poll();});
-  es.onerror=()=>{if(es){es.close();es=null;
-    add('— stream lost (the action keeps running on the box)','err');
-    $('console-close').style.display='';setTimeout(poll,2500);}};
+  es.onerror=()=>{
+    if(!es)return;
+    // Before any output arrived the GET hasn't done anything yet — let
+    // EventSource auto-retry a few times (rides out service restarts).
+    // After output arrived, retrying would re-run the action: bail instead.
+    if(!gotData&&retries++<3&&es.readyState!==EventSource.CLOSED){
+      add('— connecting… (retry '+retries+')');return;}
+    es.close();es=null;
+    add(gotData?'— stream lost (the action keeps running on the box)'
+               :'— could not reach the box (try again)','err');
+    $('console-close').style.display='';setTimeout(poll,2500);};
 }
 $('console-close').onclick=()=>{$('console').style.display='none'};
 // ---------- gaming confirm dialog ----------
