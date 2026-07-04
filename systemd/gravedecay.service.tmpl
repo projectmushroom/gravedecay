@@ -1,5 +1,5 @@
 [Unit]
-Description=gravedecay - gravedecay appliance status dashboard
+Description=gravedecay - appliance dashboard & entry point
 After=network-online.target
 Wants=network-online.target
 
@@ -18,10 +18,12 @@ Environment=GRAVEDECAY_PORT=@DASH_PORT@
 Environment=GRAVEDECAY_ALLOWED_USERS=@ALLOWED_USERS@
 # Launcher tiles ("label=url;label=url") — gravedecay is the entry point;
 # every app mounted on this box gets a tile here.
-Environment="GRAVEDECAY_APPS=⌨️ T3 Code=/"
+Environment="GRAVEDECAY_APPS=⌨️ T3 Code=/;🖥️ Terminal=/term/?arg=shell;🤖 Claude=/term/?arg=claude;🧠 Codex=/term/?arg=codex"
 
-NoNewPrivileges=yes
-PrivateTmp=yes
+# NO NoNewPrivileges: it blocks sudo — the dashboard runs mode flips via
+# sudo -n grave, and web-terminal shells legitimately use sudo.
+# NO PrivateTmp: tmux sockets live in /tmp/tmux-<uid>/ — a private /tmp
+# would hide agent sessions (dashboard) / strand them in a namespace (ttyd)
 
 [Install]
 WantedBy=multi-user.target

@@ -11,7 +11,7 @@ source "$CONF"
 LOG_FILE="$GRAVE_ROOT/logs/grave.log"
 RED=$'\e[31m'; GRN=$'\e[32m'; YLW=$'\e[33m'; BLD=$'\e[1m'; RST=$'\e[0m'
 
-log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG_FILE" 2>/dev/null || true; }
+log() { { printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG_FILE"; } 2>/dev/null || true; }
 say() { printf '%s\n' "$*"; }
 ok()  { printf '  %b✓%b %s\n' "$GRN" "$RST" "$*"; }
 bad() { printf '  %b✗%b %s\n' "$RED" "$RST" "$*"; }
@@ -90,14 +90,51 @@ start_dev() {
   log "developer mode: started"
 }
 
-stop_dev() {
+# Agent freeze uses the cgroup v2 freezer, NOT SIGSTOP: the tmux server
+# SIGCONTs any stopped pane child (see tmux server_child_stopped), so signals
+# silently lose. The kernel freezer is signal-proof — frozen tasks never run.
+TORPOR_CG=/sys/fs/cgroup/grave-torpor
+
+collect_tree() { # collect_tree <pid> -> appends pid + descendants to ALL_PIDS
+  local pid="$1" c
+  ALL_PIDS+=("$pid")
+  for c in $(ps -o pid= --ppid "$pid" 2>/dev/null); do collect_tree "$c"; done
+}
+
+freeze_agents() {
+  local pids p n=0
+  pids=$(tmuxa list-panes -a -F '#{pane_pid}' 2>/dev/null) || return 0
+  [[ -z "$pids" ]] && return 0
+  sudo mkdir -p "$TORPOR_CG"
+  ALL_PIDS=()
+  for p in $pids; do collect_tree "$p"; n=$((n+1)); done
+  for p in "${ALL_PIDS[@]}"; do
+    echo "$p" | sudo tee "$TORPOR_CG/cgroup.procs" >/dev/null 2>&1 || true
+  done
+  echo 1 | sudo tee "$TORPOR_CG/cgroup.freeze" >/dev/null
+  ok "froze $n agent pane(s) 🧊 (cgroup freezer: RAM kept, zero CPU — 'grave developer' thaws)"
+}
+
+thaw_agents() {
+  [[ -f "$TORPOR_CG/cgroup.freeze" ]] || return 0
+  [[ "$(cat "$TORPOR_CG/cgroup.freeze")" == 1 ]] || return 0
+  echo 0 | sudo tee "$TORPOR_CG/cgroup.freeze" >/dev/null
+  ok "thawed agent sessions"
+}
+
+stop_dev() { # stop_dev [kill]  — kill: also destroy tmux sessions (max free RAM)
+  local kill_sessions="${1:-}"
   need_root_helper
   say "Stopping developer services..."
   local s
   for s in "${DEV_SERVICES[@]}"; do sudo systemctl stop "$s" 2>/dev/null || true; ok "stopped $s"; done
-  if tmuxa list-sessions >/dev/null 2>&1; then
-    tmuxa kill-server 2>/dev/null || true
-    ok "stopped agent tmux sessions"
+  if [[ "$kill_sessions" == kill ]]; then
+    if tmuxa list-sessions >/dev/null 2>&1; then
+      tmuxa kill-server 2>/dev/null || true
+      ok "killed agent tmux sessions ☠️"
+    fi
+  else
+    freeze_agents
   fi
   if systemctl is-active --quiet docker; then
     local stack idx
@@ -115,18 +152,26 @@ stop_dev() {
   log "developer mode: stopped"
 }
 
-cmd_gaming() {
+cmd_gaming() { # cmd_gaming [--kill]
+  local tier=pause
+  [[ "${1:-}" == "--kill" ]] && tier=kill
   local before after
   before=$(mem_available_mib)
-  stop_dev
+  if [[ "$tier" == kill ]]; then stop_dev kill; else stop_dev; fi
   after=$(mem_available_mib)
   say ""
-  say "${BLD}🎮 Gaming mode.${RST} Freed ~$(( after - before )) MiB RAM."
-  say "Remote access (Tailscale + SSH) is untouched. Run 'grave developer' to restore."
-  log "gaming mode: active (freed $(( after - before )) MiB)"
+  if [[ "$tier" == kill ]]; then
+    say "${BLD}🎮 Gaming mode (full kill).${RST} Freed ~$(( after - before )) MiB RAM. Agent sessions are gone."
+  else
+    say "${BLD}🎮 Gaming mode (torpor).${RST} Freed ~$(( after - before )) MiB RAM."
+    say "Agent sessions are frozen in place — 'grave developer' thaws them."
+  fi
+  say "Remote access (Tailscale + SSH) is untouched."
+  log "gaming mode: active ($tier, freed $(( after - before )) MiB)"
 }
 
 cmd_developer() {
+  thaw_agents
   start_dev
   say ""
   say "${BLD}💻 Developer mode.${RST} All services up. 'grave status' for details."
@@ -200,6 +245,7 @@ cmd_logs() {
   case "$target" in
     t3|t3code)  sudo journalctl -u t3code -n 100 -f ;;
     dash|gravedecay) sudo journalctl -u gravedecay -n 100 -f ;;
+    term)       sudo journalctl -u gravedecay-term -n 100 -f ;;
     ssh|sshd)   sudo journalctl -u sshd -n 100 -f ;;
     tailscale)  sudo journalctl -u tailscaled -n 100 -f ;;
     system)     sudo journalctl -p warning -n 100 -f ;;
@@ -254,6 +300,11 @@ cmd_doctor() {
     check "gravedecay answering"         curl -sf -o /dev/null "http://127.0.0.1:$DASH_PORT/healthz"
   else
     say "  ${YLW}– gravedecay stopped${RST}"
+  fi
+  if systemctl is-active --quiet gravedecay-term; then
+    check "web terminal answering"       curl -sf -o /dev/null "http://127.0.0.1:${TERM_PORT:-4713}/"
+  else
+    say "  ${YLW}– web terminal stopped${RST}"
   fi
   check "backups dir writable"          test -w "$BACKUP_DIR"
   echo
@@ -338,8 +389,10 @@ grave — gravedecay appliance control 🪦
   grave status               overview: services, containers, agents, system
   grave doctor               verify every platform invariant
 
-  grave gaming               🎮 free resources for gaming (keeps SSH/Tailscale)
-  grave developer            💻 restore full development mode
+  grave gaming               🎮 free resources: stop services, FREEZE agent
+                             sessions in place (🧊 torpor — RAM kept, zero CPU)
+  grave gaming --kill        ☠️ same but destroy agent sessions (max free RAM)
+  grave developer            💻 thaw sessions + restore full development mode
   grave start | stop         same as developer / gaming (without the banner)
   grave restart              stop + start developer services
 
@@ -362,11 +415,11 @@ EOF
 # ------------------------------------------------------------------ main ----
 case "${1:-help}" in
   status)     cmd_status ;;
-  gaming)     cmd_gaming ;;
+  gaming)     shift || true; cmd_gaming "$@" ;;
   developer)  cmd_developer ;;
   start)      start_dev ;;
-  stop)       stop_dev ;;
-  restart)    stop_dev; start_dev ;;
+  stop)       shift || true; stop_dev "$@" ;;
+  restart)    stop_dev; thaw_agents; start_dev ;;
   agents)     shift; cmd_agents "$@" ;;
   docker)     shift; cmd_docker "$@" ;;
   update)     cmd_update ;;

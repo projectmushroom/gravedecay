@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# webterm — session picker for the gravedecay web terminal (ttyd runs this).
+# The URL arg picks the session: /term/?arg=shell|claude|codex|<name>.
+# Every session lives in the shared `tmux -L agents` socket, so the browser,
+# SSH, and `grave agents attach` all reach the SAME persistent session, and
+# closing the tab never kills the process.
+set -euo pipefail
+GRAVE_ROOT="${GRAVE_ROOT:-/srv/dev}"
+
+choice="${1:-shell}"
+name="${choice//[^a-zA-Z0-9_-]/}"
+[[ -n "$name" ]] || name=shell
+
+case "$name" in
+  claude) cmd=(claude) ;;
+  codex)  cmd=(codex) ;;
+  # auth shortcuts (⚙️ settings → opens a terminal running the login flow;
+  # session ends when the flow exits)
+  auth-claude) cmd=(claude /login) ;;
+  auth-codex)  cmd=(codex login) ;;
+  auth-github) cmd=(gh auth login) ;;
+  *)      cmd=() ;;         # plain login shell
+esac
+
+# -A: attach if the session exists, create it if not
+exec tmux -L agents -f "$GRAVE_ROOT/config/tmux.conf" \
+  new-session -A -s "$name" "${cmd[@]}"
