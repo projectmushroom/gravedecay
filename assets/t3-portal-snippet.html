@@ -1,0 +1,19 @@
+<!-- gravedecay-portal: back-to-gravedecay pill. Injected before </body> of T3's
+     index.html by apply-t3-icon.sh. Hidden in normal browser tabs; only shows
+     when running as an installed PWA / macOS web app (display-mode:standalone),
+     where there is no URL bar to navigate back with. -->
+<style>
+#gravedecay-pill{display:none;position:fixed;left:10px;bottom:calc(10px + env(safe-area-inset-bottom));
+  z-index:2147483647;width:30px;height:30px;border-radius:50%;
+  background:rgba(26,26,25,.55);border:1px solid rgba(255,255,255,.14);
+  -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);
+  align-items:center;justify-content:center;opacity:.35;transition:opacity .15s}
+#gravedecay-pill:hover,#gravedecay-pill:active{opacity:1}
+@media(display-mode:standalone){#gravedecay-pill{display:flex}}
+</style>
+<a id="gravedecay-pill" href="/dash/" title="gravedecay" aria-label="Back to gravedecay">
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fab219"
+       stroke-width="2.4" stroke-linecap="round" aria-hidden="true">
+    <path d="M4 15a8 8 0 1 1 16 0"/><path d="M12 15l4.2-4.6"/>
+  </svg>
+</a>

@@ -13,7 +13,7 @@ DEV_STACKS=(core browsers)
 
 # systemd services that must NEVER be touched by grave gaming/stop.
 # Host profiles may append machine-specific units (GPU pinning etc.).
-ALWAYS_ON=(tailscaled sshd NetworkManager gravedash)
+ALWAYS_ON=(tailscaled sshd NetworkManager gravedecay)
 
 # tmux socket name used for agent sessions
 TMUX_SOCKET="agents"

@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
-# gravedash — status dashboard for a gravedecay appliance.
-# Single file, stdlib only. Binds 127.0.0.1:$GRAVEDASH_PORT (gravedash.service),
+# gravedecay — status dashboard for a gravedecay appliance.
+# Single file, stdlib only. Binds 127.0.0.1:$GRAVEDECAY_PORT (gravedecay.service),
 # published tailnet-only via `tailscale serve`.
 # Reads host state directly (systemd, docker, tmux -L agents, git, sensors,
 # journald) — which is why this is a host service, not a container.
 #
-# Config via environment (set in gravedash.service / a drop-in):
+# Config via environment (set in gravedecay.service / a drop-in):
 #   GRAVE_ROOT                default /srv/dev
-#   GRAVEDASH_PORT            default 4712
-#   GRAVEDASH_ALLOWED_USERS   comma-separated Tailscale logins allowed to POST
+#   GRAVEDECAY_PORT            default 4712
+#   GRAVEDECAY_ALLOWED_USERS   comma-separated Tailscale logins allowed to POST
 #                             actions (empty = tailnet viewers are read-only;
 #                             localhost is always trusted)
-#   GRAVEDASH_UNITS           comma-separated systemd units to display
+#   GRAVEDECAY_UNITS           comma-separated systemd units to display
+#   GRAVEDECAY_APPS            launcher tiles, "label=url;label=url".
+#                             gravedecay is the appliance's single entry point:
+#                             every app you mount (T3, future ones) gets a tile.
 
 import functools
 import glob
@@ -25,16 +28,23 @@ import subprocess
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-PORT = int(os.environ.get("GRAVEDASH_PORT", "4712"))
+PORT = int(os.environ.get("GRAVEDECAY_PORT", "4712"))
 GRAVE_ROOT = os.environ.get("GRAVE_ROOT", "/srv/dev")
-ICON_PATH = os.environ.get("GRAVEDASH_ICON", os.path.join(GRAVE_ROOT, "config", "gravedecay.png"))
+# Mount prefix when path-routed behind `tailscale serve --set-path` on the same
+# origin as T3 (single entry point). Bare paths keep working for localhost.
+BASE = os.environ.get("GRAVEDECAY_BASE", "/dash").rstrip("/")
+ICON_PATH = os.environ.get("GRAVEDECAY_ICON", os.path.join(GRAVE_ROOT, "config", "gravedecay.png"))
 HOST = socket.gethostname()
 # Tailscale serve injects Tailscale-User-Login for tailnet requests; POSTs
 # (actions) are restricted to these identities. Requests with no header can
 # only come from localhost (127.0.0.1 bind) and are trusted.
-ALLOWED_USERS = set(filter(None, os.environ.get("GRAVEDASH_ALLOWED_USERS", "").split(",")))
+ALLOWED_USERS = set(filter(None, os.environ.get("GRAVEDECAY_ALLOWED_USERS", "").split(",")))
 UNITS = [u for u in os.environ.get(
-    "GRAVEDASH_UNITS", "t3code,gravedash,tailscaled,sshd,docker").split(",") if u]
+    "GRAVEDECAY_UNITS", "t3code,gravedecay,tailscaled,sshd,docker").split(",") if u]
+APPS = [{"name": name.strip(), "url": url.strip()}
+        for name, _, url in (p.partition("=") for p in os.environ.get(
+            "GRAVEDECAY_APPS", "⌨️ T3 Code=/").split(";"))
+        if url.strip()]
 GRAVE = "/usr/local/bin/grave"
 ACTIONS = {
     "gaming": ["sudo", "-n", GRAVE, "gaming"],
@@ -76,11 +86,13 @@ def icon_png(size):
     return buf.getvalue()
 
 
+# Relative URLs throughout so the app works both bare (127.0.0.1:4712/) and
+# mounted (https://box/dash/) without caring which.
 MANIFEST = json.dumps({
-    "name": "gravedash", "short_name": "gravedash", "start_url": "/",
+    "name": "gravedecay", "short_name": "gravedecay", "start_url": "./", "scope": "./",
     "display": "standalone", "background_color": "#0d0d0d", "theme_color": "#0d0d0d",
-    "icons": [{"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
-              {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png"}],
+    "icons": [{"src": "icon-192.png", "sizes": "192x192", "type": "image/png"},
+              {"src": "icon-512.png", "sizes": "512x512", "type": "image/png"}],
 })
 
 
@@ -261,6 +273,7 @@ def state(headers):
         "now": time.strftime("%H:%M:%S"),
         "viewer": headers.get("Tailscale-User-Login", "local"),
         "mode": mode,
+        "apps": APPS,
         "services": collect_services(),
         "docker": collect_docker(),
         "tmux": collect_tmux(),
@@ -272,7 +285,7 @@ def state(headers):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "gravedash/1"
+    server_version = "gravedecay/1"
 
     def log_message(self, fmt, *args):  # journald gets enough from systemd
         pass
@@ -286,33 +299,52 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _route(self):
+        """Path with the optional BASE mount prefix stripped; None if a
+        redirect was already sent (relative URLs need the trailing slash)."""
+        p = self.path.split("?", 1)[0]
+        if BASE and p == BASE:
+            self.send_response(301)
+            self.send_header("Location", BASE + "/")
+            self.end_headers()
+            return None
+        if BASE and p.startswith(BASE + "/"):
+            p = p[len(BASE):]
+        return p
+
     def do_GET(self):
-        if self.path == "/healthz":
+        p = self._route()
+        if p is None:
+            return
+        if p == "/healthz":
             self._send(200, '{"ok":true}')
-        elif self.path == "/api/state":
+        elif p == "/api/state":
             self._send(200, json.dumps(state(self.headers)))
-        elif self.path == "/":
+        elif p == "/":
             boot = json.dumps(state(self.headers)).replace("</", "<\\/")
             self._send(200, PAGE.replace("/*BOOT*/null", boot), "text/html; charset=utf-8")
-        elif self.path == "/manifest.webmanifest":
+        elif p == "/manifest.webmanifest":
             self._send(200, MANIFEST, "application/manifest+json")
-        elif self.path in ("/apple-touch-icon.png", "/icon-180.png"):
+        elif p in ("/apple-touch-icon.png", "/icon-180.png"):
             self._send(200, icon_png(180), "image/png")
-        elif self.path == "/icon-192.png":
+        elif p == "/icon-192.png":
             self._send(200, icon_png(192), "image/png")
-        elif self.path == "/icon-512.png":
+        elif p == "/icon-512.png":
             self._send(200, icon_png(512), "image/png")
         else:
             self._send(404, '{"error":"not found"}')
 
     def do_POST(self):
+        p = self._route()
+        if p is None:
+            return
         viewer = self.headers.get("Tailscale-User-Login")
         if viewer is not None and viewer not in ALLOWED_USERS:
             self._send(403, json.dumps({
                 "ok": False,
-                "output": f"forbidden for {viewer} — add to GRAVEDASH_ALLOWED_USERS"}))
+                "output": f"forbidden for {viewer} — add to GRAVEDECAY_ALLOWED_USERS"}))
             return
-        if self.path != "/api/action":
+        if p != "/api/action":
             self._send(404, '{"error":"not found"}')
             return
         try:
@@ -334,11 +366,11 @@ PAGE = r"""<!doctype html>
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="gravedash">
-<link rel="manifest" href="/manifest.webmanifest">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png">
-<link rel="icon" type="image/png" href="/icon-192.png">
-<title>gravedash · @HOST@</title>
+<meta name="apple-mobile-web-app-title" content="gravedecay">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icon-192.png">
+<title>gravedecay · @HOST@</title>
 <style>
 :root{
   --page:#0d0d0d; --surface:#1a1a19; --ink:#ffffff; --ink-2:#c3c2b7;
@@ -360,6 +392,12 @@ h1{font-size:17px;font-weight:600;color:var(--ink)}
 .topbar .meta{color:var(--muted);font-size:12px;margin-left:auto}
 .badge{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:99px;
   border:1px solid var(--ring);font-size:12px;font-weight:600;color:var(--ink)}
+.apps{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:10px}
+.app{display:flex;align-items:center;justify-content:center;gap:8px;min-height:56px;
+  background:var(--surface);border:1px solid var(--ring);border-radius:10px;
+  font:600 15px system-ui,sans-serif;color:var(--ink);text-decoration:none}
+.app:hover{border-color:var(--accent)}
+.app:active{transform:scale(.97)}
 .actions{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
 @media(max-width:640px){.actions{display:grid;grid-template-columns:1fr 1fr}}
 button{background:var(--surface);color:var(--ink);border:1px solid var(--ring);
@@ -400,10 +438,11 @@ pre{background:var(--page);border:1px solid var(--hairline);border-radius:8px;pa
 a{color:var(--accent-soft)}
 </style></head><body>
 <div class="topbar">
-  <h1>gravedash</h1>
+  <h1>gravedecay</h1>
   <span class="badge" id="mode">…</span>
   <span class="meta" id="meta">connecting…</span>
 </div>
+<div class="apps" id="apps"></div>
 <div class="actions">
   <button data-act="gaming" data-confirm="Stop dev services and free RAM for gaming?">🎮 Gaming mode</button>
   <button data-act="developer" data-confirm="Start all developer services?">💻 Developer mode</button>
@@ -447,7 +486,13 @@ function statusDot(state){
   const cls=state==='active'?'st-good':(state==='inactive'?'st-warn':'st-crit');
   return `<span class="dot ${cls}"></span>`;
 }
+// same-origin app paths need the https origin spelled out when gravedecay is
+// viewed on a bare port (localhost:4712) rather than mounted at /dash/
+const appUrl=u=>(location.port&&location.port!=='443'&&u.startsWith('/'))
+  ?`https://${location.hostname}${u}`:u;
 function render(s){
+  $('apps').innerHTML=(s.apps||[]).map(a=>
+    `<a class="app" href="${esc(appUrl(a.url))}">${esc(a.name)}</a>`).join('');
   $('mode').textContent=(s.mode==='developer'?'💻 developer':'🎮 gaming');
   $('meta').textContent=`${s.viewer} · up ${fmtUp(s.system.uptime_s)} · ${s.now}`;
   // the mode you're already in isn't a button you can press
@@ -487,7 +532,7 @@ function render(s){
 async function poll(){
   if(document.hidden)return;
   try{
-    const r=await fetch('/api/state');
+    const r=await fetch('api/state');
     render(await r.json());
   }catch(e){ $('meta').textContent='unreachable — retrying'; }
 }
@@ -498,7 +543,7 @@ document.querySelectorAll('button[data-act]').forEach(b=>b.onclick=async()=>{
   $('out-panel').style.display='block';
   $('out-title').textContent=act; $('out').textContent='running…';
   try{
-    const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},
+    const r=await fetch('api/action',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({action:act})});
     const j=await r.json();
     $('out').textContent=(j.ok?'':'FAILED\n')+(j.output||'(no output)');

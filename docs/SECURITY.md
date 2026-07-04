@@ -13,8 +13,8 @@ or phone can be evicted from the tailnet centrally.
    any container publishes on `0.0.0.0`.
 2. **Tailscale is the front door.** `tailscale serve` terminates HTTPS on the
    tailnet and proxies to loopback. Identity comes from the tailnet — serve
-   injects `Tailscale-User-Login`, which gravedash checks before allowing
-   action buttons (`GRAVEDASH_ALLOWED_USERS`).
+   injects `Tailscale-User-Login`, which gravedecay checks before allowing
+   action buttons (`GRAVEDECAY_ALLOWED_USERS`).
 3. **SSH**: key-only (`PasswordAuthentication no` — doctor-enforced),
    plus Tailscale SSH as a fallback door. Note: Tailscale SSH intercepts
    port 22 *over the tailnet*; plain sshd remains reachable via LAN IPs only.
@@ -28,12 +28,12 @@ or phone can be evicted from the tailnet centrally.
 
 `raise.sh` installs `/etc/sudoers.d/50-gravedecay`: NOPASSWD for your user on
 `systemctl`, `docker`, `grave`, `journalctl`, `ufw`, `snapper`, `sshd -T` —
-what `grave` and gravedash's action buttons need. This is effectively
+what `grave` and gravedecay's action buttons need. This is effectively
 root-equivalent for *your* user (systemctl alone gets you there); the point is
 convenience for a single-human box, not privilege separation. If your box has
 other human users, tighten it.
 
 ## What gaming mode does NOT change
 
-Remote access (tailscaled, sshd), the firewall, and gravedash stay up in
+Remote access (tailscaled, sshd), the firewall, and gravedecay stay up in
 gaming mode. You can always get back in.
