@@ -83,7 +83,7 @@ fi
 step "Scoped passwordless sudo (see docs/SECURITY.md)"
 sudo tee /etc/sudoers.d/50-gravedecay >/dev/null <<EOF
 # gravedecay: let $RUN_USER (and gravedecay action buttons) drive the platform
-$RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker, /usr/local/bin/grave, /usr/bin/journalctl, /usr/bin/ufw, /usr/bin/snapper, /usr/sbin/sshd -T, /usr/bin/sshd -T, /usr/bin/tee /etc/systemd/system/*, /usr/bin/npm update -g *
+$RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker, /usr/local/bin/grave, /usr/bin/journalctl, /usr/bin/ufw, /usr/bin/snapper, /usr/sbin/sshd -T, /usr/bin/sshd -T, /usr/bin/tee /etc/systemd/system/*, /usr/bin/tee /sys/fs/cgroup/grave-torpor/*, /usr/bin/mkdir -p /sys/fs/cgroup/grave-torpor, /usr/bin/npm update -g *
 EOF
 sudo chmod 440 /etc/sudoers.d/50-gravedecay
 sudo visudo -c -f /etc/sudoers.d/50-gravedecay >/dev/null && ok "sudoers valid"

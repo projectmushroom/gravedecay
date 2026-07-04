@@ -91,9 +91,13 @@ def save_settings(data):
 
 
 GRAVE = "/usr/local/bin/grave"
+# grave runs AS THE SERVICE USER (it sudo -n's internally where needed):
+# under sudo it would be root, whose tmux lives in /tmp/tmux-0 — freeze/kill
+# of agent sessions would silently no-op.
 ACTIONS = {
-    "gaming": ["sudo", "-n", GRAVE, "gaming"],
-    "developer": ["sudo", "-n", GRAVE, "developer"],
+    "gaming": [GRAVE, "gaming"],                 # 🧊 freeze sessions
+    "gaming-kill": [GRAVE, "gaming", "--kill"],  # ☠️ destroy them
+    "developer": [GRAVE, "developer"],
     "restart-t3": ["sudo", "-n", "systemctl", "restart", "t3code"],
     "doctor": [GRAVE, "doctor"],
 }
@@ -479,6 +483,27 @@ def collect_backups():
 def state(headers):
     t3 = unit_state("t3code")
     mode = "developer" if t3["active"] == "active" else "gaming"
+    tmux = collect_tmux()
+    try:  # sessions parked in the kernel freezer (grave gaming, pause tier)
+        with open("/sys/fs/cgroup/grave-torpor/cgroup.freeze") as f:
+            frozen = f.read().strip() == "1"
+    except OSError:
+        frozen = False
+    if mode == "gaming":
+        # Minimal footprint while gaming: no remote API calls, no git walks —
+        # just vitals. The client also slows its poll to 30 s.
+        return {
+            "host": HOST, "now": time.strftime("%H:%M:%S"),
+            "viewer": headers.get("Tailscale-User-Login", "local"),
+            "mode": mode, "apps": list(APPS), "settings": load_settings(),
+            "tmux": tmux, "torpor": len(tmux) if frozen else 0,
+            "system": collect_system(),
+            "github": {"login": None, "prs": [], "reviews": [], "error": "paused in game mode"},
+            "linear": {"configured": False, "issues": [], "error": None},
+            "ci": {"rows": []}, "services": [], "repos": [],
+            "docker": {"error": "docker stopped (gaming)", "containers": []},
+            "journal": [], "backups": {"count": 0, "latest": None},
+        }
     gh = collect_github()
     apps = list(APPS)
     if gh["login"]:
@@ -496,7 +521,8 @@ def state(headers):
         "settings": load_settings(),
         "services": collect_services(),
         "docker": collect_docker(),
-        "tmux": collect_tmux(),
+        "tmux": tmux,
+        "torpor": 0,
         "repos": collect_repos(),
         "journal": collect_journal(),
         "system": collect_system(),
@@ -532,9 +558,49 @@ class Handler(BaseHTTPRequestHandler):
             p = p[len(BASE):]
         return p
 
+    def _stream_action(self):
+        """SSE boot console: runs a grave action and streams its output live
+        (data: <json line> events, then event: done with the exit code)."""
+        viewer = self.headers.get("Tailscale-User-Login")
+        if viewer is not None and viewer not in ALLOWED_USERS:
+            self._send(403, json.dumps({"ok": False, "output": f"forbidden for {viewer}"}))
+            return
+        qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+        action = dict(kv.split("=", 1) for kv in qs.split("&") if "=" in kv).get("action", "")
+        cmd = ACTIONS.get(action)
+        if not cmd:
+            self._send(400, json.dumps({"ok": False, "output": "unknown action"}))
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, bufsize=1)
+        try:
+            for line in proc.stdout:
+                payload = json.dumps(ANSI.sub("", line.rstrip("\n")))
+                self.wfile.write(f"data: {payload}\n\n".encode())
+                self.wfile.flush()
+            rc = proc.wait(timeout=180)
+            self.wfile.write(f"event: done\ndata: {rc}\n\n".encode())
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            # Client went away mid-stream. NEVER kill the action — a
+            # half-finished mode switch is worse than a lost console — and
+            # keep draining stdout so the action isn't SIGPIPE'd either.
+            for _ in proc.stdout:
+                pass
+            proc.wait(timeout=180)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
     def do_GET(self):
         p = self._route()
         if p is None:
+            return
+        if p == "/api/action-stream":
+            self._stream_action()
             return
         if p == "/healthz":
             self._send(200, '{"ok":true}')
@@ -698,9 +764,37 @@ td.dim{color:var(--muted)}
 pre{background:var(--page);border:1px solid var(--hairline);border-radius:8px;padding:10px;
   font:12px/1.5 ui-monospace,monospace;overflow-x:auto;white-space:pre-wrap;color:var(--ink-2)}
 .spark{display:block;margin-top:6px}
-#out-panel{display:none;margin-bottom:14px}
 .full{margin-bottom:10px}
 a{color:var(--accent-soft)}
+/* ---- game mode banner ---- */
+#game-banner{display:none;border:1px solid var(--crit);border-radius:12px;padding:18px;
+  margin-bottom:12px;text-align:center;background:linear-gradient(180deg,#1a0d0d,#120909);
+  animation:pulse 2.4s ease-in-out infinite}
+#game-banner h2{font-size:22px;color:var(--ink);letter-spacing:.14em;margin-bottom:6px}
+#game-banner .dim2{color:var(--muted);font-size:13px;margin-bottom:12px}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(208,59,59,.35)}
+  50%{box-shadow:0 0 26px 5px rgba(208,59,59,.22)}}
+body.gaming .tabs{display:none}
+body.gaming #panels>*{display:none!important}
+body.gaming #panels>[data-panel="stats"]{display:grid!important}
+/* ---- overlays: boot console + game confirm ---- */
+.overlay{position:fixed;inset:0;z-index:50;background:rgba(5,5,5,.92);
+  backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);padding:16px;overflow-y:auto}
+.dlg{max-width:860px;margin:6vh auto;background:#070707;border:1px solid #1f3d1f;
+  border-radius:10px;padding:16px;position:relative;overflow:hidden}
+.dlg::after{content:'';position:absolute;inset:0;pointer-events:none;
+  background:repeating-linear-gradient(0deg,transparent 0 2px,rgba(0,0,0,.16) 2px 3px)}
+#console-title{font:600 13px ui-monospace,monospace;color:var(--warn);margin-bottom:10px;
+  text-transform:lowercase;letter-spacing:.06em}
+#console-out{font:13px/1.65 ui-monospace,monospace;color:#9ee09e;white-space:pre-wrap;
+  max-height:62vh;overflow-y:auto;background:transparent;border:none;padding:0}
+#console-out .hl{color:var(--warn)} #console-out .err{color:var(--crit)}
+#ccur{color:#9ee09e;animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+#gc-box{border-color:#3d1f1f}
+#gc-box h2{color:var(--ink);font-size:17px;margin-bottom:8px}
+#gc-box p{margin:6px 0;font-size:13px}
+.dim2{color:var(--muted)}
 </style></head><body>
 <div class="topbar">
   <h1>gravedecay</h1>
@@ -709,6 +803,11 @@ a{color:var(--accent-soft)}
   <span class="meta" id="meta">connecting…</span>
 </div>
 <div class="apps" id="apps"></div>
+<div id="game-banner">
+  <h2>🎮 G A M E &nbsp; M O D E</h2>
+  <div class="dim2" id="torpor-line"></div>
+  <button id="wake">💻 Wake the dev stack</button>
+</div>
 <div class="tabs">
   <button class="tab" data-tab="work">🛠️ Work</button>
   <button class="tab" data-tab="system">📟 System</button>
@@ -744,7 +843,26 @@ a{color:var(--accent-soft)}
   <div class="setrow"><button id="save-set">💾 Save</button>
     <button class="mini" id="close-set">Close</button><span id="set-msg" class="setlabel"></span></div>
 </div>
-<div class="panel" id="out-panel"><h2 id="out-title">output</h2><pre id="out"></pre></div>
+<div class="overlay" id="console" style="display:none">
+  <div class="dlg">
+    <div id="console-title">▚ grave</div>
+    <pre id="console-out"></pre><span id="ccur">▮</span>
+    <div class="setrow"><button class="mini" id="console-close" style="display:none">close</button></div>
+  </div>
+</div>
+<div class="overlay" id="game-confirm" style="display:none">
+  <div class="dlg" id="gc-box">
+    <h2>🎮 Enter game mode?</h2>
+    <p class="dim2">Stops: T3 Code, docker + all container stacks (postgres, redis, browsers).<br>
+       Keeps: Tailscale, SSH, this dashboard, the web terminal.</p>
+    <p id="gc-sessions"></p>
+    <div class="setrow">
+      <button id="gc-freeze">🧊 Freeze sessions &amp; game</button>
+      <button id="gc-kill">☠️ Kill sessions &amp; game</button>
+      <button class="mini" id="gc-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
 <div id="panels">
   <div class="panel" data-panel="prs"><h2>🔀 Open pull requests</h2><table id="prs"></table></div>
   <div class="panel" data-panel="reviews"><h2>👀 Review requests</h2><table id="reviews"></table></div>
@@ -758,8 +876,8 @@ a{color:var(--accent-soft)}
   <div class="tiles w-full" data-panel="stats" id="tiles"></div>
   <div class="panel w-full" data-panel="actions"><h2>🕹️ Actions</h2>
     <div class="actions">
-      <button data-act="gaming" data-confirm="Stop dev services and free RAM for gaming?">🎮 Gaming mode</button>
-      <button data-act="developer" data-confirm="Start all developer services?">💻 Developer mode</button>
+      <button data-act="gaming">🎮 Gaming mode</button>
+      <button data-act="developer">💻 Developer mode</button>
       <button data-act="restart-t3" data-confirm="Restart T3 Code? Active agent sessions survive, the UI reconnects.">↻ Restart T3 Code</button>
       <button data-act="doctor">🩺 Run doctor</button>
     </div>
@@ -805,7 +923,7 @@ const PANEL_NAMES={prs:'Open pull requests',reviews:'Review requests',ci:'CI sta
   actions:'Actions',services:'Services',docker:'Docker',journal:'Journal errors'};
 const PANEL_TABS={prs:'work',reviews:'work',ci:'work',linear:'work',tmux:'work',repos:'work',
   stats:'system',actions:'system',services:'system',docker:'system',journal:'system'};
-let linearConfigured=false,lastMode=null;
+let linearConfigured=false,lastMode=null,lastTmux=[];
 let cfg=null,envApps=[],layoutKey='';
 let activeTab=localStorage.getItem('grave-tab')||'work';
 function allApps(){return envApps.concat(cfg&&cfg.custom_apps||[])}
@@ -828,8 +946,17 @@ document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
 });
 function render(s){
   envApps=s.apps||[];
+  lastTmux=s.tmux||[];
+  const modeChanged=lastMode!==null&&lastMode!==s.mode;
   lastMode=s.mode;
+  document.body.classList.toggle('gaming',s.mode==='gaming');
+  $('game-banner').style.display=s.mode==='gaming'?'block':'none';
+  if(s.mode==='gaming')
+    $('torpor-line').textContent=s.torpor
+      ?`dev stack buried · 🧊 ${s.torpor} agent session${s.torpor>1?'s':''} in torpor (RAM kept, zero CPU)`
+      :'dev stack buried · no agent sessions held';
   if(!cfg){cfg=s.settings;schedule();}
+  if(modeChanged)schedule();
   const k=JSON.stringify([cfg.panel_order,cfg.hidden_panels,activeTab]);
   if(k!==layoutKey){layoutKey=k;applyLayout();}
   $('apps').innerHTML=allApps().filter(a=>!cfg.hidden_apps.includes(a.name)).map(a=>
@@ -915,19 +1042,45 @@ async function poll(){
     render(await r.json());
   }catch(e){ $('meta').textContent='unreachable — retrying'; }
 }
-document.querySelectorAll('button[data-act]').forEach(b=>b.onclick=async()=>{
+// ---------- boot console (SSE) ----------
+let es=null;
+function runStream(act,title){
+  if(es){es.close();es=null;}
+  $('game-confirm').style.display='none';
+  $('console').style.display='block';
+  $('console-title').textContent='▚ '+(title||('grave '+act));
+  const out=$('console-out');out.innerHTML='';
+  $('console-close').style.display='none';
+  const add=(t,cls)=>{const d=document.createElement('div');
+    d.className=cls||(t.includes('✗')?'err':(/🎮|💻|🪦|Gaming|Developer/.test(t)?'hl':''));
+    d.textContent=t||' ';out.appendChild(d);out.scrollTop=out.scrollHeight;};
+  es=new EventSource('api/action-stream?action='+encodeURIComponent(act));
+  es.onmessage=e=>add(JSON.parse(e.data));
+  es.addEventListener('done',e=>{es.close();es=null;
+    add(e.data==='0'?'— sequence complete ✓':'— exited with code '+e.data,e.data==='0'?'hl':'err');
+    $('console-close').style.display='';poll();});
+  es.onerror=()=>{if(es){es.close();es=null;
+    add('— stream lost (the action keeps running on the box)','err');
+    $('console-close').style.display='';setTimeout(poll,2500);}};
+}
+$('console-close').onclick=()=>{$('console').style.display='none'};
+// ---------- gaming confirm dialog ----------
+function openGameConfirm(){
+  $('gc-sessions').innerHTML=lastTmux.length
+    ?`Agent sessions: <b>${lastTmux.map(x=>esc(x.name)).join(', ')}</b><br>
+      <span class="dim2">🧊 keeps them frozen in RAM (zero CPU, thawed on wake) · ☠️ destroys them for maximum free RAM</span>`
+    :'<span class="dim2">No agent sessions running — both options behave the same.</span>';
+  $('game-confirm').style.display='block';
+}
+$('gc-freeze').onclick=()=>runStream('gaming','burial sequence — freeze');
+$('gc-kill').onclick=()=>runStream('gaming-kill','burial sequence — full kill');
+$('gc-cancel').onclick=()=>{$('game-confirm').style.display='none'};
+$('wake').onclick=()=>runStream('developer','startup sequence');
+document.querySelectorAll('button[data-act]').forEach(b=>b.onclick=()=>{
   const act=b.dataset.act;
+  if(act==='gaming'){openGameConfirm();return;}
   if(b.dataset.confirm&&!confirm(b.dataset.confirm))return;
-  b.classList.add('busy');
-  $('out-panel').style.display='block';
-  $('out-title').textContent=act; $('out').textContent='running…';
-  try{
-    const r=await fetch('api/action',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({action:act})});
-    const j=await r.json();
-    $('out').textContent=(j.ok?'':'FAILED\n')+(j.output||'(no output)');
-  }catch(e){ $('out').textContent='request failed: '+e; }
-  b.classList.remove('busy'); poll();
+  runStream(act);
 });
 // tap a session name to open it in the terminal; ✕ kills it (event
 // delegation — rows are rebuilt every poll)
@@ -1053,7 +1206,9 @@ $('save-set').onclick=async()=>{
 };
 // ---------- boot ----------
 let timer=null;
-function schedule(){clearInterval(timer);timer=setInterval(poll,(cfg&&cfg.poll_ms)||5000);}
+function schedule(){clearInterval(timer);
+  // game mode: back off to 30s — the dashboard must not cost resources
+  timer=setInterval(poll,lastMode==='gaming'?30000:((cfg&&cfg.poll_ms)||5000));}
 const BOOT=/*BOOT*/null;   // server-rendered initial state: instant first paint
 if(BOOT)render(BOOT);else poll();
 schedule();

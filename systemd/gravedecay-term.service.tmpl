@@ -21,7 +21,8 @@ Environment=PATH=@HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=HOME=@HOME@
 Environment=GRAVE_ROOT=@GRAVE_ROOT@
 
-NoNewPrivileges=yes
+# NO NoNewPrivileges: it blocks sudo — the dashboard runs mode flips via
+# sudo -n grave, and web-terminal shells legitimately use sudo.
 # NO PrivateTmp: tmux sockets live in /tmp/tmux-<uid>/ — a private /tmp
 # would hide agent sessions (dashboard) / strand them in a namespace (ttyd)
 

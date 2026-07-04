@@ -20,7 +20,8 @@ Environment=GRAVEDECAY_ALLOWED_USERS=@ALLOWED_USERS@
 # every app mounted on this box gets a tile here.
 Environment="GRAVEDECAY_APPS=⌨️ T3 Code=/;🖥️ Terminal=/term/?arg=shell;🤖 Claude=/term/?arg=claude;🧠 Codex=/term/?arg=codex"
 
-NoNewPrivileges=yes
+# NO NoNewPrivileges: it blocks sudo — the dashboard runs mode flips via
+# sudo -n grave, and web-terminal shells legitimately use sudo.
 # NO PrivateTmp: tmux sockets live in /tmp/tmux-<uid>/ — a private /tmp
 # would hide agent sessions (dashboard) / strand them in a namespace (ttyd)
 
