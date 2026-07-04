@@ -285,19 +285,11 @@ def collect_system():
             mem[k] = int(v.split()[0])  # kB
     with open("/proc/uptime") as f:
         uptime = float(f.read().split()[0])
-    # / and GRAVE_ROOT may be subvolumes of one pool — dedupe by source device
-    disks, seen = [], set()
-    for label, path in (("/", "/"), (GRAVE_ROOT, GRAVE_ROOT)):
-        rc, src, _ = sh(["findmnt", "-n", "-o", "SOURCE", path])
-        dev = src.strip().split("[")[0] or path
-        if dev in seen:
-            continue
-        seen.add(dev)
-        u = shutil.disk_usage(path)
-        disks.append({"label": label, "total": u.total, "used": u.used,
-                      "pct": round(u.used / u.total * 100, 1)})
-    if len(disks) == 1:
-        disks[0]["label"] = f"/ + {GRAVE_ROOT}"
+    # one disk tile: / covers the whole pool (GRAVE_ROOT is a subvolume of it
+    # on btrfs setups; a separate tile for it was redundant noise)
+    u = shutil.disk_usage("/")
+    disks = [{"label": "/", "total": u.total, "used": u.used,
+              "pct": round(u.used / u.total * 100, 1)}]
     mem_total = mem.get("MemTotal", 1)
     mem_avail = mem.get("MemAvailable", 0)
     return {
