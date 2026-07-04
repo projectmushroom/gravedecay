@@ -29,7 +29,14 @@ and *gaming* mode, freezing your agent sessions in place until you're done.
                      └── gravedecay PWA (/grave/) — THE entry point ──┘
 ```
 
-![the gravedecay dashboard — terminal skin](assets/graveboard.png)
+![the gravedecay dashboard — Work tab](assets/dashboard.png)
+
+<details>
+<summary>📟 System tab — vitals, actions, services, docker, journal</summary>
+
+![the gravedecay dashboard — System tab](assets/dashboard-system.png)
+
+</details>
 
 ## Design principles
 

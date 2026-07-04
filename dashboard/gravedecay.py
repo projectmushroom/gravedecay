@@ -1196,6 +1196,9 @@ const PANEL_TABS={prs:'work',ci:'work',linear:'work',usage:'work',
 let linearConfigured=false,lastMode=null,lastTmux=[];
 let cfg=null,cfgSrv='',envApps=[],layoutKey='';
 let activeTab=localStorage.getItem('grave-tab')||'work';
+// deep-link a tab: /grave/?tab=system (also handy for screenshots)
+{const qp=new URLSearchParams(location.search).get('tab');
+ if(qp==='work'||qp==='system')activeTab=qp;}
 function allApps(){return envApps.concat(cfg&&cfg.custom_apps||[])}
 function applyLayout(){
   const c=$('panels'),order=(cfg.panel_order||[]).slice();
