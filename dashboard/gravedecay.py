@@ -705,6 +705,15 @@ class Handler(BaseHTTPRequestHandler):
 PAGE = r"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
+<script>
+// CRITICAL: if opened at the mount point WITHOUT a trailing slash
+// (https://box/dash), every relative URL on this page — manifest, icons,
+// api/state, api/action-stream — resolves against the ORIGIN ROOT and lands
+// on T3 instead of this dashboard. The backend cannot 301 it because
+// tailscale serve strips the mount prefix before proxying. Fix the base
+// before the parser touches any href/src below.
+if(location.pathname==='@BASE@')history.replaceState(null,'','@BASE@/');
+</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0d0d0d">
 <meta name="mobile-web-app-capable" content="yes">
@@ -1274,7 +1283,7 @@ if(BOOT)render(BOOT);else poll();
 schedule();
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)poll()});
 </script></body></html>
-""".replace("@HOST@", HOST)
+""".replace("@HOST@", HOST).replace("@BASE@", BASE or "/dash")
 
 if __name__ == "__main__":
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
