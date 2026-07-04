@@ -79,6 +79,36 @@ Requirements: a systemd-based distro (Arch-family is first-class; Debian/Fedora
 best-effort), ~8 GB RAM, and a [Tailscale](https://tailscale.com) account
 (free tier is fine).
 
+## Connecting a device (phone, laptop, tablet)
+
+The box is reachable **only** over your Tailscale network — there is no
+public URL and no port forwarding. Every device you want to use it from
+needs Tailscale installed and switched on:
+
+1. **Install the Tailscale app** on the client:
+   [iOS](https://apps.apple.com/app/tailscale/id1470499037) ·
+   [Android](https://play.google.com/store/apps/details?id=com.tailscale.ipn) ·
+   [macOS](https://tailscale.com/download/macos) ·
+   [Windows](https://tailscale.com/download/windows) ·
+   [Linux](https://tailscale.com/download/linux)
+2. **Sign in with the same account** you used when raising the box
+   (`tailscale up` during `raise.sh`). Same account = same tailnet = the
+   device can see the box.
+3. **Toggle the VPN on** in the app. On iOS/Android it's the big switch;
+   on desktop it's the menu-bar/tray icon. If it's off, nothing on the box
+   resolves — this is the #1 "it's broken" cause.
+4. **Open the dashboard**: `https://<box>.<tailnet>.ts.net/dash/` — the exact
+   URL is printed by `tailscale status` on the box (the MagicDNS name), or
+   check the [Tailscale admin console](https://login.tailscale.com/admin/machines).
+   Add it to your Home Screen (iOS: Share → Add to Home Screen) or Dock
+   (macOS Safari: File → Add to Dock).
+5. **Pair T3 Code**: first time you open T3 on a new device it asks for a
+   token — mint one from ⚙️ settings → **🔑 New T3 pairing token** on any
+   already-paired device, and tap the printed `/pair` link on the new one.
+
+That's it — the device now reaches the dashboard, T3, and the terminal from
+anywhere (cellular included), end-to-end encrypted by the tailnet.
+
 ## The dashboard — gravedecay is the front door
 
 Install the PWA / macOS web app from `https://<box>.<tailnet>.ts.net/dash/`.
