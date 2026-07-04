@@ -26,6 +26,7 @@ import shutil
 import socket
 import subprocess
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("GRAVEDECAY_PORT", "4712"))
@@ -40,7 +41,7 @@ HOST = socket.gethostname()
 # only come from localhost (127.0.0.1 bind) and are trusted.
 ALLOWED_USERS = set(filter(None, os.environ.get("GRAVEDECAY_ALLOWED_USERS", "").split(",")))
 UNITS = [u for u in os.environ.get(
-    "GRAVEDECAY_UNITS", "t3code,gravedecay,tailscaled,sshd,docker").split(",") if u]
+    "GRAVEDECAY_UNITS", "t3code,gravedecay,gravedecay-term,tailscaled,sshd,docker").split(",") if u]
 APPS = [{"name": name.strip(), "url": url.strip()}
         for name, _, url in (p.partition("=") for p in os.environ.get(
             "GRAVEDECAY_APPS", "⌨️ T3 Code=/").split(";"))
@@ -49,7 +50,7 @@ APPS = [{"name": name.strip(), "url": url.strip()}
 # exactly like actions). Stored beside the other appliance config.
 SETTINGS_PATH = os.path.join(GRAVE_ROOT, "config", "gravedecay-settings.json")
 DEFAULT_SETTINGS = {
-    "panel_order": ["stats", "services", "docker", "tmux", "repos", "journal"],
+    "panel_order": ["stats", "prs", "linear", "services", "docker", "tmux", "repos", "journal"],
     "hidden_panels": [],   # panel ids to hide
     "hidden_apps": [],     # launcher tile names to hide
     "custom_apps": [],     # extra tiles: [{"name": ..., "url": ...}]
@@ -298,6 +299,87 @@ def collect_system():
     }
 
 
+# Remote integrations poll on a slow TTL so the 5 s dashboard refresh never
+# hammers the GitHub/Linear APIs.
+_ttl_cache = {}
+
+
+def cached(key, ttl, fn):
+    now = time.monotonic()
+    hit = _ttl_cache.get(key)
+    if hit and now - hit[0] < ttl:
+        return hit[1]
+    val = fn()
+    _ttl_cache[key] = (now, val)
+    return val
+
+
+def collect_github():
+    def fetch():
+        rc, out, _ = sh(["gh", "api", "user", "--jq", ".login"], timeout=10)
+        login = out.strip() if rc == 0 and out.strip() else None
+        if not login:
+            return {"login": None, "prs": [],
+                    "error": "gh not authenticated — ⚙️ settings → Re-auth GitHub"}
+        rc, out, _ = sh(["gh", "search", "prs", "--state=open", "--owner", login,
+                         "--json", "number,title,repository,url"], timeout=15)
+        prs = []
+        if rc == 0:
+            try:
+                for p in json.loads(out):
+                    repo = (p.get("repository") or {}).get("nameWithOwner", "?")
+                    prs.append({"repo": repo.split("/")[-1], "number": p.get("number"),
+                                "title": str(p.get("title", ""))[:80], "url": p.get("url", "")})
+            except ValueError:
+                pass
+        return {"login": login, "prs": prs[:15], "error": None}
+    return cached("github", 120, fetch)
+
+
+LINEAR_ENV = os.path.join(GRAVE_ROOT, "config", "secrets", "linear.env")
+
+
+def linear_key():
+    try:
+        with open(LINEAR_ENV) as f:
+            for line in f:
+                if line.startswith("LINEAR_API_KEY="):
+                    return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return None
+
+
+def collect_linear():
+    def fetch():
+        key = linear_key()
+        if not key:
+            return {"configured": False, "issues": [], "error": None}
+        query = json.dumps({"query": """{ viewer { assignedIssues(
+            first: 15, filter: {state: {type: {nin: ["completed", "canceled"]}}}
+        ) { nodes { identifier title url state { name } } } } }"""})
+        try:
+            req = urllib.request.Request(
+                "https://api.linear.app/graphql", data=query.encode(),
+                headers={"Authorization": key, "Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                nodes = json.load(r)["data"]["viewer"]["assignedIssues"]["nodes"]
+        except Exception as e:
+            return {"configured": True, "issues": [], "error": f"linear: {e}"}
+        return {"configured": True, "error": None, "issues": [
+            {"id": n["identifier"], "title": n["title"][:80], "url": n["url"],
+             "state": (n.get("state") or {}).get("name", "")} for n in nodes]}
+    return cached("linear", 120, fetch)
+
+
+def save_linear_key(key):
+    os.makedirs(os.path.dirname(LINEAR_ENV), mode=0o700, exist_ok=True)
+    fd = os.open(LINEAR_ENV, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(f"LINEAR_API_KEY={key.strip()}\n")
+    _ttl_cache.pop("linear", None)
+
+
 def collect_backups():
     base = f"{GRAVE_ROOT}/backups"
     try:
@@ -310,12 +392,19 @@ def collect_backups():
 def state(headers):
     t3 = unit_state("t3code")
     mode = "developer" if t3["active"] == "active" else "gaming"
+    gh = collect_github()
+    apps = list(APPS)
+    if gh["login"]:
+        apps.append({"name": "🐙 GitHub",
+                     "url": f"https://github.com/{gh['login']}?tab=repositories"})
     return {
         "host": HOST,
         "now": time.strftime("%H:%M:%S"),
         "viewer": headers.get("Tailscale-User-Login", "local"),
         "mode": mode,
-        "apps": APPS,
+        "apps": apps,
+        "github": gh,
+        "linear": collect_linear(),
         "settings": load_settings(),
         "services": collect_services(),
         "docker": collect_docker(),
@@ -390,11 +479,16 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/api/settings":
             try:
                 length = int(self.headers.get("Content-Length", 0))
-                merged = save_settings(json.loads(self.rfile.read(length)))
+                data = json.loads(self.rfile.read(length))
+                key = data.pop("linear_key", "")
+                if isinstance(key, str) and key.strip():
+                    save_linear_key(key)
+                merged = save_settings(data)
             except (ValueError, TypeError, OSError):
                 self._send(400, json.dumps({"ok": False, "output": "bad settings payload"}))
                 return
-            self._send(200, json.dumps({"ok": True, "settings": merged}))
+            self._send(200, json.dumps({"ok": True, "settings": merged,
+                                        "linear_configured": bool(linear_key())}))
             return
         if p != "/api/action":
             self._send(404, '{"error":"not found"}')
@@ -478,6 +572,9 @@ button.busy{opacity:.6;cursor:wait}
 .setrow input,.setrow select{background:var(--page);border:1px solid var(--hairline);
   color:var(--ink);border-radius:8px;padding:7px 9px;font:13px system-ui,sans-serif}
 .mini{min-height:30px;padding:2px 9px;font-size:13px;border-radius:8px}
+.abtn{display:inline-flex;align-items:center;background:var(--surface);color:var(--ink);
+  border:1px solid var(--ring);text-decoration:none;cursor:pointer}
+.abtn:hover{border-color:var(--accent)}
 .setlabel{flex:1 1 130px;color:var(--ink-2)}
 .sethead{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;
   letter-spacing:.05em;margin:12px 0 2px}
@@ -523,6 +620,16 @@ a{color:var(--accent-soft)}
     <input id="new-app-url" placeholder="/path or https://…" size="22">
     <button class="mini" id="add-app">＋ add tile</button>
   </div>
+  <div class="sethead">Auth — each opens a terminal running the login flow</div>
+  <div class="setrow">
+    <a class="mini abtn" data-auth="auth-claude">🤖 Re-auth Claude</a>
+    <a class="mini abtn" data-auth="auth-codex">🧠 Re-auth Codex</a>
+    <a class="mini abtn" data-auth="auth-github">🐙 Re-auth GitHub</a>
+  </div>
+  <div class="sethead">Integrations</div>
+  <div class="setrow"><span class="setlabel">Linear API key <span id="linear-state"></span></span>
+    <input type="password" id="set-linear" placeholder="lin_api_… (leave empty to keep)" size="26">
+  </div>
   <div class="sethead">Refresh</div>
   <div class="setrow"><span class="setlabel">poll interval</span>
     <select id="set-poll">
@@ -536,6 +643,8 @@ a{color:var(--accent-soft)}
 <div class="panel" id="out-panel"><h2 id="out-title">output</h2><pre id="out"></pre></div>
 <div id="panels">
   <div class="tiles w-full" data-panel="stats" id="tiles"></div>
+  <div class="panel" data-panel="prs"><h2>🔀 Open pull requests</h2><table id="prs"></table></div>
+  <div class="panel" data-panel="linear"><h2>📐 Linear — assigned to me</h2><table id="linear"></table></div>
   <div class="panel" data-panel="services"><h2>⚙️ Services</h2><table id="services"></table></div>
   <div class="panel" data-panel="docker"><h2>🐳 Docker</h2><table id="docker"></table></div>
   <div class="panel" data-panel="tmux"><h2>🤖 Agent sessions (tmux)</h2><table id="tmux"></table></div>
@@ -574,8 +683,9 @@ function statusDot(state){
 // viewed on a bare port (localhost:4712) rather than mounted at /dash/
 const appUrl=u=>(location.port&&location.port!=='443'&&u.startsWith('/'))
   ?`https://${location.hostname}${u}`:u;
-const PANEL_NAMES={stats:'Stats tiles',services:'Services',docker:'Docker',
-  tmux:'Agent sessions',repos:'Repos',journal:'Journal errors'};
+const PANEL_NAMES={stats:'Stats tiles',prs:'Open pull requests',linear:'Linear issues',
+  services:'Services',docker:'Docker',tmux:'Agent sessions',repos:'Repos',journal:'Journal errors'};
+let linearConfigured=false;
 let cfg=null,envApps=[],layoutKey='';
 function allApps(){return envApps.concat(cfg&&cfg.custom_apps||[])}
 function applyLayout(){
@@ -630,6 +740,23 @@ function render(s){
       <td class="dim">${esc(r.last_when)}</td></tr>`).join('')
     :'<tr><td class="dim">no repos</td></tr>';
   $('journal').textContent=s.journal.join('\n');
+  const gh=s.github||{};
+  $('prs').innerHTML=gh.error
+    ? `<tr><td class="dim">${esc(gh.error)}</td></tr>`
+    : ((gh.prs||[]).map(p=>`<tr>
+        <td><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.repo)} #${p.number}</a></td>
+        <td class="dim">${esc(p.title)}</td></tr>`).join('')
+       ||'<tr><td class="dim">no open PRs 🎉</td></tr>');
+  const li=s.linear||{};
+  linearConfigured=!!li.configured;
+  $('linear').innerHTML=!li.configured
+    ? '<tr><td class="dim">add a Linear API key in ⚙️ settings</td></tr>'
+    : li.error?`<tr><td class="dim">${esc(li.error)}</td></tr>`
+    : ((li.issues||[]).map(i=>`<tr>
+        <td><a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.id)}</a></td>
+        <td class="dim">${esc(i.title)}</td>
+        <td class="dim">${esc(i.state)}</td></tr>`).join('')
+       ||'<tr><td class="dim">nothing assigned 🎉</td></tr>');
 }
 async function poll(){
   if(document.hidden)return;
@@ -683,6 +810,9 @@ function buildSettings(existing){
   ap.querySelectorAll('[data-del-app]').forEach(b=>b.onclick=()=>{
     syncVis();draft.custom_apps.splice(+b.dataset.delApp,1);buildSettings(draft);});
   $('set-poll').value=String(draft.poll_ms);
+  $('linear-state').textContent=linearConfigured?'✓ configured':'(not set)';
+  document.querySelectorAll('[data-auth]').forEach(a=>
+    a.href=appUrl(`/term/?arg=${a.dataset.auth}`));
 }
 function syncVis(){
   draft.hidden_panels=[...document.querySelectorAll('[data-panel-vis]')]
@@ -706,13 +836,19 @@ $('add-app').onclick=()=>{
 };
 $('save-set').onclick=async()=>{
   syncVis();
+  const payload={...draft};
+  const lk=$('set-linear').value.trim();
+  if(lk)payload.linear_key=lk;
   $('set-msg').textContent='saving…';
   try{
     const r=await fetch('api/settings',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify(draft)});
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const j=await r.json();
-    if(j.ok){cfg=j.settings;layoutKey='';schedule();poll();
-      $('set-msg').textContent='saved ✓';}
+    if(j.ok){cfg=j.settings;layoutKey='';schedule();
+      linearConfigured=!!j.linear_configured;
+      $('set-linear').value='';
+      $('linear-state').textContent=linearConfigured?'✓ configured':'(not set)';
+      $('set-msg').textContent='saved ✓';poll();}
     else $('set-msg').textContent=j.output||'save failed';
   }catch(e){$('set-msg').textContent='save failed: '+e;}
 };

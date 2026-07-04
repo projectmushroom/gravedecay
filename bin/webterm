@@ -14,6 +14,11 @@ name="${choice//[^a-zA-Z0-9_-]/}"
 case "$name" in
   claude) cmd=(claude) ;;
   codex)  cmd=(codex) ;;
+  # auth shortcuts (⚙️ settings → opens a terminal running the login flow;
+  # session ends when the flow exits)
+  auth-claude) cmd=(claude /login) ;;
+  auth-codex)  cmd=(codex login) ;;
+  auth-github) cmd=(gh auth login) ;;
   *)      cmd=() ;;         # plain login shell
 esac
 
