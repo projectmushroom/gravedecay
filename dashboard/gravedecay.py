@@ -34,7 +34,7 @@ PORT = int(os.environ.get("GRAVEDECAY_PORT", "4712"))
 GRAVE_ROOT = os.environ.get("GRAVE_ROOT", "/srv/dev")
 # Mount prefix when path-routed behind `tailscale serve --set-path` on the same
 # origin as T3 (single entry point). Bare paths keep working for localhost.
-BASE = os.environ.get("GRAVEDECAY_BASE", "/dash").rstrip("/")
+BASE = os.environ.get("GRAVEDECAY_BASE", "/grave").rstrip("/")
 ICON_PATH = os.environ.get("GRAVEDECAY_ICON", os.path.join(GRAVE_ROOT, "config", "gravedecay.png"))
 HOST = socket.gethostname()
 # Tailscale serve injects Tailscale-User-Login for tailnet requests; POSTs
@@ -146,7 +146,7 @@ def icon_png(size):
 
 
 # Relative URLs throughout so the app works both bare (127.0.0.1:4712/) and
-# mounted (https://box/dash/) without caring which.
+# mounted (https://box/grave/) without caring which.
 MANIFEST = json.dumps({
     "name": "gravedecay", "short_name": "gravedecay", "start_url": "./", "scope": "./",
     "display": "standalone", "background_color": "#070907", "theme_color": "#070907",
@@ -839,12 +839,12 @@ PAGE = r"""<!doctype html>
 <meta charset="utf-8">
 <script>
 // CRITICAL: if opened at the mount point WITHOUT a trailing slash
-// (https://box/dash), every relative URL on this page — manifest, icons,
+// (https://box/grave), every relative URL on this page — manifest, icons,
 // api/state, api/action-stream — resolves against the ORIGIN ROOT and lands
 // on T3 instead of this dashboard. The backend cannot 301 it because
 // tailscale serve strips the mount prefix before proxying. Fix the base
 // before the parser touches any href/src below.
-if(location.pathname==='@BASE@')history.replaceState(null,'','@BASE@/');
+if(!location.pathname.endsWith('/'))history.replaceState(null,'',location.pathname+'/');
 </script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#070907">
@@ -1140,7 +1140,7 @@ function statusDot(state){
   return `<span class="dot ${cls}"></span>`;
 }
 // same-origin app paths need the https origin spelled out when gravedecay is
-// viewed on a bare port (localhost:4712) rather than mounted at /dash/
+// viewed on a bare port (localhost:4712) rather than mounted at /grave/
 const appUrl=u=>(location.port&&location.port!=='443'&&u.startsWith('/'))
   ?`https://${location.hostname}${u}`:u;
 const PANEL_NAMES={prs:'Pull requests',ci:'CI status',
@@ -1523,7 +1523,7 @@ if(BOOT)render(BOOT);else poll();
 schedule();
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)poll()});
 </script></body></html>
-""".replace("@HOST@", HOST).replace("@BASE@", BASE or "/dash")
+""".replace("@HOST@", HOST).replace("@BASE@", BASE or "/grave")
 
 if __name__ == "__main__":
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

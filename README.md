@@ -23,13 +23,13 @@ and *gaming* mode, freezing your agent sessions in place until you're done.
         │  grave <cmd> — one CLI to rule the box                                  │
         └────────────────────────────┬────────────────────────────────────────────┘
                                      │ tailscale serve — ONE https origin:
-                                     │   /dash = gravedecay   / = T3   /term = terminal
+                                     │   /grave = gravedecay   / = T3   /term = terminal
                      ┌───────────────┼───────────────┐
                   laptop           iPhone          iPad
-                     └── gravedecay PWA (/dash/) — THE entry point ──┘
+                     └── gravedecay PWA (/grave/) — THE entry point ──┘
 ```
 
-![the gravedecay dashboard — terminal skin](assets/dashboard.png)
+![the gravedecay dashboard — terminal skin](assets/graveboard.png)
 
 ## Design principles
 
@@ -97,7 +97,7 @@ needs Tailscale installed and switched on:
 3. **Toggle the VPN on** in the app. On iOS/Android it's the big switch;
    on desktop it's the menu-bar/tray icon. If it's off, nothing on the box
    resolves — this is the #1 "it's broken" cause.
-4. **Open the dashboard**: `https://<box>.<tailnet>.ts.net/dash/` — the exact
+4. **Open the dashboard**: `https://<box>.<tailnet>.ts.net/grave/` — the exact
    URL is printed by `tailscale status` on the box (the MagicDNS name), or
    check the [Tailscale admin console](https://login.tailscale.com/admin/machines).
    Add it to your Home Screen (iOS: Share → Add to Home Screen) or Dock
@@ -111,7 +111,7 @@ anywhere (cellular included), end-to-end encrypted by the tailnet.
 
 ## The dashboard — gravedecay is the front door
 
-Install the PWA / macOS web app from `https://<box>.<tailnet>.ts.net/dash/`.
+Install the PWA / macOS web app from `https://<box>.<tailnet>.ts.net/grave/`.
 Everything on the box is one tap from there, all same-origin so navigation
 never leaves the installed app. Terminal-styled (phosphor green, TUI frames,
 scanlines), split into **🛠️ Work** and **📟 System** tabs:
@@ -188,7 +188,7 @@ Each step is idempotent — rerun it any time: packages (pacman/apt/dnf) →
 sudoers → dashboard + web terminal + T3 Code as loopback systemd services →
 docker `devnet` + core stack (random postgres password) + playwright →
 firewall (SSH allowed *before* enabling) → single-origin `tailscale serve`
-mounts (`/`, `/dash`, `/term`) → host profile → `grave doctor`.
+mounts (`/`, `/grave`, `/term`) → host profile → `grave doctor`.
 
 ## Host profiles
 

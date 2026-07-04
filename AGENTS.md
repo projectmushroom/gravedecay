@@ -42,11 +42,11 @@ are expected to solve yourself: package name differences (`docker` vs
 
 - `grave doctor` must pass every check that applies to this host profile.
 - `curl -sf http://127.0.0.1:4711/` and `:4712/healthz` return 200.
-- `tailscale serve status` shows one origin: `/` → 4711, `/dash` → 4712,
+- `tailscale serve status` shows one origin: `/` → 4711, `/grave` → 4712,
   `/term` → 4713.
-- From another tailnet device: T3 loads at `/`, gravedecay at `/dash/` (the
+- From another tailnet device: T3 loads at `/`, gravedecay at `/grave/` (the
   entry point — the human installs the PWA from there); gravedecay's app tiles
-  reach T3 and T3's corner pill (PWA-only) returns to `/dash/`.
+  reach T3 and T3's corner pill (PWA-only) returns to `/grave/`.
 - `sudo ufw status` (or firewalld equivalent): default deny incoming, ssh +
   tailscale0 allowed, nothing else.
 - `docker ps` — core-postgres and core-redis healthy, ports on 127.0.0.1 only.

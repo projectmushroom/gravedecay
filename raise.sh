@@ -90,7 +90,7 @@ sudo visudo -c -f /etc/sudoers.d/50-gravedecay >/dev/null && ok "sudoers valid"
 
 # ----------------------------------------------------------- 5. gravedecay ----
 step "gravedecay"
-install -m 755 "$REPO_DIR/dashboard/gravedecay.py" "$GRAVE_ROOT/scripts/gravedecay.py"
+install -m 755 "$REPO_DIR/graveboard/gravedecay.py" "$GRAVE_ROOT/scripts/gravedecay.py"
 install -m 644 "$REPO_DIR/assets/gravedecay.png" "$GRAVE_ROOT/config/gravedecay.png"
 sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
     -e "s|@DASH_PORT@|$DASH_PORT|g" -e "s|@ALLOWED_USERS@||g" \
@@ -169,10 +169,10 @@ elif ! tailscale status --peers=false >/dev/null 2>&1; then
   skip "tailscale not logged in — run 'sudo tailscale up --ssh', rerun raise.sh"
 else
   sudo tailscale set --operator="$RUN_USER" 2>/dev/null || true
-  # one origin: T3 at the root, gravedecay mounted at /dash — gravedecay is the
-  # entry point (install the PWA from /dash/), apps hop stays same-origin
+  # one origin: T3 at the root, gravedecay mounted at /grave — gravedecay is the
+  # entry point (install the PWA from /grave/), apps hop stays same-origin
   tailscale serve --bg --https=443 "http://127.0.0.1:$T3_PORT" >/dev/null && ok "T3 → https / on tailnet"
-  tailscale serve --bg --https=443 --set-path=/dash "http://127.0.0.1:$DASH_PORT" >/dev/null && ok "gravedecay → https /dash on tailnet"
+  tailscale serve --bg --https=443 --set-path=/grave "http://127.0.0.1:$DASH_PORT" >/dev/null && ok "gravedecay → https /grave on tailnet"
   command -v ttyd >/dev/null && tailscale serve --bg --https=443 --set-path=/term "http://127.0.0.1:$TERM_PORT" >/dev/null && ok "web terminal → https /term on tailnet"
 fi
 
