@@ -104,8 +104,10 @@ Inside T3, a tiny corner pill (installed-app mode only) brings you back.
 buttons, services, docker containers, journal errors.
 
 **⚙️ Settings** (identity-gated, like all actions) — show/hide/reorder
-widgets, manage tiles, refresh rate, re-auth Claude/Codex/GitHub (opens the
-terminal running the real login flow), Linear API key.
+widgets, manage tiles, refresh rate, **one-tap T3 pairing tokens** (mints a
+15-minute token + ready `/pair` link for enrolling a new phone/laptop),
+re-auth Claude/Codex/GitHub (opens the terminal running the real login flow),
+Linear API key.
 
 Mode flips and doctor runs stream their real output live into a
 terminal-styled **boot console** — burial and startup sequences, line by line.
