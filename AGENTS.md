@@ -32,9 +32,10 @@ are expected to solve yourself: package name differences (`docker` vs
 1. **Tailscale**: if `tailscale status` shows logged out, run
    `sudo tailscale up --ssh` and give the human the printed auth URL.
    After login, rerun `raise.sh` (it will run `tailscale serve` for both UIs).
-2. **T3 pairing**: `t3 auth pairing` (or `grave logs t3` and look for the
-   pairing URL/token) — the human opens the tailnet URL on their device and
-   pairs it. Agent provider logins (Claude/OpenAI) happen inside the T3 UI or
+2. **T3 pairing**: easiest via the dashboard — ⚙️ settings → "🔑 New T3
+   pairing token" streams a token + ready `/pair#token=…` link. CLI
+   equivalent: `t3 auth pairing create --base-dir $GRAVE_ROOT/agents/t3code`.
+   The human opens the link on the device to enroll it. Agent provider logins (Claude/OpenAI) happen inside the T3 UI or
    via `claude` / `codex login` in a `grave agents new setup` tmux session.
 
 ## 3. Verify

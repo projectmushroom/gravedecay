@@ -101,6 +101,12 @@ ACTIONS = {
     "developer": [GRAVE, "developer"],
     "restart-t3": ["sudo", "-n", "systemctl", "restart", "t3code"],
     "doctor": [GRAVE, "doctor"],
+    # one-time device pairing token for T3 (viewer-gated like everything
+    # else); --base-url is appended per-request from the Host header so the
+    # printed /pair#token=... link lands on the right origin
+    "t3-pair": ["t3", "auth", "pairing", "create",
+                "--base-dir", f"{GRAVE_ROOT}/agents/t3code",
+                "--ttl", "15m", "--label", "gravedecay-dashboard"],
 }
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 # Only one grave action at a time: concurrent mode flips race each other
@@ -695,6 +701,10 @@ class Handler(BaseHTTPRequestHandler):
         if not cmd:
             self._send(400, json.dumps({"ok": False, "output": "unknown action"}))
             return
+        if action == "t3-pair":
+            host = self.headers.get("Host", "")
+            if re.fullmatch(r"[A-Za-z0-9.\-:\[\]]+", host or ""):
+                cmd = cmd + ["--base-url", f"https://{host}"]
         import sys
         if not ACTION_LOCK.acquire(blocking=False):
             self._send(409, json.dumps({"ok": False,
@@ -1030,8 +1040,9 @@ body.gaming #panels>[data-panel="stats"]{display:grid!important}
     <input id="new-app-url" placeholder="/path or https://…" size="22">
     <button class="mini" id="add-app">＋ add tile</button>
   </div>
-  <div class="sethead">Auth — each opens a terminal running the login flow</div>
+  <div class="sethead">Auth &amp; pairing</div>
   <div class="setrow">
+    <button class="mini" id="t3-pair-btn">🔑 New T3 pairing token</button>
     <a class="mini abtn" data-auth="auth-claude">🤖 Re-auth Claude</a>
     <a class="mini abtn" data-auth="auth-codex">🧠 Re-auth Codex</a>
     <a class="mini abtn" data-auth="auth-github">🐙 Re-auth GitHub</a>
@@ -1449,6 +1460,7 @@ $('gear').onclick=()=>{
   buildSettings();p.style.display='block';
 };
 $('close-set').onclick=()=>{$('settings-panel').style.display='none'};
+$('t3-pair-btn').onclick=()=>runStream('t3-pair','t3 pairing token — enter it on the new device (15 min)');
 $('add-app').onclick=()=>{
   const n=$('new-app-name').value.trim(),u=$('new-app-url').value.trim();
   if(!u){$('set-msg').textContent='tile needs a URL';return;}
