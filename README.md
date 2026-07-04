@@ -1,6 +1,6 @@
 # gravedecay
 
-<img src="assets/gravedecay.svg" width="128" align="right" alt="gravedecay — a horned tombstone">
+<img src="assets/gravedecay.png" width="128" align="right" alt="gravedecay logo">
 
 **Turn any Linux box into an always-on AI dev appliance. The box never sleeps — your agents work the graveyard shift.** 🪦
 
