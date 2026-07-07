@@ -206,6 +206,24 @@ vitals view, stops calling remote APIs, and slows its polling — the resource
 diet is enforced, not implied. Tailscale, SSH, dashboard, and terminal stay
 up; you can always get back in.
 
+## Previewing a dev server
+
+Start a project's dev server on the box (keep it bound to `127.0.0.1`), then:
+
+```
+grave preview 3000        # → https://<box>.ts.net:3000  (tailnet only)
+grave preview             # auto-pick the one dev server listening in 3000–3999
+grave preview list        # what's exposed
+grave preview off 3000    # stop
+```
+
+It runs `tailscale serve` for that port and serves it at the URL **root**, not
+behind a path — so Vite/Next HMR, websockets, and absolute asset URLs work with
+no per-project config. The server stays on loopback; Tailscale terminates TLS
+and keeps it on the tailnet (never public). Ports are confined to `3000–3999`
+(`PREVIEW_RANGE`), and in-range platform ports like Playwright's 3050 are
+refused. See `docs/PORTS.md`.
+
 ## Daily driving
 
 ```
@@ -216,6 +234,7 @@ grave developer                  # 💻 thaw + restore
 grave agents new mybot [dir]     # persistent tmux agent session
 grave agents attach mybot        # detach: Ctrl-b d — session survives
 grave docker ps|up|down|logs     # stack management
+grave preview 3000               # expose a dev server at https://<box>.ts.net:3000
 grave logs t3|dash|term|<unit>   # follow logs
 grave update                     # snapshot (if snapper), update pkgs/npm/images
 grave backup / restore           # git bundles + configs + docker volumes

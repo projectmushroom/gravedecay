@@ -14,6 +14,13 @@ source "$CONF"
 # self-sufficient regardless of how it was invoked.
 [[ -n "${TOOL_PATH:-}" ]] && export PATH="$TOOL_PATH$PATH"
 
+# Tailnet port range for `grave preview` (dev-server tunnels), and any platform
+# ports that fall inside it and must never be exposed (Playwright is on 3050).
+# Defaults here so installs whose grave.conf predates the feature still work;
+# documented in docs/PORTS.md and grave.conf.example.
+: "${PREVIEW_RANGE:=3000-3999}"
+: "${PREVIEW_RESERVED:=3050}"
+
 LOG_FILE="$GRAVE_ROOT/logs/grave.log"
 RED=$'\e[31m'; GRN=$'\e[32m'; YLW=$'\e[33m'; BLD=$'\e[1m'; RST=$'\e[0m'
 
@@ -230,6 +237,89 @@ cmd_docker() {
     stacks) ls -1 "$GRAVE_ROOT/docker" ;;
     disk)  dk system df ;;
     *) say "usage: grave docker [ps|up <stack>|down <stack>|logs <container>|stacks|disk]"; exit 1 ;;
+  esac
+}
+
+# --------------------------------------------------------------- preview ----
+# Expose a running dev server to the tailnet over HTTPS at the ROOT of its own
+# port — NOT behind a path. A path prefix (/preview) breaks any framework that
+# assumes it lives at "/" : Vite/Next HMR websockets, /@vite, /_next, absolute
+# asset URLs all 404. Serving at the port root means the dev server works
+# unmodified, no per-project base-path config. The server stays bound to
+# 127.0.0.1; Tailscale terminates TLS and proxies over the tailnet ONLY (this
+# is `serve`, not `funnel` — nothing is exposed to the public internet).
+# Ports are confined to PREVIEW_RANGE so a preview can never shadow a platform
+# service (4711-4713) or anything outside the sandbox.
+tailnet_host() { tailscale status --json 2>/dev/null | sed -n 's/.*"DNSName": *"\([^"]*\)\.".*/\1/p' | head -1; }
+
+preview_reserved() { # preview_reserved <port>  — a platform service sits on it
+  local p="$1" r
+  for r in ${PREVIEW_RESERVED:-}; do [[ "$p" == "$r" ]] && return 0; done
+  return 1
+}
+
+preview_in_range() { # preview_in_range <port>  — valid, non-reserved preview port
+  local p="$1" lo="${PREVIEW_RANGE%-*}" hi="${PREVIEW_RANGE#*-}"
+  [[ "$p" =~ ^[0-9]+$ ]] && (( p >= lo && p <= hi )) && ! preview_reserved "$p"
+}
+
+port_listening() { # port_listening <port>  — something bound to it right now?
+  ss -tlnH 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$1\$"
+}
+
+listening_previews() { # previewable ports with a live listener (one per line)
+  local p
+  ss -tlnH 2>/dev/null | awk '{print $4}' | sed -n 's/.*[:.]\([0-9]\{1,\}\)$/\1/p' | sort -un |
+    while read -r p; do preview_in_range "$p" && echo "$p"; done
+}
+
+preview_start() { # preview_start <port>
+  local port="$1" host
+  preview_reserved "$port" && { bad "port $port belongs to a platform service — refusing to expose it"; exit 1; }
+  preview_in_range "$port" || { bad "port $port is outside the preview range $PREVIEW_RANGE"; exit 1; }
+  host=$(tailnet_host)
+  [[ -n "$host" ]] || { bad "can't read the tailnet name — is tailscale up?"; exit 1; }
+  if ! port_listening "$port"; then
+    say "  ${YLW}nothing is listening on 127.0.0.1:$port yet — start your dev server first (this maps it anyway).${RST}"
+  fi
+  tailscale serve --bg --https="$port" "http://127.0.0.1:$port" >/dev/null
+  log "preview: on $port"
+  ok "https://$host:$port  →  127.0.0.1:$port  (tailnet only — 'grave preview off $port' to stop)"
+}
+
+preview_stop() { # preview_stop <port>
+  local port="$1"
+  preview_in_range "$port" || { bad "port $port is outside the preview range $PREVIEW_RANGE"; exit 1; }
+  tailscale serve --https="$port" off >/dev/null 2>&1 || true
+  log "preview: off $port"
+  ok "preview on $port stopped"
+}
+
+cmd_preview() { # grave preview [<port>|off <port>|list]
+  local sub="${1:-}"; shift || true
+  case "$sub" in
+    ""|auto)
+      # No port: expose the single dev server listening in range. If several
+      # are up we can't guess — list them and ask for an explicit port.
+      local ports; mapfile -t ports < <(listening_previews)
+      case "${#ports[@]}" in
+        0) say "No dev server is listening in $PREVIEW_RANGE. Start one, then:"
+           say "  grave preview <port>"; exit 1 ;;
+        1) preview_start "${ports[0]}" ;;
+        *) say "Several dev servers are listening — name the port:"
+           local p; for p in "${ports[@]}"; do say "  grave preview $p"; done; exit 1 ;;
+      esac ;;
+    off|stop) preview_stop "${1:?usage: grave preview off <port>}" ;;
+    list|status|ls)
+      local host line port any=0; host=$(tailnet_host)
+      while IFS= read -r line; do
+        port=$(sed -n 's#^https://[^ :]*:\([0-9]\{1,\}\).*#\1#p' <<<"$line")
+        [[ -n "$port" ]] && preview_in_range "$port" && { say "  https://$host:$port  →  127.0.0.1:$port"; any=1; }
+      done < <(tailscale serve status 2>/dev/null)
+      (( any )) || say "  (no previews active)" ;;
+    *)
+      if [[ "$sub" =~ ^[0-9]+$ ]]; then preview_start "$sub"  # start (validates range/reserved)
+      else say "usage: grave preview [<port>|off <port>|list]"; exit 1; fi ;;
   esac
 }
 
@@ -559,6 +649,13 @@ grave — gravedecay appliance control 🪦
   grave docker [ps|up <stack>|down <stack>|logs <c>|stacks|disk]
   grave logs [t3|dash|ssh|tailscale|system|grave|agent <n>|<container/unit>]
 
+  grave preview <port>       expose a running dev server (e.g. :3000) to the
+                             tailnet at https://<box>.ts.net:<port> — root path,
+                             so HMR/websockets just work. Server stays loopback.
+  grave preview              auto-pick the one dev server listening in the range
+  grave preview list         show active previews
+  grave preview off <port>   stop a preview
+
   grave update               snapshot (if snapper), update pkgs/npm/images
   grave upgrade              update gravedecay itself: pull latest release
                              (or --edge for main), re-run the ritual
@@ -583,6 +680,7 @@ case "${1:-help}" in
   restart)    stop_dev; thaw_agents; start_dev ;;
   agents)     shift; cmd_agents "$@" ;;
   docker)     shift; cmd_docker "$@" ;;
+  preview)    shift || true; cmd_preview "$@" ;;
   update)     cmd_update ;;
   upgrade)    shift || true; cmd_upgrade "$@" ;;
   bootmode)   shift || true; cmd_bootmode "$@" ;;

@@ -82,6 +82,10 @@ that doctor can't detect will silently regress.
 ## House rules
 
 - Never bind a service to anything but `127.0.0.1` or the tailnet.
+- To let the human see a dev server you started (Vite/Next/etc. on `:3000`
+  and friends), keep it bound to `127.0.0.1` and run `grave preview <port>` —
+  it exposes the port at `https://<box>.ts.net:<port>` over the tailnet and
+  prints the URL. Never bind the dev server to `0.0.0.0` to make it reachable.
 - Every listening port gets a row in `docs/PORTS.md` in the same commit.
 - Secrets never enter git; `.gitignore` already covers `secrets/` and `.env`.
 - Config lives in files under `$GRAVE_ROOT/config` or `/etc/gravedecay` —

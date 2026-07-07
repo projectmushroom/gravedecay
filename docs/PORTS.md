@@ -12,5 +12,13 @@ listening — add a row in the same commit that adds a listener.
 | 5432 | 127.0.0.1 | core-postgres | loopback only |
 | 6379 | 127.0.0.1 | core-redis | loopback only |
 | 3050 | 127.0.0.1 | browsers-playwright | loopback only |
+| 3000–3999 | 127.0.0.1 | dev-server previews (your projects) | opt-in per port via `grave preview <port>` → https `:<port>` on the tailnet |
 
-Audit: `sudo ss -tlnp` and `sudo docker ps --format '{{.Names}} {{.Ports}}'`.
+The 3000–3999 range is the sandbox for `grave preview` (config: `PREVIEW_RANGE`).
+Dev servers still bind loopback; `grave preview <port>` runs `tailscale serve
+--https=<port>` so the project is reachable at `https://<box>.ts.net:<port>` —
+served at the port root, not a path, so HMR/websockets/absolute URLs work with
+no per-project config. Previews persist until `grave preview off <port>`.
+
+Audit: `sudo ss -tlnp` and `sudo docker ps --format '{{.Names}} {{.Ports}}'`;
+`grave preview list` for what's currently exposed.

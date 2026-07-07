@@ -58,6 +58,14 @@ T3_PORT=4711
 DASH_PORT=4712
 TERM_PORT=4713
 
+# Port range `grave preview` may expose to the tailnet. A preview serves a
+# loopback dev server at https://<box>.ts.net:<port> (root path, HMR-safe).
+# Confined to this range so a preview can't shadow a platform service.
+# PREVIEW_RESERVED lists platform ports inside the range that must never be
+# exposed (Playwright is on 3050) — grave refuses to preview them.
+PREVIEW_RANGE=3000-3999
+PREVIEW_RESERVED="3050"
+
 # Doctor toggles — set to 1 when the host profile establishes the invariant
 CHECK_SLEEP_MASKED=0     # sleep/suspend targets masked (always-on box)
 CHECK_LID_IGNORED=0      # laptop lid close ignored at logind level
