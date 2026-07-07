@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# gravedecay-selfheal — boot-time drift detector + safe recovery for immutable
+# hosts (stock SteamOS). A SteamOS OS update replaces /usr and *usually*
+# preserves user-added /etc files — but not guaranteed. On each boot we check
+# the /etc invariants grave depends on:
+#
+#   • all present  -> belt-and-suspenders: make sure the dev stacks actually
+#     came back (respecting `grave bootmode`), then exit.
+#   • something missing -> an update reset /etc. Flag it loudly (a marker file
+#     grave doctor surfaces + a journald line with the exact one-line fix).
+#
+# We deliberately do NOT auto-run raise.sh headlessly: a full raise needs broad
+# passwordless sudo, which we removed for security. Leaving a clear one-liner is
+# the safer trade — and /etc resets are rare.
+set -uo pipefail
+
+CONF=/etc/gravedecay/grave.conf
+[[ -r "$CONF" ]] && . "$CONF" 2>/dev/null || true
+GRAVE_ROOT="${GRAVE_ROOT:-$HOME/gravedecay}"
+REPO_DIR="${REPO_DIR:-$GRAVE_ROOT/repos/gravedecay}"
+LOGDIR="$GRAVE_ROOT/logs"; mkdir -p "$LOGDIR" 2>/dev/null || true
+LOG="$LOGDIR/selfheal.log"
+MARK="$LOGDIR/DRIFT-DETECTED"
+log() { printf '%s %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG" >&2; }
+
+# durable toolchain env (Homebrew + rootless docker under $HOME)
+[[ -x /home/linuxbrew/.linuxbrew/bin/brew ]] && eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv bash)" 2>/dev/null || true
+export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+
+# 1. drift detection — the /etc pieces a SteamOS update could wipe
+missing=()
+[[ -f "$CONF" ]] || missing+=("$CONF")
+for unit in gravedecay gravedecay-term t3code tailscaled; do
+  systemctl cat "$unit.service" >/dev/null 2>&1 || missing+=("$unit.service")
+done
+ls /etc/sudoers.d/ 2>/dev/null | grep -q gravedecay || missing+=("scoped sudoers")
+command -v grave >/dev/null 2>&1 || missing+=("grave CLI")
+
+if ((${#missing[@]})); then
+  : > "$MARK"
+  log "CONFIG DRIFT after boot — missing: ${missing[*]}"
+  log "A SteamOS update likely reset /etc. Restore it (idempotent) with:"
+  log "    cd $REPO_DIR && ./raise.sh --profile steam-machine"
+  log "(headless auto-raise is intentionally disabled — it needs broad sudo we don't keep.)"
+  exit 0
+fi
+rm -f "$MARK" 2>/dev/null || true
+
+# 2. no drift — make sure the dev stacks are actually up (container restart
+# policies usually handle this; this covers the edge cases), but only in the
+# developer boot posture so we never override `grave bootmode gaming`.
+if systemctl is-enabled --quiet t3code 2>/dev/null; then
+  systemctl --user start docker >/dev/null 2>&1 || true
+  for stack in "${DEV_STACKS[@]:-}"; do
+    [[ -n "$stack" ]] && grave docker up "$stack" >>"$LOG" 2>&1 || true
+  done
+  log "self-heal ok — /etc intact, dev stacks ensured up"
+else
+  log "self-heal ok — /etc intact, gaming boot posture (dev stacks left down)"
+fi

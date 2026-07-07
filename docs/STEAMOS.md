@@ -98,6 +98,40 @@ firewalld (default zone `drop`, allow `ssh`, trust `tailscale0`).
   with `steamos-toolchain.sh` if you bump it.
 - **gravedecay itself**: `grave upgrade` as usual.
 
+## Reboot, auto-start & self-heal
+
+SteamOS boots into Game Mode (gamescope), but that's just the graphical session —
+the appliance comes up underneath it regardless:
+
+- **System units** (`tailscaled`, `sshd`, `gravedecay`, `gravedecay-term`,
+  `t3code`) are `enabled`, so they start at boot into `multi-user.target`. T3
+  Code is a *system* unit running as your user, so it doesn't wait for a login.
+- **Rootless Docker** is a *user* unit — normally it wouldn't start until you
+  log in. The bootstrap enables **linger** (`loginctl enable-linger`), so your
+  user systemd instance (and Docker) start at boot with no login. The stack
+  containers carry `restart: unless-stopped`, so Docker brings them back too.
+- `grave doctor` asserts all of this: every unit is `enabled` (not merely
+  active), linger is on, and rootless Docker is enabled — "survives a reboot" is
+  part of the contract, not an assumption.
+
+So an unattended reboot lands you back at a fully-running box, reachable over the
+tailnet, with Big Picture on the screen. Prove it once with a reboot test.
+
+**Self-heal.** On an immutable host raise.sh also installs
+`gravedecay-selfheal.service`, a boot-time oneshot that:
+
+- verifies the `/etc` pieces grave depends on (config, units, sudoers, CLI)
+  survived the last OS update — if any went missing it drops a marker
+  `grave doctor` surfaces and logs the exact one-line fix
+  (`cd <repo> && ./raise.sh --profile steam-machine`);
+- otherwise makes sure the dev stacks actually came back (respecting
+  `grave bootmode`).
+
+It intentionally does **not** auto-run raise.sh headlessly: a full raise needs
+broad passwordless sudo, which the platform deliberately doesn't keep (sudo is
+scoped to specific commands). Flagging the rare `/etc`-reset with a clear
+one-liner is the safer trade.
+
 ## Known rough edges (help wanted)
 
 - Sensor names for the dashboard temps (`grave status` / System tab) aren't

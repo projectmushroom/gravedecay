@@ -249,6 +249,22 @@ sleep 2
 curl -sf -o /dev/null "http://127.0.0.1:$T3_PORT/" && ok "t3code answering on :$T3_PORT" \
   || skip "t3code not answering yet — check: grave logs t3"
 
+# ---------------------------------------------- 6b. self-heal (immutable) ----
+# On an image-based rootfs, a boot-time unit checks that /etc survived the last
+# OS update and that the dev stacks came back — see bin/gravedecay-selfheal.
+if [[ "$IMMUTABLE" == 1 ]]; then
+  step "Self-heal boot unit (post-update drift check)"
+  install -m 755 "$REPO_DIR/bin/gravedecay-selfheal" "$GRAVE_ROOT/scripts/gravedecay-selfheal"
+  sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
+      -e "s|@HOME@|$HOME_DIR|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
+      -e "s|@DOCKER_HOST@|$DOCKER_HOSTV|g" \
+      "$REPO_DIR/systemd/gravedecay-selfheal.service.tmpl" | sudo tee /etc/systemd/system/gravedecay-selfheal.service >/dev/null
+  sudo sed -i '/^Environment=DOCKER_HOST=$/d' /etc/systemd/system/gravedecay-selfheal.service
+  sudo systemctl daemon-reload
+  sudo systemctl enable gravedecay-selfheal >/dev/null 2>&1 || true
+  ok "self-heal enabled (runs each boot)"
+fi
+
 # -------------------------------------------------------------- 7. docker ----
 step "Docker stacks"
 if [[ "$DOCKER_ROOTLESS" == 1 ]]; then

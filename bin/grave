@@ -396,6 +396,25 @@ cmd_doctor() {
     check "durable toolchain under \$HOME (Homebrew)" command -v brew
     check "Docker is rootless (survives OS updates)" \
       bash -c "[[ '${DOCKER_ROOTLESS:-0}' == 1 ]]"
+    # /etc drift after a SteamOS update — the self-heal boot unit drops this
+    # marker when a config file it depends on went missing (see docs/STEAMOS.md).
+    if [[ -f "$GRAVE_ROOT/logs/DRIFT-DETECTED" ]]; then
+      bad "config drift after OS update — re-run raise.sh (see $GRAVE_ROOT/logs/selfheal.log)"
+      FAILURES=$((FAILURES+1))
+    fi
+  fi
+  # --- reboot-readiness: "active" isn't "enabled". A unit that's running now
+  # but not enabled won't come back after a reboot, so surviving a reboot is
+  # only real if these pass. (Doctor is the contract.)
+  local u
+  for u in "${ALWAYS_ON[@]}" "${DEV_SERVICES[@]}"; do
+    systemctl cat "$u.service" >/dev/null 2>&1 || continue   # unit not on this host
+    check "$u enabled (starts at boot)"  systemctl is-enabled --quiet "$u"
+  done
+  if [[ "${DOCKER_ROOTLESS:-0}" == 1 ]]; then
+    check "rootless docker enabled at boot"   systemctl --user is-enabled --quiet docker
+    check "linger on (user services start without login)" \
+      bash -c "loginctl show-user \"\$(id -un)\" 2>/dev/null | grep -q 'Linger=yes'"
   fi
   if dkctl is-active --quiet docker; then
     check "docker healthy"              dk info

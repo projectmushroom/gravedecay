@@ -1,0 +1,20 @@
+[Unit]
+Description=gravedecay self-heal (post-boot drift check + stack recovery)
+# Immutable-host safety net: verify /etc survived the last OS update and make
+# sure the dev stacks came back. See docs/STEAMOS.md.
+After=multi-user.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=@USER@
+Group=@USER@
+ExecStart=@GRAVE_ROOT@/scripts/gravedecay-selfheal
+Environment=HOME=@HOME@
+# Reach the durable toolchain + rootless docker under $HOME (@TOOLPATH@ is the
+# Homebrew/rootless bins; empty on package-manager hosts).
+Environment=PATH=@TOOLPATH@@HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=DOCKER_HOST=@DOCKER_HOST@
+
+[Install]
+WantedBy=multi-user.target
