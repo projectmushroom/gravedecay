@@ -296,6 +296,25 @@ cmd_bootmode() { # what the box boots into: developer (dev services up) or gamin
   esac
 }
 
+# ------------------------------------------------------------- gamewatch ----
+# Game-mode auto-throttle toggle. The gravedecay-gamewatch.service loop watches
+# for a running game and flips grave gaming/developer; this just flips the flag
+# file it reads each poll (no sudo — the file lives under $GRAVE_ROOT).
+cmd_gamewatch() {
+  local flag="$GRAVE_ROOT/config/gamewatch.on"
+  case "${1:-status}" in
+    on)  mkdir -p "$GRAVE_ROOT/config"; : > "$flag"
+         ok "auto-throttle ON — launching a game freezes agents; 'grave gamewatch off' to stop" ;;
+    off) rm -f "$flag"; ok "auto-throttle OFF (games no longer flip modes)" ;;
+    status)
+      [[ -e "$flag" ]] && say "auto-throttle: ${GRN}on${RST}" || say "auto-throttle: ${YLW}off${RST}"
+      if systemctl is-active --quiet gravedecay-gamewatch; then say "  watcher service: running"
+      else say "  watcher service: ${YLW}stopped${RST} (install via raise.sh --profile steam-machine)"; fi
+      [[ -r "$GRAVE_ROOT/logs/gamewatch.state" ]] && say "  last seen: $(cat "$GRAVE_ROOT/logs/gamewatch.state")" ;;
+    *) say "usage: grave gamewatch [on|off|status]"; exit 1 ;;
+  esac
+}
+
 # --------------------------------------------------------------- upgrade ----
 cmd_upgrade() { # grave upgrade [--edge|--release] — update gravedecay itself
   local channel="${UPGRADE_CHANNEL:-release}"
@@ -415,6 +434,10 @@ cmd_doctor() {
     check "rootless docker enabled at boot"   systemctl --user is-enabled --quiet docker
     check "linger on (user services start without login)" \
       bash -c "loginctl show-user \"\$(id -un)\" 2>/dev/null | grep -q 'Linger=yes'"
+  fi
+  if [[ -e "$GRAVE_ROOT/config/gamewatch.on" ]]; then
+    check "game-mode watcher running"   systemctl is-active --quiet gravedecay-gamewatch
+    check "game-mode watcher enabled"   systemctl is-enabled --quiet gravedecay-gamewatch
   fi
   if dkctl is-active --quiet docker; then
     check "docker healthy"              dk info
@@ -541,6 +564,8 @@ grave — gravedecay appliance control 🪦
                              (or --edge for main), re-run the ritual
   grave bootmode [dev|game]  what a reboot boots into: developer services
                              up (default) or gaming (ALWAYS_ON only)
+  grave gamewatch [on|off]   auto gaming/developer flip when a game launches
+                             (Steam Machine); 'status' to check
   grave backup               bundle repos, configs, docker volumes
   grave restore [backup]     list / restore backups
 
@@ -561,6 +586,7 @@ case "${1:-help}" in
   update)     cmd_update ;;
   upgrade)    shift || true; cmd_upgrade "$@" ;;
   bootmode)   shift || true; cmd_bootmode "$@" ;;
+  gamewatch)  shift || true; cmd_gamewatch "$@" ;;
   logs)       shift; cmd_logs "$@" ;;
   doctor)     cmd_doctor ;;
   backup)     cmd_backup ;;

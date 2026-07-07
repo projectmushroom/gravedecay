@@ -132,6 +132,37 @@ broad passwordless sudo, which the platform deliberately doesn't keep (sudo is
 scoped to specific commands). Flagging the rare `/etc`-reset with a clear
 one-liner is the safer trade.
 
+## Game Mode auto-throttle
+
+The `steam-machine` profile installs `gravedecay-gamewatch.service` and turns it
+on: launch a game and the box **freezes agents + frees RAM/GPU** (`grave
+gaming`); quit the game and it **thaws + restores** (`grave developer`). You just
+play — the appliance gets out of the way by itself, then comes back mid-thought.
+
+Detection prefers **Feral GameMode** (SteamOS runs `gamemoded`; Steam registers a
+game while it's in game mode — a positive `ClientCount` means "game up"), falling
+back to Steam's per-game `reaper` process (matched by name, so it can never match
+the watcher's own script). It only auto-restores if it had previously seen a
+game, so it won't fight a manual `grave gaming`.
+
+```sh
+grave gamewatch on|off|status   # toggle (a flag file — no restart needed)
+```
+
+Toggling is a flag file under `$GRAVE_ROOT`, re-read every poll, so `off` takes
+effect within a few seconds. `grave doctor` checks the watcher is running when
+the flag is on.
+
+## Dashboard action buttons (allow-list)
+
+The dashboard's action buttons — mode flips, reboot, and **minting a T3 pairing
+token** — are identity-gated: only Tailscale logins in `GRAVEDECAY_ALLOWED_USERS`
+may press them; everyone else is read-only (a `403 forbidden` in the UI). raise.sh
+now defaults this to the box owner's Tailscale login once you've run `tailscale
+up`, so the operator isn't locked out. Add teammates with a comma-separated
+`GRAVEDECAY_ALLOWED_USERS` (env before raise, or edit the service) and restart
+gravedecay.
+
 ## Known rough edges (help wanted)
 
 - Sensor names for the dashboard temps (`grave status` / System tab) aren't

@@ -1,0 +1,24 @@
+[Unit]
+Description=gravedecay game-mode auto-throttle (freeze agents while gaming)
+# Watches for a running game and flips grave gaming/developer. Opt-in via the
+# flag file $GRAVE_ROOT/config/gamewatch.on — see docs/STEAMOS.md.
+After=multi-user.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+Group=@USER@
+ExecStart=@GRAVE_ROOT@/scripts/gravedecay-gamewatch
+Restart=always
+RestartSec=5
+Environment=HOME=@HOME@
+# Reach the durable toolchain (grave, docker, busctl) — @TOOLPATH@ is the
+# Homebrew/rootless bins; empty on package-manager hosts. XDG_RUNTIME_DIR is set
+# by the script itself so busctl --user reaches the session bus.
+Environment=PATH=@TOOLPATH@@HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+# NO PrivateTmp: grave gaming freezes agents via the tmux socket in /tmp
+
+[Install]
+WantedBy=multi-user.target

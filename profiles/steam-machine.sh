@@ -40,4 +40,11 @@ profile_apply() {
   # keep the box reachable when a game session is hogging the GPU: nothing to
   # do — ALWAYS_ON services (tailscaled, sshd, gravedecay) are never touched by
   # gaming mode. Verify after first game night with: grave doctor
+
+  # Game-mode auto-throttle ON by default on a Steam Machine: launching a game
+  # freezes agents + frees RAM/GPU, exiting restores them. raise.sh installed
+  # the watcher; this flips its flag on. Disable any time with `grave gamewatch
+  # off`.
+  mkdir -p "$GRAVE_ROOT/config"
+  : > "$GRAVE_ROOT/config/gamewatch.on"
 }

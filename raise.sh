@@ -89,6 +89,17 @@ else
   GRAVE_BIN="/usr/local/bin/grave"
 fi
 
+# Who may press the dashboard's action buttons (mode flips, reboot, T3 pairing
+# token). Tailnet viewers not in this list are read-only. Default to the box
+# owner's Tailscale login once logged in, so the operator isn't locked out of
+# their own box; override with GRAVEDECAY_ALLOWED_USERS (comma-separated). This
+# populates on the re-raise after `tailscale up`.
+ALLOWED_USERS="${GRAVEDECAY_ALLOWED_USERS:-}"
+if [[ -z "$ALLOWED_USERS" ]] && command -v tailscale >/dev/null 2>&1 \
+   && command -v jq >/dev/null 2>&1 && tailscale status --peers=false >/dev/null 2>&1; then
+  ALLOWED_USERS="$(tailscale status --json 2>/dev/null | jq -r '.User[(.Self.UserID|tostring)].LoginName // empty')"
+fi
+
 # Rootless Docker? (per-user daemon, no sudo — the durable choice on SteamOS)
 DOCKER_ROOTLESS=0
 DOCKER_HOSTV=""
@@ -201,10 +212,12 @@ step "gravedecay"
 install -m 755 "$REPO_DIR/dashboard/gravedecay.py" "$GRAVE_ROOT/scripts/gravedecay.py"
 install -m 644 "$REPO_DIR/assets/gravedecay.png" "$GRAVE_ROOT/config/gravedecay.png"
 sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
-    -e "s|@DASH_PORT@|$DASH_PORT|g" -e "s|@ALLOWED_USERS@||g" \
+    -e "s|@DASH_PORT@|$DASH_PORT|g" -e "s|@ALLOWED_USERS@|$ALLOWED_USERS|g" \
     -e "s|@TOOLPATH@|$TOOLPATH|g" -e "s|@DOCKER_HOST@|$DOCKER_HOSTV|g" \
     -e "s|@UNITS@|$UNITS|g" -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" \
     "$REPO_DIR/systemd/gravedecay.service.tmpl" | sudo tee /etc/systemd/system/gravedecay.service >/dev/null
+[[ -n "$ALLOWED_USERS" ]] && ok "dashboard actions allowed for: $ALLOWED_USERS" \
+  || skip "dashboard is read-only until GRAVEDECAY_ALLOWED_USERS is set (auto-fills after tailscale login on re-raise)"
 # drop an empty DOCKER_HOST= line on system-docker hosts (empty would confuse the CLI)
 sudo sed -i '/^Environment=DOCKER_HOST=$/d' /etc/systemd/system/gravedecay.service
 sudo systemctl daemon-reload
@@ -263,6 +276,16 @@ if [[ "$IMMUTABLE" == 1 ]]; then
   sudo systemctl daemon-reload
   sudo systemctl enable gravedecay-selfheal >/dev/null 2>&1 || true
   ok "self-heal enabled (runs each boot)"
+
+  # Game-mode auto-throttle watcher (idle unless the flag file is on — the
+  # steam-machine profile turns it on; toggle with `grave gamewatch`).
+  install -m 755 "$REPO_DIR/bin/gravedecay-gamewatch" "$GRAVE_ROOT/scripts/gravedecay-gamewatch"
+  sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
+      -e "s|@HOME@|$HOME_DIR|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
+      "$REPO_DIR/systemd/gravedecay-gamewatch.service.tmpl" | sudo tee /etc/systemd/system/gravedecay-gamewatch.service >/dev/null
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now gravedecay-gamewatch >/dev/null 2>&1 || true
+  ok "game-mode watcher installed (flip on with: grave gamewatch on)"
 fi
 
 # -------------------------------------------------------------- 7. docker ----
