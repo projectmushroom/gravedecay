@@ -221,7 +221,10 @@ Machine-specific quirks live in `profiles/*.sh`, applied once by
 - **generic** — any always-on box; masks suspend by default.
 - **t2-macbook** — Intel T2 Macs: sleep masked, lid ignored, amdgpu pinned to
   a fixed DPM state (dGPU crash workaround).
-- **steam-machine** — always-on + gamescope coexistence (work in progress).
+- **steam-machine** — stock SteamOS (immutable rootfs). Durable toolchain under
+  `$HOME` (Homebrew + rootless Docker), `GRAVE_ROOT` on `/home`, always-on, and
+  games alongside — survives SteamOS updates untouched. Bootstrap once with
+  `steamos-toolchain.sh`, then raise; see [docs/STEAMOS.md](docs/STEAMOS.md).
 
 Each profile flips matching `CHECK_*` doctor flags — quirks doctor can't
 verify will silently regress. Writing your own is ~20 lines; see
@@ -241,6 +244,7 @@ is in `docs/SECRETS.md`.
 | Doc | What |
 |---|---|
 | [AGENTS.md](AGENTS.md) | Playbook for the coding agent doing the install |
+| [docs/STEAMOS.md](docs/STEAMOS.md) | Raising on stock SteamOS (immutable rootfs): durable toolchain, update-survival |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Why native-first, layout, mode model |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, tailnet-only, sudoers scope, terminal trust |
 | [docs/SECRETS.md](docs/SECRETS.md) | Secrets + MCP wiring for agent CLIs |

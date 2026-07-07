@@ -9,13 +9,15 @@ Type=simple
 User=@USER@
 Group=@USER@
 WorkingDirectory=@GRAVE_ROOT@/repos
-ExecStart=/usr/bin/t3 serve --mode web --host 127.0.0.1 --port @T3_PORT@ --base-dir @GRAVE_ROOT@/agents/t3code @GRAVE_ROOT@/repos
+ExecStart=@T3@ serve --mode web --host 127.0.0.1 --port @T3_PORT@ --base-dir @GRAVE_ROOT@/agents/t3code @GRAVE_ROOT@/repos
 Restart=always
 RestartSec=3
 SyslogIdentifier=t3code
 SuccessExitStatus=130 143 SIGTERM SIGINT
-# Agent CLIs (claude/codex in ~/.local/bin) must be reachable from T3 sessions
-Environment=PATH=@HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Agent CLIs (claude/codex in ~/.local/bin) must be reachable from T3 sessions.
+# @TOOLPATH@ prepends the durable toolchain (Homebrew node/bins, rootless
+# docker) on hosts where it lives under $HOME — empty on package-manager hosts.
+Environment=PATH=@TOOLPATH@@HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=HOME=@HOME@
 # Per-integration secrets (Linear, etc.) — see docs/SECRETS.md
 EnvironmentFile=-@GRAVE_ROOT@/config/secrets/t3.env

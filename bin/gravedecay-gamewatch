@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# gravedecay-gamewatch — Steam Machine auto-throttle. When a game launches,
+# freeze agents + free RAM/GPU (grave gaming); when it exits, thaw + restore
+# (grave developer). So you just play — the box gets out of the way by itself.
+#
+# Opt-in via the flag file $GRAVE_ROOT/config/gamewatch.on (toggle it with
+# `grave gamewatch on|off`); the watcher re-reads it every loop, so toggles take
+# effect within one poll without restarting the service.
+set -uo pipefail
+
+CONF=/etc/gravedecay/grave.conf
+[[ -r "$CONF" ]] && . "$CONF" 2>/dev/null || true
+GRAVE_ROOT="${GRAVE_ROOT:-$HOME/gravedecay}"
+FLAG="$GRAVE_ROOT/config/gamewatch.on"
+STATE="$GRAVE_ROOT/logs/gamewatch.state"
+LOG="$GRAVE_ROOT/logs/gamewatch.log"
+INTERVAL="${GAME_POLL_SECONDS:-8}"
+GAME_PROC="${GAME_PROC:-reaper}"   # Steam's per-game wrapper process
+mkdir -p "$GRAVE_ROOT/config" "$GRAVE_ROOT/logs" 2>/dev/null || true
+
+[[ -x /home/linuxbrew/.linuxbrew/bin/brew ]] && eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv bash)" 2>/dev/null || true
+export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
+log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$LOG"; }
+
+game_running() {
+  # Primary: Feral GameMode (SteamOS runs gamemoded) — Steam registers a game
+  # while it's in game mode, so a positive client count means "a game is up".
+  local n
+  n="$(busctl --user get-property com.feralinteractive.GameMode \
+        /com/feralinteractive/GameMode com.feralinteractive.GameMode ClientCount 2>/dev/null | awk '{print $NF}')"
+  [[ "${n:-0}" =~ ^[0-9]+$ && "$n" -gt 0 ]] && return 0
+  # Fallback: Steam's per-game wrapper process (native or Proton). Match by
+  # exact process name (-x), never -f — a -f pattern can match this very script.
+  pgrep -x -- "$GAME_PROC" >/dev/null 2>&1
+}
+
+last=""; [[ -r "$STATE" ]] && last="$(cat "$STATE" 2>/dev/null)"
+log "gamewatch started (interval ${INTERVAL}s)"
+while :; do
+  if [[ -e "$FLAG" ]]; then
+    if game_running; then now=game; else now=idle; fi
+    if [[ "$now" != "$last" ]]; then
+      if [[ "$now" == game ]]; then
+        log "game detected -> grave gaming (freeze agents, free RAM/GPU)"
+        grave gaming >>"$LOG" 2>&1 || true
+      elif [[ -n "$last" ]]; then   # only auto-restore if we'd previously seen a game
+        log "game exited -> grave developer (thaw, restore)"
+        grave developer >>"$LOG" 2>&1 || true
+      fi
+      last="$now"; printf '%s\n' "$now" >"$STATE"
+    fi
+  fi
+  sleep "$INTERVAL"
+done

@@ -10,16 +10,19 @@ Group=@USER@
 # -i lo: loopback only (reached via tailscale serve /term).  -W: writable.
 # --url-arg lets the launcher tiles pick the session (?arg=claude etc).
 # No --base-path: tailscale serve strips the /term mount prefix.
-ExecStart=/usr/bin/ttyd -p @TERM_PORT@ -i lo -W --url-arg \
+ExecStart=@TTYD@ -p @TERM_PORT@ -i lo -W --url-arg \
   -t fontSize=14 -t 'theme={"background":"#0d0d0d"}' -t titleFixed=gravedecay \
   @GRAVE_ROOT@/scripts/webterm
 Restart=always
 RestartSec=3
 SyslogIdentifier=gravedecay-term
-# Agent CLIs (claude/codex in ~/.local/bin) must be reachable from sessions
-Environment=PATH=@HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Agent CLIs (claude/codex in ~/.local/bin) must be reachable from sessions.
+# @TOOLPATH@ prepends the durable toolchain when it lives under $HOME
+# (Homebrew node/bins, rootless docker) — empty on package-manager hosts.
+Environment=PATH=@TOOLPATH@@HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=HOME=@HOME@
 Environment=GRAVE_ROOT=@GRAVE_ROOT@
+Environment=DOCKER_HOST=@DOCKER_HOST@
 
 # NO NoNewPrivileges: it blocks sudo — the dashboard runs mode flips via
 # sudo -n grave, and web-terminal shells legitimately use sudo.

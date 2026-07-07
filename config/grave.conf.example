@@ -11,9 +11,28 @@ DEV_SERVICES=(t3code)
 # Order matters: started in this order, stopped in reverse.
 DEV_STACKS=(core browsers)
 
+# Container engine. On immutable hosts (e.g. stock SteamOS) raise.sh installs
+# rootless Docker: it runs as your user with NO sudo, on a per-user socket, and
+# lives under $HOME so it survives OS updates. When DOCKER_ROOTLESS=1 grave
+# talks to the daemon as the user (docker + `systemctl --user`); when 0 it uses
+# `sudo docker` and the system docker unit. Both keep containers on 127.0.0.1.
+DOCKER_ROOTLESS=@DOCKER_ROOTLESS@
+DOCKER_HOST="@DOCKER_HOST@"
+
+# Extra PATH prepended by grave so it finds the durable toolchain (Homebrew
+# bins, rootless docker under $HOME). Empty on package-manager hosts. Must end
+# with a trailing ':' when non-empty. Set by raise.sh.
+TOOL_PATH="@TOOL_PATH@"
+
 # systemd services that must NEVER be touched by grave gaming/stop.
 # Host profiles may append machine-specific units (GPU pinning etc.).
 ALWAYS_ON=(tailscaled sshd NetworkManager gravedecay gravedecay-term)
+
+# Game-mode auto-throttle (Steam Machine): gravedecay-gamewatch polls for a
+# running game and flips grave gaming/developer. Toggle with `grave gamewatch
+# on|off` (a flag file, not here). These just tune detection.
+GAME_POLL_SECONDS=8
+GAME_PROC="reaper"        # Steam's per-game wrapper process (matched by name)
 
 # tmux socket name used for agent sessions
 TMUX_SOCKET="agents"
@@ -45,3 +64,5 @@ CHECK_LID_IGNORED=0      # laptop lid close ignored at logind level
 CHECK_DOCKER_SUBVOL=0    # /var/lib/docker on its own btrfs subvolume
 CHECK_SNAPPER=0          # snapper timeline for $GRAVE_ROOT
 SNAPPER_CONFIG=srv
+CHECK_IMMUTABLE_ROOT=0   # immutable rootfs (SteamOS): toolchain must live in $HOME
+CHECK_FIREWALL=1         # require a host firewall (steam-machine sets 0 for LAN gaming)
