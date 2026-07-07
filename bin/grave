@@ -8,6 +8,12 @@ CONF="${GRAVE_CONF:-/etc/gravedecay/grave.conf}"
 # shellcheck disable=SC1090
 source "$CONF"
 
+# On a managed-toolchain host (Homebrew + rootless docker under $HOME) the tools
+# grave shells out to — docker, tailscale, tmux — aren't on a bare login PATH.
+# TOOL_PATH (set by raise.sh; empty on package-manager hosts) makes grave
+# self-sufficient regardless of how it was invoked.
+[[ -n "${TOOL_PATH:-}" ]] && export PATH="$TOOL_PATH$PATH"
+
 LOG_FILE="$GRAVE_ROOT/logs/grave.log"
 RED=$'\e[31m'; GRN=$'\e[32m'; YLW=$'\e[33m'; BLD=$'\e[1m'; RST=$'\e[0m'
 
@@ -21,9 +27,23 @@ need_root_helper() { sudo -n true 2>/dev/null || { say "grave needs passwordless
 
 tmuxa() { tmux -L "$TMUX_SOCKET" "$@"; }
 
+# Container engine: rootless Docker (per-user, no sudo — durable on immutable
+# hosts like SteamOS) vs system Docker (sudo). dk = the docker CLI, dkctl =
+# how we manage the docker unit (per-user vs system systemd). Everything else
+# in grave calls these two, so the sudo/rootless split lives in one place.
+if [[ "${DOCKER_ROOTLESS:-0}" == 1 ]]; then
+  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  [[ -n "${DOCKER_HOST:-}" ]] && export DOCKER_HOST
+  _DOCKER=(docker);      _DKCTL=(systemctl --user)
+else
+  _DOCKER=(sudo docker); _DKCTL=(sudo systemctl)
+fi
+dk()    { "${_DOCKER[@]}" "$@"; }
+dkctl() { "${_DKCTL[@]}"  "$@"; }
+
 compose() { # compose <stack> <args...>
   local stack="$1"; shift
-  sudo docker compose --project-directory "$GRAVE_ROOT/docker/$stack" "$@"
+  dk compose --project-directory "$GRAVE_ROOT/docker/$stack" "$@"
 }
 
 mem_available_mib() { awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo; }
@@ -47,9 +67,9 @@ cmd_status() {
   for s in "${DEV_SERVICES[@]}"; do
     if systemctl is-active --quiet "$s"; then ok "$s"; else bad "$s (stopped)"; fi
   done
-  if systemctl is-active --quiet docker; then
+  if dkctl is-active --quiet docker; then
     ok "docker"
-    sudo docker ps --format '    {{.Names}}: {{.Status}}' 2>/dev/null || true
+    dk ps --format '    {{.Names}}: {{.Status}}' 2>/dev/null || true
   else
     bad "docker (stopped)"
   fi
@@ -79,7 +99,7 @@ cmd_status() {
 start_dev() {
   need_root_helper
   say "Starting developer services..."
-  sudo systemctl start docker
+  dkctl start docker
   local stack
   for stack in "${DEV_STACKS[@]}"; do
     compose "$stack" up -d --wait 2>/dev/null || compose "$stack" up -d
@@ -136,7 +156,7 @@ stop_dev() { # stop_dev [kill]  — kill: also destroy tmux sessions (max free R
   else
     freeze_agents
   fi
-  if systemctl is-active --quiet docker; then
+  if dkctl is-active --quiet docker; then
     local stack idx
     for (( idx=${#DEV_STACKS[@]}-1; idx>=0; idx-- )); do
       stack="${DEV_STACKS[$idx]}"
@@ -144,9 +164,9 @@ stop_dev() { # stop_dev [kill]  — kill: also destroy tmux sessions (max free R
       ok "stopped stack $stack"
     done
     # stop any remaining containers so docker can shut down cleanly
-    local rest; rest=$(sudo docker ps -q)
-    [[ -n "$rest" ]] && sudo docker stop $rest >/dev/null
-    sudo systemctl stop docker.service docker.socket
+    local rest; rest=$(dk ps -q)
+    [[ -n "$rest" ]] && dk stop $rest >/dev/null
+    dkctl stop docker.service; dkctl stop docker.socket 2>/dev/null || true
     ok "stopped docker"
   fi
   log "developer mode: stopped"
@@ -203,12 +223,12 @@ cmd_agents() {
 cmd_docker() {
   local sub="${1:-ps}"; shift || true
   case "$sub" in
-    ps)    sudo docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' ;;
+    ps)    dk ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' ;;
     up)    compose "${1:?stack name}" up -d ;;
     down)  compose "${1:?stack name}" down ;;
-    logs)  sudo docker logs --tail 100 -f "${1:?container name}" ;;
+    logs)  dk logs --tail 100 -f "${1:?container name}" ;;
     stacks) ls -1 "$GRAVE_ROOT/docker" ;;
-    disk)  sudo docker system df ;;
+    disk)  dk system df ;;
     *) say "usage: grave docker [ps|up <stack>|down <stack>|logs <container>|stacks|disk]"; exit 1 ;;
   esac
 }
@@ -220,17 +240,31 @@ cmd_update() {
     say "Snapshotting before update..."
     sudo snapper -c root create --description "grave-pre-update" --cleanup-algorithm number || true
   fi
-  say "Updating system packages..."
-  case "$(pkg_mgr)" in
-    pacman) sudo pacman -Syu --noconfirm
-            if command -v paru >/dev/null; then paru -Sua --noconfirm || say "${YLW}AUR update had issues (non-fatal)${RST}"; fi ;;
-    apt)    sudo apt-get update && sudo apt-get -y upgrade ;;
-    dnf)    sudo dnf -y upgrade ;;
-    *)      say "${YLW}no known package manager — skipping system update${RST}" ;;
-  esac
-  say "Updating npm-global tools..."
-  sudo npm update -g "${NPM_GLOBAL_TOOLS[@]}" 2>&1 | tail -1 || true
-  if systemctl is-active --quiet docker; then
+  if [[ "${CHECK_IMMUTABLE_ROOT:-0}" == 1 ]]; then
+    # Immutable rootfs (e.g. stock SteamOS): never pacman into read-only /usr —
+    # it won't survive an OS update. The durable toolchain updates via Homebrew
+    # under $HOME; the base OS updates through its own image updater. See
+    # docs/STEAMOS.md.
+    if command -v brew >/dev/null; then
+      say "Updating Homebrew toolchain..."
+      brew update >/dev/null 2>&1 && brew upgrade 2>&1 | tail -1 || say "${YLW}brew upgrade had issues (non-fatal)${RST}"
+    fi
+    say "${YLW}base OS is image-based — update it with the system updater, not grave${RST}"
+  else
+    say "Updating system packages..."
+    case "$(pkg_mgr)" in
+      pacman) sudo pacman -Syu --noconfirm
+              if command -v paru >/dev/null; then paru -Sua --noconfirm || say "${YLW}AUR update had issues (non-fatal)${RST}"; fi ;;
+      apt)    sudo apt-get update && sudo apt-get -y upgrade ;;
+      dnf)    sudo dnf -y upgrade ;;
+      *)      say "${YLW}no known package manager — skipping system update${RST}" ;;
+    esac
+    if ((${#NPM_GLOBAL_TOOLS[@]})); then
+      say "Updating npm-global tools..."
+      sudo npm update -g "${NPM_GLOBAL_TOOLS[@]}" 2>&1 | tail -1 || true
+    fi
+  fi
+  if dkctl is-active --quiet docker; then
     say "Pulling docker images..."
     local stack; for stack in "${DEV_STACKS[@]}"; do compose "$stack" pull -q || true; done
   fi
@@ -250,11 +284,13 @@ cmd_bootmode() { # what the box boots into: developer (dev services up) or gamin
       fi ;;
     developer|dev)
       need_root_helper
-      sudo systemctl enable t3code docker >/dev/null 2>&1 || true
+      sudo systemctl enable t3code >/dev/null 2>&1 || true
+      dkctl enable docker >/dev/null 2>&1 || true   # rootless: per-user unit
       ok "boot mode: developer — dev services start automatically after reboot" ;;
     gaming|game)
       need_root_helper
-      sudo systemctl disable t3code docker docker.socket >/dev/null 2>&1 || true
+      sudo systemctl disable t3code >/dev/null 2>&1 || true
+      dkctl disable docker docker.socket >/dev/null 2>&1 || true
       ok "boot mode: gaming — after reboot only ALWAYS_ON runs; 'grave developer' wakes the rest" ;;
     *) say "usage: grave bootmode [developer|gaming]"; exit 1 ;;
   esac
@@ -314,7 +350,7 @@ cmd_logs() {
     system)     sudo journalctl -p warning -n 100 -f ;;
     grave)      tail -n 50 -f "$LOG_FILE" ;;
     agent)      tail -n 100 -f "$GRAVE_ROOT"/agents/"${2:?agent name}"/session-*.log ;;
-    *)          sudo docker logs --tail 100 -f "$target" 2>/dev/null || \
+    *)          dk logs --tail 100 -f "$target" 2>/dev/null || \
                 sudo journalctl -u "$target" -n 100 -f ;;
   esac
 }
@@ -334,7 +370,11 @@ cmd_doctor() {
   check "tailscaled running"            systemctl is-active --quiet tailscaled
   check "tailscale logged in"           tailscale status --peers=false
   check "sshd running"                  systemctl is-active --quiet sshd
-  check "firewall active"               firewall_active
+  if [[ "${CHECK_FIREWALL:-1}" == 1 ]]; then
+    check "firewall active"             firewall_active
+  else
+    say "  ${YLW}– firewall check relaxed (LAN kept open for gaming; boundary is 127.0.0.1 + tailnet)${RST}"
+  fi
   check "ssh password auth disabled"    bash -c "sudo sshd -T | grep -qi 'passwordauthentication no'"
   if [[ "${CHECK_SLEEP_MASKED:-0}" == 1 ]]; then
     check "sleep targets masked"        bash -c '[[ $(systemctl is-enabled sleep.target) == masked ]]'
@@ -348,9 +388,19 @@ cmd_doctor() {
   if [[ "${CHECK_SNAPPER:-0}" == 1 ]]; then
     check "snapper config for GRAVE_ROOT" sudo snapper -c "${SNAPPER_CONFIG:-srv}" list
   fi
-  if systemctl is-active --quiet docker; then
-    check "docker healthy"              sudo docker info
-    check "no LAN-exposed containers"   bash -c '! sudo docker ps --format "{{.Ports}}" | grep -E "0\.0\.0\.0|\[::\]"'
+  if [[ "${CHECK_IMMUTABLE_ROOT:-0}" == 1 ]]; then
+    # On an image-based rootfs (SteamOS) an OS update replaces /usr. Everything
+    # we rely on must therefore live off the root mount, or it silently vanishes.
+    check "GRAVE_ROOT off the immutable root mount" \
+      bash -c "[[ \"\$(findmnt -no TARGET --target '$GRAVE_ROOT')\" != / ]]"
+    check "durable toolchain under \$HOME (Homebrew)" command -v brew
+    check "Docker is rootless (survives OS updates)" \
+      bash -c "[[ '${DOCKER_ROOTLESS:-0}' == 1 ]]"
+  fi
+  if dkctl is-active --quiet docker; then
+    check "docker healthy"              dk info
+    # dk is a shell function, so expand the real argv for the piped subshell
+    check "no LAN-exposed containers"   bash -c "! ${_DOCKER[*]} ps --format '{{.Ports}}' | grep -E '0\.0\.0\.0|\[::\]'"
   else
     say "  ${YLW}– docker stopped (gaming mode?)${RST}"
   fi
@@ -395,10 +445,10 @@ cmd_backup() {
   done
   [[ -d "$GRAVE_ROOT/agents/t3code" ]] && tar -C "$GRAVE_ROOT/agents" -czf "$dest/configs/t3code-state.tar.gz" t3code && ok "t3code state"
 
-  if systemctl is-active --quiet docker; then
+  if dkctl is-active --quiet docker; then
     local vol
-    for vol in $(sudo docker volume ls -q | grep -vE '^[0-9a-f]{64}$'); do
-      sudo docker run --rm -v "$vol":/data:ro -v "$dest/volumes":/backup alpine \
+    for vol in $(dk volume ls -q | grep -vE '^[0-9a-f]{64}$'); do
+      dk run --rm -v "$vol":/data:ro -v "$dest/volumes":/backup alpine \
         tar -czf "/backup/$vol.tar.gz" -C /data . && ok "volume $vol"
     done
   else
@@ -429,8 +479,8 @@ cmd_restore() {
   case "${2:-}" in
     volume)
       local vol="${3:?volume name}"
-      sudo docker volume create "$vol" >/dev/null
-      sudo docker run --rm -v "$vol":/data -v "$dest/volumes":/backup:ro alpine \
+      dk volume create "$vol" >/dev/null
+      dk run --rm -v "$vol":/data -v "$dest/volumes":/backup:ro alpine \
         sh -c "cd /data && tar -xzf /backup/$vol.tar.gz"
       ok "volume $vol restored from $ts" ;;
     repo)

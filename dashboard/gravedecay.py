@@ -91,7 +91,7 @@ def save_settings(data):
     return merged
 
 
-GRAVE = "/usr/local/bin/grave"
+GRAVE = os.environ.get("GRAVEDECAY_GRAVE", "/usr/local/bin/grave")
 # grave runs AS THE SERVICE USER (it sudo -n's internally where needed):
 # under sudo it would be root, whose tmux lives in /tmp/tmux-0 — freeze/kill
 # of agent sessions would silently no-op.

@@ -13,6 +13,19 @@ RestartSec=3
 SyslogIdentifier=gravedecay
 Environment=GRAVE_ROOT=@GRAVE_ROOT@
 Environment=GRAVEDECAY_PORT=@DASH_PORT@
+# The dashboard shells out to docker/sensors/tmux/git — systemd gives a service
+# a minimal PATH, so prepend the durable toolchain (@TOOLPATH@ = Homebrew +
+# rootless-docker bins under $HOME; empty on package-manager hosts).
+Environment=PATH=@TOOLPATH@/usr/local/bin:/usr/bin:/bin
+# Rootless Docker lives on a per-user socket; empty on a system-docker host.
+Environment=DOCKER_HOST=@DOCKER_HOST@
+# Which systemd units the System tab reports. Rootless docker is a --user unit,
+# not a system one, so raise.sh drops it here (the Docker panel still shows
+# container state via `docker ps`).
+Environment=GRAVEDECAY_UNITS=@UNITS@
+# Path to the grave CLI — /usr/local/bin on normal hosts, ~/.local/bin on an
+# immutable rootfs (SteamOS) where /usr/local is read-only.
+Environment=GRAVEDECAY_GRAVE=@GRAVE_BIN@
 # Comma-separated Tailscale logins allowed to press action buttons.
 # Empty = tailnet viewers are read-only. Add yours in a drop-in or here.
 Environment=GRAVEDECAY_ALLOWED_USERS=@ALLOWED_USERS@
