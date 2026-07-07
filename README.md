@@ -139,9 +139,16 @@ Everything on the box is one tap from there, all same-origin so navigation
 never leaves the installed app. Terminal-styled (phosphor green, TUI frames,
 scanlines), split into **🛠️ Work** and **📟 System** tabs:
 
-**Launcher** — tiles for T3 Code, Terminal, Claude, Codex, GitHub, plus any
-custom tiles you add; each tile opens in-PWA or in a new tab (your choice).
-Inside T3, a tiny corner pill (installed-app mode only) brings you back.
+**Launcher** — tiles for T3 Code, Terminal, Claude, Codex, GitHub, a built-in
+**📁 Files** manager, plus any custom tiles you add; each tile opens in-PWA,
+in a modal over the dashboard, or in a new tab (your choice — except T3, which
+always takes the full window). Inside T3, a tiny corner pill (installed-app
+mode only) brings you back.
+
+**📁 Files** — a lightweight file manager modal: browse, upload (drag-drop or
+picker), download, rename, delete, and make folders under the appliance root,
+straight from the browser — handy for copying a project onto the box. Jailed
+to `$GRAVE_ROOT` with the secret store carved out; see `docs/SECURITY.md`.
 
 **Work tab**
 - 🔀 **Pull requests** — open PRs across your repos, 👀 marker where your
@@ -157,7 +164,10 @@ Inside T3, a tiny corner pill (installed-app mode only) brings you back.
 buttons, services, docker containers, journal errors.
 
 **⚙️ Settings** (identity-gated, like all actions) — show/hide/reorder
-widgets, manage tiles, refresh rate, **one-tap T3 pairing tokens** (mints a
+widgets, manage tiles (show, open-in-modal, open-in-new-tab per tile, and
+⚡ **skip-perms** for the Claude/Codex tiles — launches the agent with all
+permission/approval gates off; power-tool for this single-human box, see
+`docs/SECURITY.md`), refresh rate, **one-tap T3 pairing tokens** (mints a
 15-minute token + ready `/pair` link for enrolling a new phone/laptop),
 re-auth Claude/Codex/GitHub (opens the terminal running the real login flow),
 Linear API key.
@@ -173,6 +183,13 @@ lives on; browser, SSH, and phone all reach the *same* session. The Claude and
 Codex tiles drop you straight into persistent CLI sessions. TUIs render
 pixel-correct; on iOS the soft keyboard lacks Esc/Ctrl, so treat the phone as
 a quick-look surface (T3 is the phone-friendly way to drive agents).
+
+**Copying text:** `tmux` runs with `mouse on`, so a drag is a tmux selection
+— tmux copies it to the system clipboard over OSC 52 (works in ttyd/xterm.js
+on the HTTPS tailnet). If a drag doesn't land on your clipboard, hold
+**Shift** while dragging to select natively in the browser, then Cmd/Ctrl+C —
+that always works. (Existing boxes: `raise.sh` won't clobber an existing
+`config/tmux.conf`; re-copy it from the repo to pick up the clipboard config.)
 
 ## Game mode
 

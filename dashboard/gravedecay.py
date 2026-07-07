@@ -27,6 +27,7 @@ import socket
 import subprocess
 import threading
 import time
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -37,6 +38,19 @@ GRAVE_ROOT = os.environ.get("GRAVE_ROOT", "/srv/dev")
 BASE = os.environ.get("GRAVEDECAY_BASE", "/grave").rstrip("/")
 ICON_PATH = os.environ.get("GRAVEDECAY_ICON", os.path.join(GRAVE_ROOT, "config", "gravedecay.png"))
 HOST = socket.gethostname()
+# File manager: browse / upload / edit files from the browser, as a modal in
+# the dashboard. Confined to the appliance root — every request path is
+# realpath'd and prefix-checked against FILES_ROOT (see _safe_path), so `..`
+# and symlinks that escape the tree are refused. Reads are gated to
+# ALLOWED_USERS exactly like writes: listing the filesystem is sensitive.
+FILES_ROOT = os.path.realpath(GRAVE_ROOT)
+# The appliance's OWN secret store (600-mode .env files systemd reads:
+# Linear key, t3.env, …) is hidden from the file manager even though it sits
+# inside the jail — a browser button that can read or overwrite these is a
+# footgun. This is a path guard, NOT a "*.env" blanket: repo .env files under
+# repos/ stay fully editable, since projects get copied across boxes.
+FILES_DENY = (os.path.join(FILES_ROOT, "config", "secrets"),)
+MAX_UPLOAD = 2 * 1024 * 1024 * 1024   # 2 GiB per uploaded file
 # Tailscale serve injects Tailscale-User-Login for tailnet requests; POSTs
 # (actions) are restricted to these identities. Requests with no header can
 # only come from localhost (127.0.0.1 bind) and are trusted.
@@ -56,6 +70,8 @@ DEFAULT_SETTINGS = {
     "hidden_panels": [],   # panel ids to hide
     "hidden_apps": [],     # launcher tile names to hide
     "newtab_apps": [],     # tile names that open in a new tab instead of in-PWA
+    "modal_apps": [],      # tile names that open in an iframe modal on the dashboard
+    "yolo_apps": [],       # claude/codex tiles launched with permission gates OFF
     "custom_apps": [],     # extra tiles: [{"name": ..., "url": ...}]
     "poll_ms": 5000,       # dashboard refresh interval
 }
@@ -682,6 +698,78 @@ def state(headers):
     }
 
 
+# ---------- file manager ----------
+
+def _safe_path(rel):
+    """Resolve a client-supplied relative path inside the FILES_ROOT jail.
+    Returns an absolute realpath, or None if it escapes the root (via `..` or a
+    symlink) or lands in a denied subtree (the appliance's secret store).
+    realpath resolves symlinks, so a link pointing outside the tree is refused
+    — that is deliberate: it also means the repos/gravedecay recovery symlink
+    (→ ~/dev/gravedecay) is invisible here; edit that repo via git/T3."""
+    rel = (rel or "").replace("\\", "/").lstrip("/")
+    full = os.path.realpath(os.path.join(FILES_ROOT, rel))
+    if full != FILES_ROOT and not full.startswith(FILES_ROOT + os.sep):
+        return None
+    for deny in FILES_DENY:
+        if full == deny or full.startswith(deny + os.sep):
+            return None
+    return full
+
+
+def _clean_name(name):
+    """A single path component, safe to join onto a directory. No separators,
+    no traversal, no NUL; capped at 255 bytes like most filesystems."""
+    name = os.path.basename((name or "").strip())
+    if name in ("", ".", "..") or "/" in name or "\x00" in name:
+        return ""
+    return name[:255]
+
+
+def fs_op(data):
+    """Mutating file ops (mkdir / rename / delete), each re-jailed via
+    _safe_path so a crafted payload can't reach outside FILES_ROOT."""
+    op = str(data.get("op", ""))
+    rel = str(data.get("path", ""))
+    full = _safe_path(rel)
+    if full is None:
+        return {"ok": False, "output": "path not allowed"}
+    try:
+        if op == "mkdir":
+            if not os.path.isdir(full):
+                return {"ok": False, "output": "no such directory"}
+            name = _clean_name(data.get("name", ""))
+            if not name:
+                return {"ok": False, "output": "bad folder name"}
+            target = _safe_path(os.path.join(rel, name))
+            if target is None:
+                return {"ok": False, "output": "path not allowed"}
+            os.mkdir(target)
+            return {"ok": True, "output": f"created {name}/"}
+        if op == "delete":
+            if full == FILES_ROOT:
+                return {"ok": False, "output": "refusing to delete the root"}
+            if os.path.isdir(full) and not os.path.islink(full):
+                shutil.rmtree(full)
+            else:
+                os.remove(full)
+            return {"ok": True, "output": "deleted"}
+        if op == "rename":
+            if full == FILES_ROOT:
+                return {"ok": False, "output": "cannot rename the root"}
+            name = _clean_name(data.get("name", ""))
+            if not name:
+                return {"ok": False, "output": "bad name"}
+            target = _safe_path(os.path.join(os.path.dirname(rel), name))
+            if target is None:
+                return {"ok": False, "output": "path not allowed"}
+            os.rename(full, target)
+            return {"ok": True, "output": f"renamed to {name}"}
+    except OSError as e:
+        return {"ok": False, "output": str(e)}
+    return {"ok": False, "output": "unknown op"}
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "gravedecay/1"
     # HTTP/1.1: _send always sets Content-Length (keep-alive works), and the
@@ -699,6 +787,118 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
+
+    def _forbidden(self):
+        """True (and a 403 already sent) if the tailnet viewer isn't allowed.
+        Localhost has no header and is always trusted. Used to gate the file
+        manager's GET reads too — listing the filesystem is sensitive, unlike
+        the read-only status GETs which any tailnet viewer may see."""
+        viewer = self.headers.get("Tailscale-User-Login")
+        if viewer is not None and viewer not in ALLOWED_USERS:
+            self._send(403, json.dumps({
+                "ok": False,
+                "output": f"forbidden for {viewer} — add to GRAVEDECAY_ALLOWED_USERS"}))
+            return True
+        return False
+
+    def _query(self, key, default=""):
+        qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+        return urllib.parse.parse_qs(qs).get(key, [default])[0]
+
+    def _files_list(self):
+        full = _safe_path(self._query("path"))
+        if full is None or not os.path.isdir(full):
+            self._send(404, json.dumps({"ok": False, "output": "no such directory"}))
+            return
+        entries = []
+        try:
+            names = os.listdir(full)
+        except OSError as e:
+            self._send(500, json.dumps({"ok": False, "output": str(e)}))
+            return
+        for name in names:
+            fp = os.path.join(full, name)
+            # hide denied subtrees and symlinks that escape the jail
+            if _safe_path(os.path.relpath(fp, FILES_ROOT)) is None:
+                continue
+            try:
+                st = os.stat(fp)
+            except OSError:
+                continue
+            isdir = os.path.isdir(fp)
+            entries.append({"name": name, "type": "dir" if isdir else "file",
+                            "size": 0 if isdir else st.st_size,
+                            "mtime": int(st.st_mtime), "link": os.path.islink(fp)})
+        entries.sort(key=lambda e: (e["type"] != "dir", e["name"].lower()))
+        rel = os.path.relpath(full, FILES_ROOT)
+        self._send(200, json.dumps({"ok": True, "path": "" if rel == "." else rel,
+                                    "root": os.path.basename(FILES_ROOT) or "/",
+                                    "entries": entries}))
+
+    def _files_download(self):
+        full = _safe_path(self._query("path"))
+        if full is None or not os.path.isfile(full):
+            self._send(404, json.dumps({"ok": False, "output": "no such file"}))
+            return
+        try:
+            size = os.path.getsize(full)
+            f = open(full, "rb")
+        except OSError as e:
+            self._send(500, json.dumps({"ok": False, "output": str(e)}))
+            return
+        # ASCII-safe filename for the header; non-ascii names still download,
+        # just with the fallback label (the browser's own Save dialog wins).
+        safe = os.path.basename(full).encode("ascii", "ignore").decode() or "download"
+        safe = safe.replace('"', "")
+        with f:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(size))
+            self.send_header("Content-Disposition", f'attachment; filename="{safe}"')
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            shutil.copyfileobj(f, self.wfile)
+
+    def _files_upload(self):
+        """Single file per request: bytes are the raw body, target dir + name
+        ride in the query string. Avoids multipart parsing (cgi is gone in
+        3.13+) and streams straight to disk instead of buffering in RAM."""
+        rel = self._query("path")
+        d = _safe_path(rel)
+        if d is None or not os.path.isdir(d):
+            self._send(404, json.dumps({"ok": False, "output": "no such directory"}))
+            return
+        name = _clean_name(self._query("name"))
+        if not name:
+            self._send(400, json.dumps({"ok": False, "output": "bad filename"}))
+            return
+        dest = _safe_path(os.path.join(rel, name))
+        if dest is None:
+            self._send(400, json.dumps({"ok": False, "output": "path not allowed"}))
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        if length > MAX_UPLOAD:
+            self._send(413, json.dumps({"ok": False, "output": "file too large"}))
+            return
+        tmp = dest + ".part"
+        try:
+            remaining = length
+            with open(tmp, "wb") as out:
+                while remaining > 0:
+                    chunk = self.rfile.read(min(remaining, 1 << 20))
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    remaining -= len(chunk)
+            os.replace(tmp, dest)
+        except OSError as e:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            self._send(500, json.dumps({"ok": False, "output": str(e)}))
+            return
+        self._send(200, json.dumps({"ok": True, "output": f"uploaded {name}"}))
 
     def _route(self):
         """Path with the optional BASE mount prefix stripped; None if a
@@ -800,6 +1000,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, '{"ok":true}')
         elif p == "/api/state":
             self._send(200, json.dumps(state(self.headers)))
+        elif p == "/api/files":
+            if self._forbidden():
+                return
+            self._files_list()
+        elif p == "/api/download":
+            if self._forbidden():
+                return
+            self._files_download()
         elif p == "/":
             boot = json.dumps(state(self.headers)).replace("</", "<\\/")
             self._send(200, PAGE.replace("/*BOOT*/null", boot), "text/html; charset=utf-8")
@@ -824,11 +1032,19 @@ class Handler(BaseHTTPRequestHandler):
                 "ok": False,
                 "output": f"forbidden for {viewer} — add to GRAVEDECAY_ALLOWED_USERS"}))
             return
+        # Upload is a raw-body PUT-style POST — handle it BEFORE the JSON parse
+        # below would try to json.loads() a multi-gigabyte file body.
+        if p == "/api/upload":
+            self._files_upload()
+            return
         try:
             length = int(self.headers.get("Content-Length", 0))
             data = json.loads(self.rfile.read(length)) if length else {}
         except ValueError:
             self._send(400, json.dumps({"ok": False, "output": "bad payload"}))
+            return
+        if p == "/api/fs":
+            self._send(200, json.dumps(fs_op(data)))
             return
         if p == "/api/settings":
             try:
@@ -1074,6 +1290,31 @@ body.gaming #foot{display:none}
 /* action button row (inside the Actions panel) */
 .actions{display:flex;flex-wrap:wrap;gap:8px}
 @media(max-width:640px){.actions{display:grid;grid-template-columns:1fr 1fr}}
+/* file manager */
+#files-box{max-width:720px}
+#files-crumb{margin:2px 0 8px;font-size:12px;word-break:break-all}
+#files-crumb a{color:var(--accent-soft);cursor:pointer}
+#files-drop{border:1px solid var(--hairline);max-height:56vh;overflow-y:auto;
+  -webkit-overflow-scrolling:touch}
+#files-drop.drag{outline:2px dashed var(--accent);outline-offset:-4px;background:var(--surface)}
+.frow{display:flex;align-items:center;gap:8px;padding:7px 9px;
+  border-bottom:1px solid var(--hairline)}
+.frow:last-child{border-bottom:0}
+.frow[data-type="dir"]{cursor:pointer}
+.frow:hover{background:var(--surface)}
+.frow .fname{flex:1;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.frow[data-type="dir"] .fname{color:var(--accent-soft)}
+.frow .fmeta{color:var(--muted);font-size:11px;min-width:44px;text-align:right}
+.frow .mini{min-height:26px;padding:2px 7px;font-size:12px}
+#files-empty{padding:14px;color:var(--muted);text-align:center}
+/* app iframe modal — a small app opened over the dashboard (never T3) */
+#appframe-box{max-width:1120px;width:96vw;height:88vh;margin:4vh auto;padding:0;
+  display:flex;flex-direction:column;overflow:hidden}
+#appframe-bar{display:flex;align-items:center;gap:8px;padding:8px 10px;
+  border-bottom:1px solid var(--ring);flex:none}
+#appframe-title{flex:1;color:var(--title);font-size:12px;font-weight:700;
+  letter-spacing:.06em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#appframe-if{flex:1;width:100%;border:0;background:var(--page)}
 </style></head><body>
 <div id="topcover"></div>
 <div class="topbar">
@@ -1099,7 +1340,7 @@ body.gaming #foot{display:none}
     style="position:absolute;top:10px;right:10px;z-index:2">✕</button>
   <h2 style="color:var(--ink);font-size:15px;margin-bottom:10px">⚙️ Settings</h2>
 
-  <div class="sethead sec-toggle" data-sec="sec-apps">▸ Launcher tiles — 👁 show · ↗ new tab</div>
+  <div class="sethead sec-toggle" data-sec="sec-apps">▸ Launcher tiles — 👁 show · ⚡ skip-perms · ▢ modal · ↗ new tab</div>
   <div id="sec-apps" style="display:none">
     <div id="set-apps"></div>
     <div class="setrow">
@@ -1206,6 +1447,34 @@ body.gaming #foot{display:none}
     <div class="setrow"><button id="throttle-close">Got it</button></div>
   </div>
 </div>
+<div class="overlay" id="files-dlg" style="display:none">
+  <div class="dlg" id="files-box">
+    <button class="mini xbtn" id="files-x" title="close (Esc)" aria-label="close"
+      style="position:absolute;top:10px;right:10px;z-index:2">✕</button>
+    <h2 style="color:var(--ink);font-size:15px;margin-bottom:6px">📁 Files</h2>
+    <div id="files-crumb" class="dim2"></div>
+    <div id="files-drop"><div id="files-list"></div></div>
+    <div class="setrow" style="margin-top:10px">
+      <button class="mini" id="files-up">⬆ up</button>
+      <button class="mini" id="files-mkdir">📂 new folder</button>
+      <label class="mini abtn" style="cursor:pointer">⬆ upload<input type="file"
+        id="files-upload" multiple style="display:none"></label>
+      <span class="setlabel dim2" id="files-msg"></span>
+    </div>
+    <p class="dim2" style="font-size:11px;margin-top:4px">drag files onto the list to upload · confined to the appliance root</p>
+  </div>
+</div>
+<div class="overlay" id="appframe" style="display:none">
+  <div class="dlg" id="appframe-box">
+    <div id="appframe-bar">
+      <span id="appframe-title"></span>
+      <a id="appframe-open" class="mini abtn" target="_blank" rel="noopener"
+        title="open in a full window">↗ full</a>
+      <button class="mini xbtn" id="appframe-x" title="close (Esc)" aria-label="close">✕</button>
+    </div>
+    <iframe id="appframe-if" src="about:blank" title="app"></iframe>
+  </div>
+</div>
 <div id="panels">
   <div class="panel" data-panel="prs"><h2>🔀 Pull requests</h2><table id="prs"></table></div>
   <div class="panel" data-panel="ci"><h2>🏗️ CI status</h2><table id="ci"></table></div>
@@ -1276,6 +1545,9 @@ function statusDot(state){
 // viewed on a bare port (localhost:4712) rather than mounted at /grave/
 const appUrl=u=>(location.port&&location.port!=='443'&&u.startsWith('/'))
   ?`https://${location.hostname}${u}`:u;
+// 'claude' or 'codex' if this tile launches that agent CLI via /term/?arg=…,
+// else null. Gates the ⚡ skip-perms toggle and the -yolo session rewrite.
+const agentArg=u=>{const m=/[?&]arg=(claude|codex)(?=$|&)/.exec(u||'');return m?m[1]:null;};
 const PANEL_NAMES={prs:'Pull requests',ci:'CI status',
   linear:'Linear issues',usage:'Agent usage',tmux:'Agent sessions',repos:'Repos',
   stats:'Stats tiles',actions:'Actions',services:'Services',docker:'Docker',
@@ -1330,10 +1602,25 @@ function render(s){
   if(modeChanged)schedule();
   const k=JSON.stringify([cfg.panel_order,cfg.hidden_panels,activeTab]);
   if(k!==layoutKey){layoutKey=k;applyLayout();}
-  $('apps').innerHTML=allApps().filter(a=>!cfg.hidden_apps.includes(a.name)).map(a=>
-    `<a class="app" href="${esc(appUrl(a.url))}"${
-      (cfg.newtab_apps||[]).includes(a.name)?' target="_blank" rel="noopener"':''
-    }>${esc(a.name)}</a>`).join('');
+  // 📁 Files is a built-in tile: opens the native file-manager modal.
+  const tiles=[{name:'📁 Files',url:FILES_URL}].concat(allApps());
+  $('apps').innerHTML=tiles.filter(a=>!cfg.hidden_apps.includes(a.name)).map(a=>{
+    if(a.url===FILES_URL)
+      return `<a class="app" href="#files" data-files="1">${esc(a.name)}</a>`;
+    // ⚡ skip-perms: a claude/codex /term tile launched with gates off routes
+    // to the -yolo webterm session (which adds the dangerous flag).
+    let url=a.url;
+    if(agentArg(a.url)&&(cfg.yolo_apps||[]).includes(a.name))
+      url=a.url.replace(/([?&]arg=)(claude|codex)(?=$|&)/,'$1$2-yolo');
+    // modal mode is offered for every tile EXCEPT T3 (url '/'), which needs
+    // the full window; new-tab always wins if both somehow got set.
+    const newtab=(cfg.newtab_apps||[]).includes(a.name);
+    const modal=!newtab&&a.url!=='/'&&(cfg.modal_apps||[]).includes(a.name);
+    return `<a class="app" href="${esc(appUrl(url))}"${
+      newtab?' target="_blank" rel="noopener"':''}${
+      modal?` data-modal="${esc(url)}" data-modal-name="${esc(a.name)}"`:''
+    }>${esc(a.name)}</a>`;
+  }).join('');
   $('mode').textContent=(s.mode==='developer'?'💻 developer':'🎮 gaming');
   $('meta').textContent=`up ${fmtUp(s.system.uptime_s)}`;
   // the mode you're already in isn't a button you can press
@@ -1518,6 +1805,7 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'){
   closeConsole();$('game-confirm').style.display='none';
   $('settings-panel').style.display='none';$('kill-dlg').style.display='none';
   $('throttle-dlg').style.display='none';
+  closeFiles();closeAppModal();
   unlockBody();}});
 $('console-close').onclick=()=>{$('console').style.display='none'};
 // ---------- gaming confirm dialog ----------
@@ -1603,13 +1891,31 @@ function buildSettings(existing){
   const draftApps=envApps.concat(draft.custom_apps||[]);
   ap.innerHTML=`<div class="setrow" style="color:var(--muted)">
       <span style="width:16px">👁</span><span class="setlabel">tile</span>
+      <span title="claude/codex only: run with permission gates OFF">⚡</span>
+      <span title="open in a modal on the dashboard">▢ modal</span>
       <span title="open in a new tab instead of inside the PWA">↗ new tab</span></div>`
     +draftApps.map((a,i)=>`<div class="setrow">
     <input type="checkbox" data-app-vis="${esc(a.name)}" ${draft.hidden_apps.includes(a.name)?'':'checked'}>
     <span class="setlabel">${esc(a.name)} <span style="color:var(--muted)">${esc(a.url)}</span></span>
+    ${agentArg(a.url)
+      ?`<label title="DANGER: run ${agentArg(a.url)} with all permission/approval gates off (claude --dangerously-skip-permissions / codex --dangerously-bypass-approvals-and-sandbox)"><input type="checkbox" data-app-yolo="${esc(a.name)}" ${(draft.yolo_apps||[]).includes(a.name)?'checked':''}> ⚡</label>`
+      :`<span class="dim2" title="only claude/codex tiles">·</span>`}
+    ${a.url==='/'
+      ?`<span class="dim2" title="T3 needs the full window — no modal">▢ —</span>`
+      :`<label title="open in a modal on the dashboard"><input type="checkbox" data-app-modal="${esc(a.name)}" ${(draft.modal_apps||[]).includes(a.name)?'checked':''}> ▢</label>`}
     <label title="open in a new tab"><input type="checkbox" data-app-newtab="${esc(a.name)}" ${(draft.newtab_apps||[]).includes(a.name)?'checked':''}> ↗</label>
     ${i>=envApps.length?`<button class="mini" data-del-app="${i-envApps.length}">✕</button>`:''}
   </div>`).join('');
+  // modal and new-tab are mutually exclusive per tile — checking one clears the
+  // other (matched by name in JS to dodge attribute-selector escaping on emoji)
+  ap.querySelectorAll('[data-app-modal]').forEach(c=>c.addEventListener('change',()=>{
+    if(!c.checked)return;
+    ap.querySelectorAll('[data-app-newtab]').forEach(n=>{
+      if(n.dataset.appNewtab===c.dataset.appModal)n.checked=false;});}));
+  ap.querySelectorAll('[data-app-newtab]').forEach(c=>c.addEventListener('change',()=>{
+    if(!c.checked)return;
+    ap.querySelectorAll('[data-app-modal]').forEach(m=>{
+      if(m.dataset.appModal===c.dataset.appNewtab)m.checked=false;});}));
   ap.querySelectorAll('[data-del-app]').forEach(b=>b.onclick=()=>{
     syncVis();draft.custom_apps.splice(+b.dataset.delApp,1);buildSettings(draft);});
   $('set-poll').value=String(draft.poll_ms);
@@ -1622,6 +1928,10 @@ function syncVis(){
     .filter(c=>!c.checked).map(c=>c.dataset.panelVis);
   draft.hidden_apps=[...document.querySelectorAll('[data-app-vis]')]
     .filter(c=>!c.checked).map(c=>c.dataset.appVis);
+  draft.modal_apps=[...document.querySelectorAll('[data-app-modal]')]
+    .filter(c=>c.checked).map(c=>c.dataset.appModal);
+  draft.yolo_apps=[...document.querySelectorAll('[data-app-yolo]')]
+    .filter(c=>c.checked).map(c=>c.dataset.appYolo);
   draft.newtab_apps=[...document.querySelectorAll('[data-app-newtab]')]
     .filter(c=>c.checked).map(c=>c.dataset.appNewtab);
   draft.poll_ms=+$('set-poll').value;
@@ -1765,6 +2075,107 @@ $('save-set').onclick=async()=>{
     else $('set-msg').textContent=j.output||'save failed';
   }catch(e){$('set-msg').textContent='save failed: '+e;}
 };
+// ---------- file manager + app-in-modal ----------
+const FILES_URL='grave:files';
+let filesPath='';
+// launcher clicks: 📁 Files opens the native modal, modal-tiles open an iframe
+$('apps').addEventListener('click',e=>{
+  const a=e.target.closest('a');if(!a)return;
+  if(a.dataset.files){e.preventDefault();openFiles();return;}
+  if(a.dataset.modal){e.preventDefault();openAppModal(a.dataset.modal,a.dataset.modalName);}
+});
+function fmtSize(n){return n<1024?n+' B':n<1048576?(n/1024).toFixed(0)+' K':(n/1048576).toFixed(1)+' M';}
+function joinPath(a,b){return a?a+'/'+b:b;}
+function openFiles(){$('files-dlg').style.display='block';lockBody();loadFiles('');}
+function closeFiles(){$('files-dlg').style.display='none';unlockBody();}
+async function fsOp(body){
+  const r=await fetch('api/fs',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  return r.json();
+}
+async function loadFiles(path){
+  $('files-msg').textContent='';
+  let j;
+  try{const r=await fetch('api/files?path='+encodeURIComponent(path));j=await r.json();}
+  catch(e){$('files-msg').textContent='load failed: '+e;return;}
+  if(!j.ok){$('files-msg').textContent=j.output||'load failed';return;}
+  filesPath=j.path;
+  $('files-up').disabled=!j.path;
+  // breadcrumb: root + each ancestor is clickable
+  let acc='',crumb=`<a data-cd="">${esc(j.root)}</a>`;
+  (j.path?j.path.split('/'):[]).forEach(seg=>{
+    acc=acc?acc+'/'+seg:seg;crumb+=' / <a data-cd="'+esc(acc)+'">'+esc(seg)+'</a>';});
+  $('files-crumb').innerHTML=crumb;
+  $('files-list').innerHTML=j.entries.length?j.entries.map(en=>{
+    const icon=en.type==='dir'?(en.link?'🔗':'📁'):'📄';
+    return `<div class="frow" data-type="${en.type}" data-name="${esc(en.name)}">
+      <span>${icon}</span><span class="fname">${esc(en.name)}</span>
+      <span class="fmeta">${en.type==='dir'?'':fmtSize(en.size)}</span>
+      ${en.type==='file'?`<a class="mini" data-dl="${esc(en.name)}" title="download">⬇</a>`:''}
+      <button class="mini" data-ren="${esc(en.name)}" title="rename">✏️</button>
+      <button class="mini" data-rm="${esc(en.name)}" title="delete">🗑</button>
+    </div>`;}).join(''):'<div id="files-empty">empty folder</div>';
+}
+$('files-crumb').addEventListener('click',e=>{
+  const a=e.target.closest('[data-cd]');if(!a)return;
+  e.preventDefault();loadFiles(a.dataset.cd);});
+$('files-up').onclick=()=>{if(!filesPath)return;
+  const i=filesPath.lastIndexOf('/');loadFiles(i<0?'':filesPath.slice(0,i));};
+$('files-mkdir').onclick=async()=>{
+  const n=prompt('New folder name:');if(!n)return;
+  const j=await fsOp({op:'mkdir',path:filesPath,name:n});
+  $('files-msg').textContent=j.output||'';if(j.ok)loadFiles(filesPath);};
+$('files-list').addEventListener('click',async e=>{
+  const dl=e.target.closest('[data-dl]');
+  if(dl){const n=dl.dataset.dl,a=document.createElement('a');
+    a.href='api/download?path='+encodeURIComponent(joinPath(filesPath,n));a.download=n;
+    document.body.appendChild(a);a.click();a.remove();return;}
+  const ren=e.target.closest('[data-ren]');
+  if(ren){const n=ren.dataset.ren,nn=prompt('Rename to:',n);
+    if(!nn||nn===n)return;
+    const j=await fsOp({op:'rename',path:joinPath(filesPath,n),name:nn});
+    $('files-msg').textContent=j.output||'';if(j.ok)loadFiles(filesPath);return;}
+  const rm=e.target.closest('[data-rm]');
+  if(rm){const n=rm.dataset.rm;
+    if(!confirm('Delete "'+n+'"? This cannot be undone.'))return;
+    const j=await fsOp({op:'delete',path:joinPath(filesPath,n)});
+    $('files-msg').textContent=j.output||'';if(j.ok)loadFiles(filesPath);return;}
+  const row=e.target.closest('.frow');
+  if(row&&row.dataset.type==='dir')loadFiles(joinPath(filesPath,row.dataset.name));
+});
+async function uploadFiles(list){
+  for(const f of list){
+    $('files-msg').textContent='uploading '+f.name+'…';
+    let j;
+    try{const r=await fetch('api/upload?path='+encodeURIComponent(filesPath)
+        +'&name='+encodeURIComponent(f.name),{method:'POST',body:f});j=await r.json();}
+    catch(e){$('files-msg').textContent='upload failed: '+e;return;}
+    if(!j.ok){$('files-msg').textContent=j.output||'upload failed';return;}
+  }
+  $('files-msg').textContent='uploaded ✓';loadFiles(filesPath);
+}
+$('files-upload').addEventListener('change',e=>{
+  if(e.target.files.length)uploadFiles(e.target.files);e.target.value='';});
+$('files-x').onclick=closeFiles;
+$('files-dlg').addEventListener('click',e=>{if(e.target.id==='files-dlg')closeFiles();});
+{const drop=$('files-drop');
+ ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{
+   e.preventDefault();drop.classList.add('drag');}));
+ drop.addEventListener('dragleave',e=>{if(e.target===drop)drop.classList.remove('drag');});
+ drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('drag');
+   if(e.dataTransfer.files.length)uploadFiles(e.dataTransfer.files);});}
+// app-in-modal (iframe over the dashboard) — never used for T3
+function openAppModal(url,name){
+  const full=appUrl(url);
+  $('appframe-title').textContent=name||url;
+  $('appframe-open').href=full;
+  $('appframe-if').src=full;
+  $('appframe').style.display='block';lockBody();
+}
+function closeAppModal(){
+  $('appframe').style.display='none';$('appframe-if').src='about:blank';unlockBody();}
+$('appframe-x').onclick=closeAppModal;
+$('appframe').addEventListener('click',e=>{if(e.target.id==='appframe')closeAppModal();});
 // ---------- boot ----------
 let timer=null;
 function schedule(){clearInterval(timer);

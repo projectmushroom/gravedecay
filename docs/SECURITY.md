@@ -41,6 +41,46 @@ your user for **anyone who can reach it** — ttyd does not check the
 you already extend via Tailscale SSH; on a shared tailnet, restrict who can
 reach this node with Tailscale ACLs or disable `gravedecay-term`.
 
+## The file manager
+
+The dashboard's 📁 Files modal browses, uploads, downloads, and edits files
+so you can move projects onto the box from a browser. It is confined:
+
+- **Jailed to `$GRAVE_ROOT`.** Every request path is `realpath`'d and
+  prefix-checked against the root; `..` and symlinks that resolve outside the
+  tree are refused (so the `repos/gravedecay` recovery symlink is invisible
+  here — edit that repo over git/T3).
+- **Gated like the action buttons.** Reads *and* writes require
+  `Tailscale-User-Login ∈ GRAVEDECAY_ALLOWED_USERS`; listing a filesystem is
+  as sensitive as changing it. Localhost (no header) stays trusted.
+- **The appliance's own secret store is hidden.** `$GRAVE_ROOT/config/secrets/`
+  is excluded from listing, download, and mutation even though it sits inside
+  the jail. This is a path guard, **not** a `*.env` blanket: repo `.env` files
+  under `repos/` stay fully editable — copying projects across boxes needs
+  them. Uploaded filenames are reduced to a single safe component
+  (`os.path.basename`, no separators/traversal).
+
+The jail root is `$GRAVE_ROOT` by design: broad enough to manage repos and
+config, with the secret store carved out. It is not a substitute for the OS
+permission model — it runs as your user and can touch anything your user owns
+*within that tree*.
+
+## Agent "skip-perms" (⚡) tiles
+
+⚙️ settings can flip the Claude/Codex launcher tiles into ⚡ **skip-perms**
+mode: they open a `*-yolo` web-terminal session that runs the agent with all
+gates off (`claude --dangerously-skip-permissions` /
+`codex --dangerously-bypass-approvals-and-sandbox`) — no per-command approval,
+no sandbox. The agent can then run anything your user can.
+
+That is only defensible under this box's threat model: a single-human,
+tailnet-only appliance where the web terminal is already an un-gated shell as
+your user (see above) and the sudoers file is already root-equivalent for you.
+It is **off by default**, opt-in per tile, and the toggle is itself
+identity-gated like every other setting. Each yolo session is a distinct tmux
+session name, so it never shares state with a gated one. If your box has other
+human users, or a wider tailnet, leave it off.
+
 ## What gaming mode does NOT change
 
 Remote access (tailscaled, sshd), the firewall, and gravedecay stay up in

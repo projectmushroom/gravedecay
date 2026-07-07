@@ -14,6 +14,12 @@ name="${choice//[^a-zA-Z0-9_-]/}"
 case "$name" in
   claude) cmd=(claude) ;;
   codex)  cmd=(codex) ;;
+  # "yolo" sessions: the agent runs with all permission/approval gates off.
+  # Opt-in per tile from ⚙️ settings (⚡). Safe-ish only because this box is a
+  # single-human, tailnet-only appliance (see docs/SECURITY.md). These get
+  # their own tmux session name so they never share state with a gated one.
+  claude-yolo) cmd=(claude --dangerously-skip-permissions) ;;
+  codex-yolo)  cmd=(codex --dangerously-bypass-approvals-and-sandbox) ;;
   # auth shortcuts (⚙️ settings → opens a terminal running the login flow;
   # session ends when the flow exits)
   auth-claude) cmd=(claude /login) ;;
