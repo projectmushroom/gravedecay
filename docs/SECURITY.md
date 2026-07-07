@@ -65,6 +65,22 @@ config, with the secret store carved out. It is not a substitute for the OS
 permission model — it runs as your user and can touch anything your user owns
 *within that tree*.
 
+## Agent "skip-perms" (⚡) tiles
+
+⚙️ settings can flip the Claude/Codex launcher tiles into ⚡ **skip-perms**
+mode: they open a `*-yolo` web-terminal session that runs the agent with all
+gates off (`claude --dangerously-skip-permissions` /
+`codex --dangerously-bypass-approvals-and-sandbox`) — no per-command approval,
+no sandbox. The agent can then run anything your user can.
+
+That is only defensible under this box's threat model: a single-human,
+tailnet-only appliance where the web terminal is already an un-gated shell as
+your user (see above) and the sudoers file is already root-equivalent for you.
+It is **off by default**, opt-in per tile, and the toggle is itself
+identity-gated like every other setting. Each yolo session is a distinct tmux
+session name, so it never shares state with a gated one. If your box has other
+human users, or a wider tailnet, leave it off.
+
 ## What gaming mode does NOT change
 
 Remote access (tailscaled, sshd), the firewall, and gravedecay stay up in

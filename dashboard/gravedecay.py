@@ -71,6 +71,7 @@ DEFAULT_SETTINGS = {
     "hidden_apps": [],     # launcher tile names to hide
     "newtab_apps": [],     # tile names that open in a new tab instead of in-PWA
     "modal_apps": [],      # tile names that open in an iframe modal on the dashboard
+    "yolo_apps": [],       # claude/codex tiles launched with permission gates OFF
     "custom_apps": [],     # extra tiles: [{"name": ..., "url": ...}]
     "poll_ms": 5000,       # dashboard refresh interval
 }
@@ -1339,7 +1340,7 @@ body.gaming #foot{display:none}
     style="position:absolute;top:10px;right:10px;z-index:2">✕</button>
   <h2 style="color:var(--ink);font-size:15px;margin-bottom:10px">⚙️ Settings</h2>
 
-  <div class="sethead sec-toggle" data-sec="sec-apps">▸ Launcher tiles — 👁 show · ▢ modal · ↗ new tab</div>
+  <div class="sethead sec-toggle" data-sec="sec-apps">▸ Launcher tiles — 👁 show · ⚡ skip-perms · ▢ modal · ↗ new tab</div>
   <div id="sec-apps" style="display:none">
     <div id="set-apps"></div>
     <div class="setrow">
@@ -1544,6 +1545,9 @@ function statusDot(state){
 // viewed on a bare port (localhost:4712) rather than mounted at /grave/
 const appUrl=u=>(location.port&&location.port!=='443'&&u.startsWith('/'))
   ?`https://${location.hostname}${u}`:u;
+// 'claude' or 'codex' if this tile launches that agent CLI via /term/?arg=…,
+// else null. Gates the ⚡ skip-perms toggle and the -yolo session rewrite.
+const agentArg=u=>{const m=/[?&]arg=(claude|codex)(?=$|&)/.exec(u||'');return m?m[1]:null;};
 const PANEL_NAMES={prs:'Pull requests',ci:'CI status',
   linear:'Linear issues',usage:'Agent usage',tmux:'Agent sessions',repos:'Repos',
   stats:'Stats tiles',actions:'Actions',services:'Services',docker:'Docker',
@@ -1603,13 +1607,18 @@ function render(s){
   $('apps').innerHTML=tiles.filter(a=>!cfg.hidden_apps.includes(a.name)).map(a=>{
     if(a.url===FILES_URL)
       return `<a class="app" href="#files" data-files="1">${esc(a.name)}</a>`;
+    // ⚡ skip-perms: a claude/codex /term tile launched with gates off routes
+    // to the -yolo webterm session (which adds the dangerous flag).
+    let url=a.url;
+    if(agentArg(a.url)&&(cfg.yolo_apps||[]).includes(a.name))
+      url=a.url.replace(/([?&]arg=)(claude|codex)(?=$|&)/,'$1$2-yolo');
     // modal mode is offered for every tile EXCEPT T3 (url '/'), which needs
     // the full window; new-tab always wins if both somehow got set.
     const newtab=(cfg.newtab_apps||[]).includes(a.name);
     const modal=!newtab&&a.url!=='/'&&(cfg.modal_apps||[]).includes(a.name);
-    return `<a class="app" href="${esc(appUrl(a.url))}"${
+    return `<a class="app" href="${esc(appUrl(url))}"${
       newtab?' target="_blank" rel="noopener"':''}${
-      modal?` data-modal="${esc(a.url)}" data-modal-name="${esc(a.name)}"`:''
+      modal?` data-modal="${esc(url)}" data-modal-name="${esc(a.name)}"`:''
     }>${esc(a.name)}</a>`;
   }).join('');
   $('mode').textContent=(s.mode==='developer'?'💻 developer':'🎮 gaming');
@@ -1882,11 +1891,15 @@ function buildSettings(existing){
   const draftApps=envApps.concat(draft.custom_apps||[]);
   ap.innerHTML=`<div class="setrow" style="color:var(--muted)">
       <span style="width:16px">👁</span><span class="setlabel">tile</span>
+      <span title="claude/codex only: run with permission gates OFF">⚡</span>
       <span title="open in a modal on the dashboard">▢ modal</span>
       <span title="open in a new tab instead of inside the PWA">↗ new tab</span></div>`
     +draftApps.map((a,i)=>`<div class="setrow">
     <input type="checkbox" data-app-vis="${esc(a.name)}" ${draft.hidden_apps.includes(a.name)?'':'checked'}>
     <span class="setlabel">${esc(a.name)} <span style="color:var(--muted)">${esc(a.url)}</span></span>
+    ${agentArg(a.url)
+      ?`<label title="DANGER: run ${agentArg(a.url)} with all permission/approval gates off (claude --dangerously-skip-permissions / codex --dangerously-bypass-approvals-and-sandbox)"><input type="checkbox" data-app-yolo="${esc(a.name)}" ${(draft.yolo_apps||[]).includes(a.name)?'checked':''}> ⚡</label>`
+      :`<span class="dim2" title="only claude/codex tiles">·</span>`}
     ${a.url==='/'
       ?`<span class="dim2" title="T3 needs the full window — no modal">▢ —</span>`
       :`<label title="open in a modal on the dashboard"><input type="checkbox" data-app-modal="${esc(a.name)}" ${(draft.modal_apps||[]).includes(a.name)?'checked':''}> ▢</label>`}
@@ -1917,6 +1930,8 @@ function syncVis(){
     .filter(c=>!c.checked).map(c=>c.dataset.appVis);
   draft.modal_apps=[...document.querySelectorAll('[data-app-modal]')]
     .filter(c=>c.checked).map(c=>c.dataset.appModal);
+  draft.yolo_apps=[...document.querySelectorAll('[data-app-yolo]')]
+    .filter(c=>c.checked).map(c=>c.dataset.appYolo);
   draft.newtab_apps=[...document.querySelectorAll('[data-app-newtab]')]
     .filter(c=>c.checked).map(c=>c.dataset.appNewtab);
   draft.poll_ms=+$('set-poll').value;
