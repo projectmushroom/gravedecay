@@ -139,9 +139,16 @@ Everything on the box is one tap from there, all same-origin so navigation
 never leaves the installed app. Terminal-styled (phosphor green, TUI frames,
 scanlines), split into **🛠️ Work** and **📟 System** tabs:
 
-**Launcher** — tiles for T3 Code, Terminal, Claude, Codex, GitHub, plus any
-custom tiles you add; each tile opens in-PWA or in a new tab (your choice).
-Inside T3, a tiny corner pill (installed-app mode only) brings you back.
+**Launcher** — tiles for T3 Code, Terminal, Claude, Codex, GitHub, a built-in
+**📁 Files** manager, plus any custom tiles you add; each tile opens in-PWA,
+in a modal over the dashboard, or in a new tab (your choice — except T3, which
+always takes the full window). Inside T3, a tiny corner pill (installed-app
+mode only) brings you back.
+
+**📁 Files** — a lightweight file manager modal: browse, upload (drag-drop or
+picker), download, rename, delete, and make folders under the appliance root,
+straight from the browser — handy for copying a project onto the box. Jailed
+to `$GRAVE_ROOT` with the secret store carved out; see `docs/SECURITY.md`.
 
 **Work tab**
 - 🔀 **Pull requests** — open PRs across your repos, 👀 marker where your
@@ -157,7 +164,8 @@ Inside T3, a tiny corner pill (installed-app mode only) brings you back.
 buttons, services, docker containers, journal errors.
 
 **⚙️ Settings** (identity-gated, like all actions) — show/hide/reorder
-widgets, manage tiles, refresh rate, **one-tap T3 pairing tokens** (mints a
+widgets, manage tiles (show, open-in-modal, open-in-new-tab per tile),
+refresh rate, **one-tap T3 pairing tokens** (mints a
 15-minute token + ready `/pair` link for enrolling a new phone/laptop),
 re-auth Claude/Codex/GitHub (opens the terminal running the real login flow),
 Linear API key.

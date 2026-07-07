@@ -41,6 +41,30 @@ your user for **anyone who can reach it** — ttyd does not check the
 you already extend via Tailscale SSH; on a shared tailnet, restrict who can
 reach this node with Tailscale ACLs or disable `gravedecay-term`.
 
+## The file manager
+
+The dashboard's 📁 Files modal browses, uploads, downloads, and edits files
+so you can move projects onto the box from a browser. It is confined:
+
+- **Jailed to `$GRAVE_ROOT`.** Every request path is `realpath`'d and
+  prefix-checked against the root; `..` and symlinks that resolve outside the
+  tree are refused (so the `repos/gravedecay` recovery symlink is invisible
+  here — edit that repo over git/T3).
+- **Gated like the action buttons.** Reads *and* writes require
+  `Tailscale-User-Login ∈ GRAVEDECAY_ALLOWED_USERS`; listing a filesystem is
+  as sensitive as changing it. Localhost (no header) stays trusted.
+- **The appliance's own secret store is hidden.** `$GRAVE_ROOT/config/secrets/`
+  is excluded from listing, download, and mutation even though it sits inside
+  the jail. This is a path guard, **not** a `*.env` blanket: repo `.env` files
+  under `repos/` stay fully editable — copying projects across boxes needs
+  them. Uploaded filenames are reduced to a single safe component
+  (`os.path.basename`, no separators/traversal).
+
+The jail root is `$GRAVE_ROOT` by design: broad enough to manage repos and
+config, with the secret store carved out. It is not a substitute for the OS
+permission model — it runs as your user and can touch anything your user owns
+*within that tree*.
+
 ## What gaming mode does NOT change
 
 Remote access (tailscaled, sshd), the firewall, and gravedecay stay up in
