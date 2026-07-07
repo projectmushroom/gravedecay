@@ -167,6 +167,16 @@ if [[ ! -e "$HOME_DIR/Projects" ]]; then
 else
   skip "~/Projects already exists"
 fi
+# grave.conf + selfheal reference the canonical $GRAVE_ROOT/repos/gravedecay for
+# post-/etc-reset recovery, but raise.sh may be run from any checkout (e.g.
+# ~/dev/gravedecay). Link the canonical path to this checkout so the recovery
+# one-liner always finds raise.sh — the link lives under $GRAVE_ROOT, so it
+# survives a SteamOS OS update that wipes /etc.
+CANON_REPO="$GRAVE_ROOT/repos/gravedecay"
+if [[ "$REPO_DIR" != "$CANON_REPO" && ! -e "$CANON_REPO" ]]; then
+  ln -s "$REPO_DIR" "$CANON_REPO"
+  ok "canonical repo path $CANON_REPO → $REPO_DIR"
+fi
 cp -n "$REPO_DIR/config/tmux.conf" "$GRAVE_ROOT/config/tmux.conf" 2>/dev/null || true
 cp "$REPO_DIR/docs/"*.md "$GRAVE_ROOT/docs/" 2>/dev/null || true
 ok "layout ready"
