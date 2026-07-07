@@ -179,12 +179,22 @@ fi
 
 # ------------------------------------------------------------- 4. sudoers ----
 step "Scoped passwordless sudo (see docs/SECURITY.md)"
-sudo tee /etc/sudoers.d/50-gravedecay >/dev/null <<EOF
+# sudo is last-match-wins across /etc/sudoers.d in lexicographic order. SteamOS
+# ships /etc/sudoers.d/wheel (%wheel ALL=(ALL) ALL — password required) which
+# sorts AFTER 50-gravedecay and would cancel our NOPASSWD, breaking the headless
+# dashboard's mode-flip/reboot buttons and agent freeze. Name our file to sort
+# last on such hosts so the scoped NOPASSWD wins.
+SUDOERS_FILE=/etc/sudoers.d/50-gravedecay
+if ls /etc/sudoers.d/ 2>/dev/null | grep -qxE 'wheel|wheel-.*'; then
+  SUDOERS_FILE=/etc/sudoers.d/zz-gravedecay
+  sudo rm -f /etc/sudoers.d/50-gravedecay
+fi
+sudo tee "$SUDOERS_FILE" >/dev/null <<EOF
 # gravedecay: let $RUN_USER (and gravedecay action buttons) drive the platform
 $RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker, $GRAVE_BIN, /usr/bin/journalctl, /usr/bin/ufw, /usr/bin/snapper, /usr/sbin/sshd -T, /usr/bin/sshd -T, /usr/bin/tee /etc/systemd/system/*, /usr/bin/tee /sys/fs/cgroup/grave-torpor/*, /usr/bin/mkdir -p /sys/fs/cgroup/grave-torpor, /usr/bin/npm update -g *
 EOF
-sudo chmod 440 /etc/sudoers.d/50-gravedecay
-sudo visudo -c -f /etc/sudoers.d/50-gravedecay >/dev/null && ok "sudoers valid"
+sudo chmod 440 "$SUDOERS_FILE"
+sudo visudo -c -f "$SUDOERS_FILE" >/dev/null && ok "sudoers valid ($SUDOERS_FILE)"
 
 # ----------------------------------------------------------- 5. gravedecay ----
 step "gravedecay"
