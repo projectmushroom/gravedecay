@@ -151,7 +151,9 @@ grave gamewatch on|off|status   # toggle (a flag file — no restart needed)
 
 Toggling is a flag file under `$GRAVE_ROOT`, re-read every poll, so `off` takes
 effect within a few seconds. `grave doctor` checks the watcher is running when
-the flag is on.
+the flag is on. It's also in the dashboard: **⚙️ Settings → Game-mode
+auto-throttle** has on/off buttons and an ⓘ that explains it — the section only
+appears when the watcher is installed (i.e. on a Steam Machine).
 
 ## Dashboard action buttons (allow-list)
 

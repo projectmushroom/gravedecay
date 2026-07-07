@@ -110,6 +110,8 @@ ACTIONS = {
     "reboot": ["sudo", "-n", "systemctl", "reboot"],
     "bootmode-developer": [GRAVE, "bootmode", "developer"],
     "bootmode-gaming": [GRAVE, "bootmode", "gaming"],
+    "gamewatch-on": [GRAVE, "gamewatch", "on"],    # auto-throttle: freeze on game launch
+    "gamewatch-off": [GRAVE, "gamewatch", "off"],
 }
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 # Only one grave action at a time: concurrent mode flips race each other
@@ -614,6 +616,14 @@ def boot_mode():
     return "developer" if rc == 0 else "gaming"
 
 
+def gamewatch_state():
+    """Game-mode auto-throttle: installed? on? watcher running? (Steam Machine)."""
+    installed = sh(["systemctl", "cat", "gravedecay-gamewatch.service"])[0] == 0
+    on = os.path.exists(os.path.join(GRAVE_ROOT, "config", "gamewatch.on"))
+    running = sh(["systemctl", "is-active", "--quiet", "gravedecay-gamewatch"])[0] == 0
+    return {"installed": installed, "on": on, "running": running}
+
+
 def state(headers):
     t3 = unit_state("t3code")
     mode = "developer" if t3["active"] == "active" else "gaming"
@@ -630,7 +640,7 @@ def state(headers):
             "host": HOST, "now": time.strftime("%H:%M:%S"),
             "viewer": headers.get("Tailscale-User-Login", "local"),
             "mode": mode, "apps": list(APPS), "settings": load_settings(),
-            "boot_mode": boot_mode(),
+            "boot_mode": boot_mode(), "gamewatch": gamewatch_state(),
             "tmux": tmux, "torpor": len(tmux) if frozen else 0,
             "system": collect_system(),
             "github": {"login": None, "prs": [], "error": "paused in game mode"},
@@ -650,6 +660,7 @@ def state(headers):
         "viewer": headers.get("Tailscale-User-Login", "local"),
         "mode": mode,
         "boot_mode": boot_mode(),
+        "gamewatch": gamewatch_state(),
         "apps": apps,
         "github": gh,
         "ci": collect_ci(),
@@ -1092,6 +1103,13 @@ body.gaming #foot{display:none}
     <span class="setlabel dim2" id="boot-state"></span>
   </div>
 
+  <div class="sethead" id="throttle-head" style="display:none">Game-mode auto-throttle<span class="dim2" id="throttle-info" role="button" tabindex="0" title="What is this?" style="cursor:pointer;margin-left:7px;border:1px solid var(--ring);border-radius:50%;padding:0 5px">ⓘ</span></div>
+  <div class="setrow" id="throttle-row" style="display:none">
+    <button class="mini" id="throttle-on">🎮 on</button>
+    <button class="mini" id="throttle-off">⏸ off</button>
+    <span class="setlabel dim2" id="throttle-state"></span>
+  </div>
+
   <div class="sethead">Auth &amp; pairing</div>
   <div class="setrow">
     <button class="mini" id="t3-pair-btn">🔑 New T3 pairing token</button>
@@ -1148,6 +1166,26 @@ body.gaming #foot{display:none}
       <button id="gc-kill">☠️ Kill sessions &amp; game</button>
       <button id="gc-cancel">Cancel</button>
     </div>
+  </div>
+</div>
+<div class="overlay" id="throttle-dlg" style="display:none">
+  <div class="dlg">
+    <button class="mini xbtn" id="throttle-x" title="close (Esc)" aria-label="close"
+      style="position:absolute;top:10px;right:10px;z-index:2">✕</button>
+    <h2>🎮 Game-mode auto-throttle</h2>
+    <p class="dim2">This box does double duty — your agents work while you're away,
+      and it's a console when you want to play. Auto-throttle makes the hand-off
+      automatic, so you never have to flip modes yourself.</p>
+    <p><b>Launch a game</b> → agent sessions are <b>frozen</b> in place (kept in
+      RAM, provably zero CPU) and T3 Code + the database containers stop, handing
+      all the RAM and GPU to the game.</p>
+    <p><b>Quit the game</b> → everything <b>thaws and resumes</b> right where it
+      left off, mid-thought.</p>
+    <p class="dim2">Tailscale, SSH, this dashboard and the web terminal always stay
+      up — the box is reachable even mid-game. A running game is detected via
+      SteamOS's GameMode. You can also toggle this from a terminal with
+      <code>grave gamewatch on|off</code>.</p>
+    <div class="setrow"><button id="throttle-close">Got it</button></div>
   </div>
 </div>
 <div id="panels">
@@ -1255,6 +1293,7 @@ function render(s){
   envApps=s.apps||[];
   lastTmux=s.tmux||[];
   if(s.boot_mode){bootMode=s.boot_mode;paintBoot();}
+  if(s.gamewatch){applyGamewatch(s.gamewatch);}
   // adopt settings saved elsewhere (another device/tab) — but never while
   // this device is mid-edit in the settings modal
   const sj=JSON.stringify(s.settings);
@@ -1460,6 +1499,7 @@ $('game-confirm').addEventListener('click',e=>{
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){
   closeConsole();$('game-confirm').style.display='none';
   $('settings-panel').style.display='none';$('kill-dlg').style.display='none';
+  $('throttle-dlg').style.display='none';
   unlockBody();}});
 $('console-close').onclick=()=>{$('console').style.display='none'};
 // ---------- gaming confirm dialog ----------
@@ -1649,6 +1689,37 @@ async function setBoot(m){
 }
 $('boot-dev').onclick=()=>setBoot('developer');
 $('boot-game').onclick=()=>setBoot('gaming');
+// game-mode auto-throttle: info modal + on/off toggle (Steam Machine only —
+// the section stays hidden unless the watcher service is installed)
+let throttleOn=null;
+function paintThrottle(){
+  $('throttle-on').classList.toggle('activebtn',throttleOn===true);
+  $('throttle-off').classList.toggle('activebtn',throttleOn===false);
+}
+function applyGamewatch(g){
+  const show=!!g.installed;
+  $('throttle-head').style.display=show?'':'none';
+  $('throttle-row').style.display=show?'':'none';
+  if(show){throttleOn=g.on;paintThrottle();
+    if(g.on&&!g.running)$('throttle-state').textContent='on (watcher stopped?)';}
+}
+async function setThrottle(on){
+  $('throttle-state').textContent='saving…';
+  try{
+    const r=await fetch('api/action',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({action:on?'gamewatch-on':'gamewatch-off'})});
+    const j=await r.json();
+    $('throttle-state').textContent=j.ok?'saved ✓':(j.output||'failed');
+    if(j.ok){throttleOn=on;paintThrottle();}
+  }catch(e){$('throttle-state').textContent='failed: '+e;}
+}
+$('throttle-on').onclick=()=>setThrottle(true);
+$('throttle-off').onclick=()=>setThrottle(false);
+function closeThrottle(){$('throttle-dlg').style.display='none';unlockBody();}
+$('throttle-info').onclick=()=>{$('throttle-dlg').style.display='block';lockBody();};
+$('throttle-x').onclick=closeThrottle;
+$('throttle-close').onclick=closeThrottle;
+$('throttle-dlg').addEventListener('click',e=>{if(e.target.id==='throttle-dlg')closeThrottle();});
 $('add-app').onclick=()=>{
   const n=$('new-app-name').value.trim(),u=$('new-app-url').value.trim();
   if(!u){$('set-msg').textContent='tile needs a URL';return;}
