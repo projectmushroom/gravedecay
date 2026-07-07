@@ -73,7 +73,11 @@ if [[ "$MANAGED_TOOLCHAIN" == 1 && -n "$BREW_PREFIX" ]]; then
   # prefer it so `env node` in the services resolves to the matching ABI
   T3_NODE_DIR="$(ls -d "$BREW_PREFIX"/opt/node@*/bin 2>/dev/null | sort -V | tail -1)"
   [[ -z "${T3_NODE_DIR:-}" ]] && T3_NODE_DIR="$(dirname "$(command -v node 2>/dev/null || echo /usr/bin/node)")"
-  TOOLPATH="$T3_NODE_DIR:$BREW_PREFIX/bin:$HOME_DIR/bin:"
+  # ~/.local/bin holds the durable CLIs (grave, t3, gh) on an immutable rootfs.
+  # grave is threaded in absolutely (GRAVEDECAY_GRAVE), but the dashboard looks
+  # up t3/gh by name, so this dir MUST be on the services' PATH too — omitting
+  # it 404'd the T3 token button and the GitHub panel.
+  TOOLPATH="$T3_NODE_DIR:$BREW_PREFIX/bin:$HOME_DIR/bin:$HOME_DIR/.local/bin:"
 fi
 export PATH="$HOME_DIR/.local/bin:$TOOLPATH$PATH"
 

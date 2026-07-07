@@ -92,6 +92,10 @@ def save_settings(data):
 
 
 GRAVE = os.environ.get("GRAVEDECAY_GRAVE", "/usr/local/bin/grave")
+# t3 lives in the same durable-toolchain bin dir as grave (~/.local/bin on an
+# immutable rootfs). systemd's minimal PATH omits it, so resolve it absolutely
+# like GRAVE — deriving from GRAVE's dir keeps package-host / SteamOS parity.
+T3 = os.environ.get("GRAVEDECAY_T3", os.path.join(os.path.dirname(GRAVE), "t3"))
 # grave runs AS THE SERVICE USER (it sudo -n's internally where needed):
 # under sudo it would be root, whose tmux lives in /tmp/tmux-0 — freeze/kill
 # of agent sessions would silently no-op.
@@ -104,7 +108,7 @@ ACTIONS = {
     # one-time device pairing token for T3 (viewer-gated like everything
     # else); --base-url is appended per-request from the Host header so the
     # printed /pair#token=... link lands on the right origin
-    "t3-pair": ["t3", "auth", "pairing", "create",
+    "t3-pair": [T3, "auth", "pairing", "create",
                 "--base-dir", f"{GRAVE_ROOT}/agents/t3code",
                 "--ttl", "15m", "--label", "gravedecay-dashboard"],
     "reboot": ["sudo", "-n", "systemctl", "reboot"],
@@ -737,10 +741,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, bufsize=1)
         sent = 0
+        proc = None
         try:
+            # Popen MUST be inside the try: a spawn failure (e.g. binary not on
+            # the service PATH) would otherwise skip the finally and leak
+            # ACTION_LOCK, wedging every later action behind a 409.
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    text=True, bufsize=1)
             for line in proc.stdout:
                 payload = json.dumps(ANSI.sub("", line.rstrip("\n")))
                 self.wfile.write(f"data: {payload}\n\n".encode())
@@ -763,6 +771,16 @@ class Handler(BaseHTTPRequestHandler):
         except subprocess.TimeoutExpired:
             print(f"stream: TIMEOUT action={action}", file=sys.stderr, flush=True)
             proc.kill()
+        except OSError as e:
+            # Command never launched (missing binary, exec error). Report it on
+            # the stream instead of 500'ing; the lock still releases below.
+            print(f"stream: spawn failed action={action}: {e}", file=sys.stderr, flush=True)
+            try:
+                self.wfile.write(f"data: {json.dumps('error: ' + str(e))}\n\n".encode())
+                self.wfile.write(b"event: done\ndata: 127\n\n")
+                self.wfile.flush()
+            except OSError:
+                pass
         finally:
             # Close the connection so the client sees EOF. Without this,
             # HTTP/1.1 keep-alive leaves the socket open after the stream —
