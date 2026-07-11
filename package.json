@@ -1,0 +1,10 @@
+{
+  "name": "gravedecay-dashboard-tests",
+  "private": true,
+  "scripts": {
+    "test:mobile": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1"
+  }
+}

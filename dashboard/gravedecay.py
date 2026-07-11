@@ -121,6 +121,10 @@ ACTIONS = {
     "developer": [GRAVE, "developer"],
     "restart-t3": ["sudo", "-n", "systemctl", "restart", "t3code"],
     "update-t3": [GRAVE, "t3", "update"],
+    # Detached system unit: `grave upgrade` re-raises and restarts this
+    # dashboard, so it must not run inside gravedecay.service's cgroup.
+    "update-grave": ["sudo", "-n", "systemctl", "--no-block", "start",
+                     "gravedecay-upgrade.service"],
     "doctor": [GRAVE, "doctor"],
     # one-time device pairing token for T3 (viewer-gated like everything
     # else); --base-url is appended per-request from the Host header so the
@@ -174,11 +178,65 @@ def icon_png(size):
 # Relative URLs throughout so the app works both bare (127.0.0.1:4712/) and
 # mounted (https://box/grave/) without caring which.
 MANIFEST = json.dumps({
-    "name": "gravedecay", "short_name": "gravedecay", "start_url": "./", "scope": "./",
+    # The installed app is the front door for the whole appliance origin:
+    # /grave/ (dashboard), / (T3), /term/ and /pair/.  A /grave/-only scope
+    # makes those launcher destinations leave the standalone app in standards-
+    # compliant browsers.  id remains stable across manifest revisions.
+    "id": f"{BASE or '/grave'}/", "name": "gravedecay", "short_name": "gravedecay",
+    "start_url": "./", "scope": "/",
     "display": "standalone", "background_color": "#070907", "theme_color": "#070907",
     "icons": [{"src": "icon-192.png", "sizes": "192x192", "type": "image/png"},
               {"src": "icon-512.png", "sizes": "512x512", "type": "image/png"}],
 })
+
+# Network-first navigation only.  The dashboard is a remote control, so stale
+# API/system data must never be cached or presented as live.  The tiny offline
+# document merely keeps an installed Safari web app useful enough to explain
+# that the box/Tailscale is unreachable and retry without dropping to a blank
+# WebKit error page.  The worker is allowed to cover the entire origin because
+# the manifest intentionally does too; non-navigation requests pass through.
+SERVICE_WORKER = r"""const CACHE='gravedecay-shell-v1';
+const OFFLINE=new URL('offline.html',self.location.href).href;
+self.addEventListener('install',event=>{
+  event.waitUntil(caches.open(CACHE).then(cache=>cache.add(OFFLINE)).then(()=>self.skipWaiting()));
+});
+self.addEventListener('activate',event=>{
+  event.waitUntil(caches.keys().then(keys=>Promise.all(
+    keys.filter(key=>key!==CACHE).map(key=>caches.delete(key)))).then(()=>self.clients.claim()));
+});
+self.addEventListener('fetch',event=>{
+  if(event.request.mode!=='navigate')return;
+  event.respondWith(fetch(event.request).catch(()=>caches.match(OFFLINE)));
+});
+"""
+
+OFFLINE_PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#070907"><title>gravedecay · offline</title>
+<style>*{box-sizing:border-box}body{margin:0;min-height:100dvh;display:grid;place-items:center;
+padding:max(24px,env(safe-area-inset-top)) max(18px,env(safe-area-inset-right))
+max(24px,env(safe-area-inset-bottom)) max(18px,env(safe-area-inset-left));background:#070907;
+color:#a8e6a3;font:15px/1.6 ui-monospace,Menlo,monospace}.box{width:min(34rem,100%);
+border:1px solid #2e4a2e;padding:22px}h1{margin:0 0 10px;color:#d6ffd0;font-size:20px}
+p{margin:8px 0;color:#557a55}button{margin-top:12px;min-height:44px;padding:8px 16px;
+border:1px solid #2e4a2e;background:transparent;color:#d6ffd0;font:700 14px ui-monospace,Menlo,monospace}
+</style></head><body><main class="box"><h1>🪦 gravedecay is unreachable</h1>
+<p>The dashboard needs a live path to the box. Check that Tailscale is connected and the machine is awake.</p>
+<button onclick="location.reload()">↻ retry connection</button></main></body></html>"""
+
+
+def static_asset(name, fallback):
+    """Read source-tree or installed dashboard assets, with an embedded
+    fallback so an interrupted/older upgrade never makes the UI unbootable."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for directory in (os.path.join(here, "static"),
+                      os.path.join(here, "dashboard-static")):
+        try:
+            with open(os.path.join(directory, name), encoding="utf-8") as f:
+                return f.read()
+        except OSError:
+            pass
+    return fallback
 
 
 def sh(cmd, timeout=10):
@@ -780,12 +838,16 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # journald gets enough from systemd
         pass
 
-    def _send(self, code, body, ctype="application/json"):
+    def _send(self, code, body, ctype="application/json", cache="no-store", headers=None):
         data = body.encode() if isinstance(body, str) else body
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(data)
 
@@ -1013,13 +1075,20 @@ class Handler(BaseHTTPRequestHandler):
             boot = json.dumps(state(self.headers)).replace("</", "<\\/")
             self._send(200, PAGE.replace("/*BOOT*/null", boot), "text/html; charset=utf-8")
         elif p == "/manifest.webmanifest":
-            self._send(200, MANIFEST, "application/manifest+json")
+            self._send(200, MANIFEST, "application/manifest+json", "no-cache")
+        elif p == "/sw.js":
+            self._send(200, static_asset("sw.js", SERVICE_WORKER),
+                       "text/javascript; charset=utf-8", "no-cache",
+                       {"Service-Worker-Allowed": "/"})
+        elif p == "/offline.html":
+            self._send(200, static_asset("offline.html", OFFLINE_PAGE),
+                       "text/html; charset=utf-8", "public, max-age=86400")
         elif p in ("/apple-touch-icon.png", "/icon-180.png"):
-            self._send(200, icon_png(180), "image/png")
+            self._send(200, icon_png(180), "image/png", "public, max-age=86400")
         elif p == "/icon-192.png":
-            self._send(200, icon_png(192), "image/png")
+            self._send(200, icon_png(192), "image/png", "public, max-age=86400")
         elif p == "/icon-512.png":
-            self._send(200, icon_png(512), "image/png")
+            self._send(200, icon_png(512), "image/png", "public, max-age=86400")
         else:
             self._send(404, '{"error":"not found"}')
 
@@ -1129,7 +1198,8 @@ if(!location.pathname.endsWith('/'))history.replaceState(null,'',location.pathna
 html{-webkit-text-size-adjust:100%}
 body{background:var(--page);color:var(--ink-2);
   font:13.5px/1.5 ui-monospace,'JetBrains Mono','Fira Code',Menlo,Consolas,monospace;
-  padding:0 14px calc(24px + env(safe-area-inset-bottom));max-width:1120px;margin:0 auto}
+  padding:0 max(14px,env(safe-area-inset-left)) calc(24px + env(safe-area-inset-bottom))
+    max(14px,env(safe-area-inset-right));max-width:1120px;min-width:0;margin:0 auto}
 /* CRT: fixed scanlines + vignette, zero layout cost */
 body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:99;
   background:repeating-linear-gradient(0deg,transparent 0 2px,rgba(0,0,0,.13) 2px 3px)}
@@ -1142,7 +1212,8 @@ h1{font-size:17px;font-weight:700;color:var(--ink);text-shadow:var(--glow)}
 #toplogo{width:36px;height:36px;display:block}
 .topbar{position:sticky;top:0;z-index:101;display:flex;flex-wrap:nowrap;gap:10px;align-items:center;
   background:var(--page);margin:0 -14px 16px;
-  padding:calc(16px + env(safe-area-inset-top)) 14px 14px;
+  padding:calc(16px + env(safe-area-inset-top)) max(14px,env(safe-area-inset-right)) 14px
+    max(14px,env(safe-area-inset-left));
   border-bottom:1px solid var(--ring)}
 .topbar h1{white-space:nowrap}
 /* iOS PWA: an opaque strip over the status-bar/dynamic-island area — content
@@ -1156,6 +1227,10 @@ h1{font-size:17px;font-weight:700;color:var(--ink);text-shadow:var(--glow)}
 /* meta takes the slack and truncates — the controls can never wrap off-row */
 .topbar .meta{color:var(--muted);font-size:12px;flex:1;min-width:0;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#connection{display:none;margin:-8px 0 14px;padding:8px 10px;border:1px solid var(--warn);
+  background:var(--track-warn);color:var(--warn);font-size:12px}
+#connection.show{display:flex;align-items:center;justify-content:space-between;gap:10px}
+#connection button{min-height:32px;padding:3px 9px;font-size:12px;flex:none}
 .badge{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;
   border:1px solid var(--ring);font-size:12px;font-weight:700;color:var(--ink)}
 #mode{flex-shrink:0} .topbar .gear{flex-shrink:0}
@@ -1164,6 +1239,7 @@ h1{font-size:17px;font-weight:700;color:var(--ink);text-shadow:var(--glow)}
 .apps{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:14px}
 .app{display:flex;align-items:center;justify-content:center;gap:8px;min-height:52px;
   background:var(--surface);border:1px solid var(--ring);
+  min-width:0;padding:7px;text-align:center;overflow-wrap:anywhere;
   font-weight:700;font-size:14px;color:var(--ink)}
 .app::before{content:'▸ ';color:var(--muted)}
 .app:hover{background:var(--ink-2);color:#000;text-shadow:none}
@@ -1191,14 +1267,15 @@ button.busy{opacity:.6;cursor:wait}
 @media(max-width:760px){#panels{grid-template-columns:1fr}}
 .w-full{grid-column:1/-1}
 .panel{position:relative;background:var(--surface);border:1px solid var(--ring);
-  border-radius:0;padding:16px 12px 10px}
+  border-radius:0;padding:16px 12px 10px;min-width:0;container:dashboard-panel / inline-size}
 .panel h2{position:absolute;top:-8px;left:10px;background:var(--page);padding:0 7px;
+  max-width:calc(100% - 20px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   font-size:11px;font-weight:700;color:var(--title);letter-spacing:.08em;
   text-transform:uppercase}
 /* stat tiles */
-.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px;
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(148px,100%),1fr));gap:10px;
   background:transparent;border:none;padding:0}
-.tile{background:var(--surface);border:1px solid var(--ring);padding:10px 12px}
+.tile{background:var(--surface);border:1px solid var(--ring);padding:10px 12px;min-width:0}
 .tile .label{font-size:11px;color:var(--muted);margin-bottom:4px;
   text-transform:uppercase;letter-spacing:.07em}
 .tile .value{font-size:23px;font-weight:700;color:var(--ink);text-shadow:var(--glow)}
@@ -1212,8 +1289,9 @@ button.busy{opacity:.6;cursor:wait}
 .meter.crit{background:var(--track-crit)}
 .meter.crit i{background:repeating-linear-gradient(90deg,var(--crit) 0 5px,transparent 5px 7px)}
 /* tables */
-table{width:100%;border-collapse:collapse;font-size:13px}
-td{padding:4px 8px 4px 0;border-top:1px dashed var(--hairline);vertical-align:top}
+table{width:100%;max-width:100%;border-collapse:collapse;font-size:13px}
+td{min-width:0;padding:4px 8px 4px 0;border-top:1px dashed var(--hairline);
+  vertical-align:top;overflow-wrap:anywhere;word-break:break-word}
 tr:first-child td{border-top:none}
 td.num{text-align:right;font-variant-numeric:tabular-nums;color:var(--ink-2)}
 td.dim{color:var(--muted)}
@@ -1244,6 +1322,7 @@ body.gaming #panels>*{display:none!important}
 body.gaming #panels>[data-panel="stats"]{display:grid!important}
 /* overlays: console + dialogs */
 .overlay{position:fixed;inset:0;z-index:110;background:rgba(3,5,3,.9);
+  height:100vh;height:100dvh;
   backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);padding:14px;
   padding-top:calc(14px + env(safe-area-inset-top));overflow-y:auto;
   -webkit-overflow-scrolling:touch;overscroll-behavior:contain}
@@ -1269,7 +1348,7 @@ body.gaming #foot{display:none}
 #gc-box2{border-color:#4a2222}
 .setrow{display:flex;gap:8px;align-items:center;margin:7px 0;flex-wrap:wrap;font-size:13px}
 .setrow input,.setrow select{background:var(--inset);border:1px solid var(--hairline);
-  color:var(--ink);border-radius:0;padding:7px 9px;
+  color:var(--ink);border-radius:0;padding:7px 9px;min-width:0;max-width:100%;
   font:13px ui-monospace,Menlo,monospace}
 .setrow input:focus,.setrow select:focus{outline:1px solid var(--accent)}
 /* text-only buttons must not render smaller than their emoji-bearing
@@ -1309,13 +1388,55 @@ body.gaming #foot{display:none}
 .frow .mini{min-height:26px;padding:2px 7px;font-size:12px}
 #files-empty{padding:14px;color:var(--muted);text-align:center}
 /* app iframe modal — a small app opened over the dashboard (never T3) */
-#appframe-box{max-width:1120px;width:96vw;height:88vh;margin:4vh auto;padding:0;
+#appframe-box{max-width:1120px;width:96vw;height:88vh;height:88dvh;margin:4vh auto;padding:0;
   display:flex;flex-direction:column;overflow:hidden}
 #appframe-bar{display:flex;align-items:center;gap:8px;padding:8px 10px;
   border-bottom:1px solid var(--ring);flex:none}
 #appframe-title{flex:1;color:var(--title);font-size:12px;font-weight:700;
   letter-spacing:.06em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #appframe-if{flex:1;width:100%;border:0;background:var(--page)}
+/* A panel can become narrow in iPad Split View or a two-column desktop
+   layout even when the viewport itself is wide. Reflow records based on the
+   component's real width rather than guessing from device categories. */
+@container dashboard-panel (max-width:500px){
+  table,tbody,tr,td{display:block;width:100%}
+  tr{padding:7px 0;border-top:1px dashed var(--hairline)}
+  tr:first-child{border-top:0}
+  td{padding:1px 0;border:0!important;white-space:normal!important}
+  td.num{text-align:left}
+  td:empty{display:none}
+  #tmux tr{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:0 8px}
+  #tmux td:first-child{grid-column:1/-1}
+  #tmux td.num{text-align:right;width:auto}
+  #tmux td:last-child{grid-column:3;width:auto}
+}
+/* Compact phones: preserve every action, but remove the last intrinsic-width
+   traps and make controls comfortable without allowing horizontal scrolling. */
+@media(max-width:520px){
+  body{padding-left:max(8px,env(safe-area-inset-left));
+    padding-right:max(8px,env(safe-area-inset-right));font-size:13px}
+  .topbar{gap:7px;margin-left:-8px;margin-right:-8px;
+    padding-left:max(8px,env(safe-area-inset-left));
+    padding-right:max(8px,env(safe-area-inset-right))}
+  #toplogo{width:32px;height:32px}.topbar h1{font-size:15px}
+  .topbar .meta{font-size:11px}.badge{padding:3px 7px}
+  .apps{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .tabs{gap:6px}.tab{padding:6px 4px;letter-spacing:.04em}
+  .panel{padding-left:9px;padding-right:9px}
+  .actions{grid-template-columns:1fr}
+  .overlay{padding-left:max(8px,env(safe-area-inset-left));
+    padding-right:max(8px,env(safe-area-inset-right))}
+  .dlg{padding:13px;margin:2vh auto;max-width:100%}
+  .setrow>*{max-width:100%}
+  .setrow input:not([type="checkbox"]),.setrow select{flex:1 1 100%;width:100%}
+  #appframe-box{width:100%;height:92vh;height:92dvh;margin:1vh auto}
+  #appframe-open{padding-left:7px;padding-right:7px}
+}
+@media(max-width:360px){
+  #toplogo{display:none}.topbar h1{font-size:14px}
+  .topbar .meta{display:none}
+  .apps{grid-template-columns:1fr}
+}
 </style></head><body>
 <div id="topcover"></div>
 <div class="topbar">
@@ -1325,6 +1446,8 @@ body.gaming #foot{display:none}
   <span class="badge" id="mode" role="button" title="Tap to switch mode" style="cursor:pointer">…</span>
   <button class="gear" id="gear" title="Settings" aria-label="Settings">⚙️</button>
 </div>
+<div id="connection" role="status" aria-live="polite"><span id="connection-text"></span>
+  <button id="connection-retry">↻ retry</button></div>
 <div class="apps" id="apps"></div>
 <div id="game-banner">
   <h2>🎮 G A M E &nbsp; M O D E</h2>
@@ -1493,6 +1616,7 @@ body.gaming #foot{display:none}
       <button data-act="developer">💻 Developer mode</button>
       <button data-act="restart-t3" data-confirm="Restart T3 Code? Active agent sessions survive, the UI reconnects.">↻ Restart T3 Code</button>
       <button data-act="update-t3" data-confirm="Install the latest stable T3 Code release and restart its web service? Active agent sessions survive.">⬆ Update T3 Code</button>
+      <button data-act="update-grave" data-confirm="Update gravedecay using this appliance's configured release/edge channel, then re-raise it? The dashboard will briefly reconnect; agent sessions survive.">⬆ Update gravedecay</button>
       <button data-act="doctor">🩺 Run doctor</button>
       <button data-act="reboot" data-confirm="Reboot the machine? Agent sessions die; everything else comes back automatically in the configured boot mode.">🔁 Reboot box</button>
       <button id="kill-open">🗡️ Kill sessions…</button>
@@ -1559,6 +1683,7 @@ const PANEL_TABS={prs:'work',ci:'work',linear:'work',usage:'work',
   stats:'system',actions:'system',services:'system',docker:'system',journal:'system'};
 let linearConfigured=false,lastMode=null,lastTmux=[];
 let cfg=null,cfgSrv='',envApps=[],layoutKey='';
+let pollFailures=0,lastConnected=0;
 let activeTab=localStorage.getItem('grave-tab')||'work';
 // deep-link a tab: /grave/?tab=system (also handy for screenshots)
 {const qp=new URLSearchParams(location.search).get('tab');
@@ -1582,6 +1707,7 @@ document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
   if(cfg)applyLayout();
 });
 function render(s){
+  pollFailures=0;lastConnected=Date.now();paintConnection();
   envApps=s.apps||[];
   lastTmux=s.tmux||[];
   if(s.boot_mode){bootMode=s.boot_mode;paintBoot();}
@@ -1712,9 +1838,20 @@ async function poll(){
   if(document.hidden)return;
   try{
     const r=await fetch('api/state');
+    if(!r.ok)throw new Error(`HTTP ${r.status}`);
     render(await r.json());
-  }catch(e){ $('meta').textContent='unreachable — retrying'; }
+  }catch(e){pollFailures++;paintConnection();}
 }
+function paintConnection(){
+  const offline=!navigator.onLine,failed=pollFailures>0,c=$('connection');
+  c.classList.toggle('show',offline||failed);
+  if(!offline&&!failed)return;
+  const ago=lastConnected?Math.max(1,Math.round((Date.now()-lastConnected)/1000)):null;
+  $('connection-text').textContent=offline?'network offline — check Tailscale'
+    :`box unreachable${ago?` · last connected ${ago}s ago`:''}`;
+}
+$('connection-retry').onclick=poll;
+addEventListener('online',poll);addEventListener('offline',paintConnection);
 // ---------- boot console (fetch-streamed SSE) ----------
 // fetch instead of EventSource: real HTTP errors become readable (through
 // EventSource a 403 and a dead box look identical) and there is no browser
@@ -2187,6 +2324,11 @@ const BOOT=/*BOOT*/null;   // server-rendered initial state: instant first paint
 if(BOOT)render(BOOT);else poll();
 schedule();
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)poll()});
+// Own the entire appliance origin so /grave/, T3, /term/ and /pair/ remain in
+// one installed app.  The worker only supplies an offline navigation page;
+// state and action responses are always live and never cached.
+if('serviceWorker'in navigator)
+  addEventListener('load',()=>navigator.serviceWorker.register('sw.js',{scope:'/'}).catch(()=>{}));
 </script></body></html>
 """.replace("@HOST@", HOST).replace("@BASE@", BASE or "/grave")
 

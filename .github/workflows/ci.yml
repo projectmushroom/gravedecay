@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    name: Python and appliance contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - run: python -m unittest discover -s tests -v
+      - run: python -m py_compile dashboard/gravedecay.py
+      - run: bash -n raise.sh
+      - run: bash -n bin/grave
+
+  browser:
+    name: Safari-first browser matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm audit
+      - run: npx playwright install --with-deps chromium webkit
+      - name: Start fixture dashboard
+        run: |
+          GRAVEDECAY_PORT=3000 GRAVE_ROOT="$RUNNER_TEMP/grave-root" \
+            python dashboard/gravedecay.py >"$RUNNER_TEMP/dashboard.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/dashboard.pid"
+          for _ in {1..30}; do
+            curl -sf http://127.0.0.1:3000/healthz && exit 0
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/dashboard.log"
+          exit 1
+      - run: npm run test:mobile
+      - name: Show dashboard log on failure
+        if: failure()
+        run: cat "$RUNNER_TEMP/dashboard.log" || true
+      - name: Stop fixture dashboard
+        if: always()
+        run: kill "$(cat "$RUNNER_TEMP/dashboard.pid")" 2>/dev/null || true

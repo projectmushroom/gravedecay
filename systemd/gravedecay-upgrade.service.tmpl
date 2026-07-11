@@ -1,0 +1,18 @@
+[Unit]
+Description=gravedecay - self-upgrade appliance and re-raise
+Documentation=https://github.com/projectmushroom/gravedecay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=@USER@
+Group=@USER@
+ExecStart=@GRAVE_BIN@ upgrade
+Environment=GRAVE_ROOT=@GRAVE_ROOT@
+Environment=PATH=@TOOLPATH@/usr/local/bin:/usr/bin:/bin
+SyslogIdentifier=gravedecay-upgrade
+
+# This is deliberately a separate systemd unit. The upgrade re-runs raise.sh,
+# which restarts gravedecay.service; running inside the dashboard cgroup would
+# kill the upgrade halfway through its own reapply.

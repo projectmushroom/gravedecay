@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#070907">
+  <title>gravedecay · offline</title>
+  <style>
+    * { box-sizing: border-box }
+    body { margin: 0; min-height: 100dvh; display: grid; place-items: center;
+      padding: max(24px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right))
+        max(24px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
+      background: #070907; color: #a8e6a3;
+      font: 15px/1.6 ui-monospace, Menlo, monospace }
+    main { width: min(34rem, 100%); border: 1px solid #2e4a2e; padding: 22px }
+    h1 { margin: 0 0 10px; color: #d6ffd0; font-size: 20px }
+    p { margin: 8px 0; color: #557a55 }
+    button { margin-top: 12px; min-height: 44px; padding: 8px 16px;
+      border: 1px solid #2e4a2e; background: transparent; color: #d6ffd0;
+      font: 700 14px ui-monospace, Menlo, monospace }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>🪦 gravedecay is unreachable</h1>
+    <p>The dashboard needs a live path to the box. Check that Tailscale is connected and the machine is awake.</p>
+    <button onclick="location.reload()">↻ retry connection</button>
+  </main>
+</body>
+</html>

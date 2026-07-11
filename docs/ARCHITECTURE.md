@@ -16,6 +16,7 @@ services your projects need (databases, browsers). This is the opposite of
 | CLI agent sessions | `tmux -L agents` | Survive client disconnects; `grave agents new/attach` |
 | Backing services | Docker compose stacks in `$GRAVE_ROOT/docker/` | Postgres, Redis, Playwright — disposable, loopback-bound |
 | Control plane | `grave` (bash, `/usr/local/bin`) | One entrypoint for modes, doctor, logs, backup |
+| Self-updater | `gravedecay-upgrade.service`, detached oneshot | Survives the dashboard restart caused by its own re-raise |
 
 ## Filesystem
 
@@ -26,7 +27,7 @@ repos/     all git checkouts (~/Projects symlinks here)
 agents/    per-agent state: t3code server state, tmux session logs
 docker/    compose stacks (core, browsers, yours)
 config/    grave.conf source-of-truth copies, tmux.conf, secrets/ (600, git-ignored)
-scripts/   gravedecay.py and helpers
+scripts/   gravedecay.py, dashboard-static/ PWA shell assets, and helpers
 logs/      grave.log
 backups/   timestamped: git bundles + config tars + volume tars
 docs/      this documentation, synced from the repo
@@ -52,3 +53,24 @@ Every platform invariant is a `grave doctor` check. If a profile or a manual
 tweak establishes something new ("GPU must be pinned", "docker on its own
 subvolume"), it must add a check (via the `CHECK_*` flags or a profile edit) —
 an invariant doctor can't see will silently regress.
+
+## Dashboard PWA boundary
+
+The installed gravedecay web app owns the entire Tailscale Serve HTTPS origin,
+not only `/grave/`. Its manifest starts at `/grave/` but declares scope `/` so
+launcher navigation to T3 (`/`), the terminal (`/term/`), and pairing (`/pair/`)
+stays in one standalone iOS, iPadOS, or macOS Safari app.
+
+The dashboard is network-first because it controls a remote machine. API
+responses, machine state, file listings, and action output are always
+`no-store`. A service worker caches only a static connection-help page so a
+disconnected launch explains how to restore Tailscale instead of showing a
+blank browser error. `grave doctor` verifies the manifest scope and root-scoped
+service worker contract.
+
+Dashboard self-upgrades are queued with `systemctl --no-block` into
+`gravedecay-upgrade.service`. They must never execute as a child of the
+dashboard: `grave upgrade` invokes `raise.sh`, which restarts
+`gravedecay.service` and kills that service's remaining cgroup processes.
+The oneshot follows `UPGRADE_CHANNEL` from `/etc/gravedecay/grave.conf` and
+refuses to touch a checkout with uncommitted changes.

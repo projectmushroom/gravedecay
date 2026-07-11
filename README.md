@@ -1,5 +1,7 @@
 # gravedecay
 
+[![CI](https://github.com/projectmushroom/gravedecay/actions/workflows/ci.yml/badge.svg)](https://github.com/projectmushroom/gravedecay/actions/workflows/ci.yml)
+
 <img src="assets/gravedecay.png" width="128" align="right" alt="gravedecay logo">
 
 **Turn any Linux box into an always-on AI dev appliance. The box never sleeps — your agents work the graveyard shift.** 🪦
@@ -98,6 +100,17 @@ grave upgrade           # pull the latest release tag, re-run the ritual
 grave upgrade --edge    # follow main instead (UPGRADE_CHANNEL=edge to default)
 ```
 
+Once the dashboard self-updater has been installed, the same operation is
+available under **System → Update gravedecay**. It follows `UPGRADE_CHANNEL`
+from `/etc/gravedecay/grave.conf` (`release` by default), runs outside the
+dashboard service so its own restart cannot interrupt it, and reconnects the
+installed app when the raise completes.
+
+The release that first introduces the updater still needs one manual re-raise
+to install its systemd unit. Contributors following merged `master` should use
+`grave upgrade --edge`; release-channel appliances receive it with the next
+tagged release.
+
 `raise.sh` is idempotent, so updating *is* re-raising: your config is never
 clobbered (conf, stacks, and secrets are create-if-missing), while services,
 templates, and the dashboard refresh — and doctor verifies the result.
@@ -138,7 +151,11 @@ anywhere (cellular included), end-to-end encrypted by the tailnet.
 
 Install the PWA / macOS web app from `https://<box>.<tailnet>.ts.net/grave/`.
 Everything on the box is one tap from there, all same-origin so navigation
-never leaves the installed app. Terminal-styled (phosphor green, TUI frames,
+never leaves the installed app. The manifest deliberately scopes the app to
+the whole origin so `/grave/`, T3, Terminal, and pairing are one appliance app.
+If the tailnet path drops, the installed app shows a cached connection-help
+screen; live machine data and actions are never cached. Terminal-styled
+(phosphor green, TUI frames,
 scanlines), split into **🛠️ Work** and **📟 System** tabs:
 
 **Launcher** — tiles for T3 Code, Terminal, Claude, Codex, GitHub, a built-in
@@ -163,7 +180,10 @@ to `$GRAVE_ROOT` with the secret store carved out; see `docs/SECURITY.md`.
 - 📦 **Repos** — branch, dirty state, last commit
 
 **System tab** — vitals (CPU/GPU temps, fans, load, memory, disk), action
-buttons, services, docker containers, journal errors.
+buttons, services, docker containers, journal errors. **Update gravedecay**
+starts a detached system upgrade on the configured `UPGRADE_CHANNEL`, re-runs
+the idempotent raise, and lets the dashboard reconnect after its own restart;
+agent tmux sessions are unaffected.
 
 **⚙️ Settings** (identity-gated, like all actions) — show/hide/reorder
 widgets, manage tiles (show, open-in-modal, open-in-new-tab per tile, and
