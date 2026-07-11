@@ -83,6 +83,8 @@ git clone https://github.com/projectmushroom/gravedecay
 cd gravedecay
 ./raise.sh --profile generic      # idempotent; uses sudo as needed
 grave doctor                      # verify every invariant
+grave t3 status                   # compare installed and stable T3 Code
+grave t3 update                   # install stable T3 and restart its service
 ```
 
 Requirements: a systemd-based distro (Arch-family is first-class; Debian/Fedora

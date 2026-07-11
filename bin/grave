@@ -62,6 +62,75 @@ pkg_mgr() {
   else echo none; fi
 }
 
+t3_version() {
+  t3 --version 2>/dev/null | sed -n 's/^t3 v//p' | head -1
+}
+
+t3_latest_version() {
+  npm view t3 dist-tags.latest --silent 2>/dev/null | tail -1
+}
+
+cmd_t3() { # grave t3 [status|update] — inspect/update the stable T3 Code CLI
+  local sub="${1:-status}" installed latest t3_bin npm_bin
+  command -v t3 >/dev/null 2>&1 || { bad "t3 is not installed"; exit 1; }
+  command -v npm >/dev/null 2>&1 || { bad "npm is not installed"; exit 1; }
+  installed=$(t3_version)
+  [[ -n "$installed" ]] || { bad "t3 is installed but does not run"; exit 1; }
+  latest=$(t3_latest_version)
+  [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+    bad "could not resolve npm's stable t3 version"; exit 1;
+  }
+
+  case "$sub" in
+    status)
+      say "T3 Code: installed v$installed; stable v$latest"
+      [[ "$installed" == "$latest" ]] && ok "T3 Code is up to date" || say "  update available — run: grave t3 update"
+      ;;
+    update)
+      if [[ "$installed" == "$latest" ]]; then
+        ok "T3 Code v$installed is already up to date"
+        return
+      fi
+      say "Updating T3 Code v$installed → v$latest (stable)..."
+      t3_bin=$(command -v t3)
+      npm_bin=$(command -v npm)
+      if [[ "$t3_bin" == "$HOME/.local/"* ]]; then
+        # SteamOS: node-pty must be rebuilt against the pinned Node ABI using
+        # the header wrappers created by steamos-toolchain.sh.
+        local wrappers="$HOME/.local/toolchain-wrappers"
+        PATH="$wrappers:$(dirname "$npm_bin"):$PATH" CC=cc CXX=c++ \
+          "$npm_bin" install -g --prefix "$HOME/.local" "t3@$latest"
+      else
+        need_root_helper
+        # Package-manager hosts install t3 system-wide. npm update follows the
+        # package's stable latest tag; the exact result is validated below.
+        sudo npm update -g t3
+      fi
+      local updated
+      updated=$(t3_version)
+      [[ "$updated" == "$latest" ]] || {
+        bad "update validation failed: expected v$latest, found v${updated:-unknown}"
+        exit 1
+      }
+      if systemctl is-active --quiet t3code; then
+        sudo -n systemctl restart t3code
+        if curl -sf --retry 10 --retry-delay 1 -o /dev/null \
+            "http://127.0.0.1:$T3_PORT/"; then
+          ok "t3code answering after restart"
+        else
+          bad "t3code did not answer after restart"
+          exit 1
+        fi
+      else
+        say "  t3code is stopped (gaming mode?) — it will use v$updated next start"
+      fi
+      log "t3: updated v$installed to v$updated"
+      ok "T3 Code updated to v$updated"
+      ;;
+    *) say "usage: grave t3 [status|update]"; exit 1 ;;
+  esac
+}
+
 # ---------------------------------------------------------------- status ----
 cmd_status() {
   hdr "Always-on services"
@@ -354,6 +423,8 @@ cmd_update() {
       sudo npm update -g "${NPM_GLOBAL_TOOLS[@]}" 2>&1 | tail -1 || true
     fi
   fi
+  say "Checking T3 Code..."
+  cmd_t3 update
   if dkctl is-active --quiet docker; then
     say "Pulling docker images..."
     local stack; for stack in "${DEV_STACKS[@]}"; do compose "$stack" pull -q || true; done
@@ -537,6 +608,7 @@ cmd_doctor() {
     say "  ${YLW}– docker stopped (gaming mode?)${RST}"
   fi
   if systemctl is-active --quiet t3code; then
+    check "t3 CLI runs"                   t3 --version
     check "t3code answering"            curl -sf -o /dev/null "http://127.0.0.1:$T3_PORT/"
   else
     say "  ${YLW}– t3code stopped (gaming mode?)${RST}"
@@ -656,6 +728,7 @@ grave — gravedecay appliance control 🪦
   grave preview list         show active previews
   grave preview off <port>   stop a preview
 
+  grave t3 [status|update]   show versions or install npm's stable T3 release
   grave update               snapshot (if snapper), update pkgs/npm/images
   grave upgrade              update gravedecay itself: pull latest release
                              (or --edge for main), re-run the ritual
@@ -681,6 +754,7 @@ case "${1:-help}" in
   agents)     shift; cmd_agents "$@" ;;
   docker)     shift; cmd_docker "$@" ;;
   preview)    shift || true; cmd_preview "$@" ;;
+  t3|t3code)  shift || true; cmd_t3 "$@" ;;
   update)     cmd_update ;;
   upgrade)    shift || true; cmd_upgrade "$@" ;;
   bootmode)   shift || true; cmd_bootmode "$@" ;;
