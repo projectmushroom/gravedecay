@@ -1,5 +1,7 @@
 # gravedecay
 
+[![CI](https://github.com/projectmushroom/gravedecay/actions/workflows/ci.yml/badge.svg)](https://github.com/projectmushroom/gravedecay/actions/workflows/ci.yml)
+
 <img src="assets/gravedecay.png" width="128" align="right" alt="gravedecay logo">
 
 **Turn any Linux box into an always-on AI dev appliance. The box never sleeps — your agents work the graveyard shift.** 🪦
@@ -97,6 +99,17 @@ best-effort), ~8 GB RAM, and a [Tailscale](https://tailscale.com) account
 grave upgrade           # pull the latest release tag, re-run the ritual
 grave upgrade --edge    # follow main instead (UPGRADE_CHANNEL=edge to default)
 ```
+
+Once the dashboard self-updater has been installed, the same operation is
+available under **System → Update gravedecay**. It follows `UPGRADE_CHANNEL`
+from `/etc/gravedecay/grave.conf` (`release` by default), runs outside the
+dashboard service so its own restart cannot interrupt it, and reconnects the
+installed app when the raise completes.
+
+The release that first introduces the updater still needs one manual re-raise
+to install its systemd unit. Contributors following merged `master` should use
+`grave upgrade --edge`; release-channel appliances receive it with the next
+tagged release.
 
 `raise.sh` is idempotent, so updating *is* re-raising: your config is never
 clobbered (conf, stacks, and secrets are create-if-missing), while services,
