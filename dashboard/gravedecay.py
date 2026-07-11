@@ -1126,10 +1126,11 @@ if(!location.pathname.endsWith('/'))history.replaceState(null,'',location.pathna
   --glow:0 0 7px rgba(120,255,120,.28);
 }
 *{box-sizing:border-box;margin:0;-webkit-tap-highlight-color:transparent}
-html{-webkit-text-size-adjust:100%}
+html{-webkit-text-size-adjust:100%;overflow-x:hidden}
 body{background:var(--page);color:var(--ink-2);
   font:13.5px/1.5 ui-monospace,'JetBrains Mono','Fira Code',Menlo,Consolas,monospace;
-  padding:0 14px calc(24px + env(safe-area-inset-bottom));max-width:1120px;margin:0 auto}
+  padding:0 max(14px,env(safe-area-inset-left)) calc(24px + env(safe-area-inset-bottom))
+    max(14px,env(safe-area-inset-right));max-width:1120px;min-width:0;margin:0 auto;overflow-x:hidden}
 /* CRT: fixed scanlines + vignette, zero layout cost */
 body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:99;
   background:repeating-linear-gradient(0deg,transparent 0 2px,rgba(0,0,0,.13) 2px 3px)}
@@ -1142,7 +1143,8 @@ h1{font-size:17px;font-weight:700;color:var(--ink);text-shadow:var(--glow)}
 #toplogo{width:36px;height:36px;display:block}
 .topbar{position:sticky;top:0;z-index:101;display:flex;flex-wrap:nowrap;gap:10px;align-items:center;
   background:var(--page);margin:0 -14px 16px;
-  padding:calc(16px + env(safe-area-inset-top)) 14px 14px;
+  padding:calc(16px + env(safe-area-inset-top)) max(14px,env(safe-area-inset-right)) 14px
+    max(14px,env(safe-area-inset-left));
   border-bottom:1px solid var(--ring)}
 .topbar h1{white-space:nowrap}
 /* iOS PWA: an opaque strip over the status-bar/dynamic-island area — content
@@ -1164,6 +1166,7 @@ h1{font-size:17px;font-weight:700;color:var(--ink);text-shadow:var(--glow)}
 .apps{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:14px}
 .app{display:flex;align-items:center;justify-content:center;gap:8px;min-height:52px;
   background:var(--surface);border:1px solid var(--ring);
+  min-width:0;padding:7px;text-align:center;overflow-wrap:anywhere;
   font-weight:700;font-size:14px;color:var(--ink)}
 .app::before{content:'▸ ';color:var(--muted)}
 .app:hover{background:var(--ink-2);color:#000;text-shadow:none}
@@ -1191,14 +1194,15 @@ button.busy{opacity:.6;cursor:wait}
 @media(max-width:760px){#panels{grid-template-columns:1fr}}
 .w-full{grid-column:1/-1}
 .panel{position:relative;background:var(--surface);border:1px solid var(--ring);
-  border-radius:0;padding:16px 12px 10px}
+  border-radius:0;padding:16px 12px 10px;min-width:0}
 .panel h2{position:absolute;top:-8px;left:10px;background:var(--page);padding:0 7px;
+  max-width:calc(100% - 20px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   font-size:11px;font-weight:700;color:var(--title);letter-spacing:.08em;
   text-transform:uppercase}
 /* stat tiles */
-.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px;
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(148px,100%),1fr));gap:10px;
   background:transparent;border:none;padding:0}
-.tile{background:var(--surface);border:1px solid var(--ring);padding:10px 12px}
+.tile{background:var(--surface);border:1px solid var(--ring);padding:10px 12px;min-width:0}
 .tile .label{font-size:11px;color:var(--muted);margin-bottom:4px;
   text-transform:uppercase;letter-spacing:.07em}
 .tile .value{font-size:23px;font-weight:700;color:var(--ink);text-shadow:var(--glow)}
@@ -1212,8 +1216,9 @@ button.busy{opacity:.6;cursor:wait}
 .meter.crit{background:var(--track-crit)}
 .meter.crit i{background:repeating-linear-gradient(90deg,var(--crit) 0 5px,transparent 5px 7px)}
 /* tables */
-table{width:100%;border-collapse:collapse;font-size:13px}
-td{padding:4px 8px 4px 0;border-top:1px dashed var(--hairline);vertical-align:top}
+table{width:100%;max-width:100%;border-collapse:collapse;font-size:13px}
+td{min-width:0;padding:4px 8px 4px 0;border-top:1px dashed var(--hairline);
+  vertical-align:top;overflow-wrap:anywhere;word-break:break-word}
 tr:first-child td{border-top:none}
 td.num{text-align:right;font-variant-numeric:tabular-nums;color:var(--ink-2)}
 td.dim{color:var(--muted)}
@@ -1269,7 +1274,7 @@ body.gaming #foot{display:none}
 #gc-box2{border-color:#4a2222}
 .setrow{display:flex;gap:8px;align-items:center;margin:7px 0;flex-wrap:wrap;font-size:13px}
 .setrow input,.setrow select{background:var(--inset);border:1px solid var(--hairline);
-  color:var(--ink);border-radius:0;padding:7px 9px;
+  color:var(--ink);border-radius:0;padding:7px 9px;min-width:0;max-width:100%;
   font:13px ui-monospace,Menlo,monospace}
 .setrow input:focus,.setrow select:focus{outline:1px solid var(--accent)}
 /* text-only buttons must not render smaller than their emoji-bearing
@@ -1316,6 +1321,33 @@ body.gaming #foot{display:none}
 #appframe-title{flex:1;color:var(--title);font-size:12px;font-weight:700;
   letter-spacing:.06em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #appframe-if{flex:1;width:100%;border:0;background:var(--page)}
+/* Compact phones: preserve every action, but remove the last intrinsic-width
+   traps and make controls comfortable without allowing horizontal scrolling. */
+@media(max-width:520px){
+  body{padding-left:max(8px,env(safe-area-inset-left));
+    padding-right:max(8px,env(safe-area-inset-right));font-size:13px}
+  .topbar{gap:7px;margin-left:-8px;margin-right:-8px;
+    padding-left:max(8px,env(safe-area-inset-left));
+    padding-right:max(8px,env(safe-area-inset-right))}
+  #toplogo{width:32px;height:32px}.topbar h1{font-size:15px}
+  .topbar .meta{font-size:11px}.badge{padding:3px 7px}
+  .apps{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .tabs{gap:6px}.tab{padding:6px 4px;letter-spacing:.04em}
+  .panel{padding-left:9px;padding-right:9px}
+  .actions{grid-template-columns:1fr}
+  .overlay{padding-left:max(8px,env(safe-area-inset-left));
+    padding-right:max(8px,env(safe-area-inset-right))}
+  .dlg{padding:13px;margin:2vh auto;max-width:100%}
+  .setrow>*{max-width:100%}
+  .setrow input:not([type="checkbox"]),.setrow select{flex:1 1 100%;width:100%}
+  #appframe-box{width:100%;height:92vh;margin:1vh auto}
+  #appframe-open{padding-left:7px;padding-right:7px}
+}
+@media(max-width:360px){
+  #toplogo{display:none}.topbar h1{font-size:14px}
+  .topbar .meta{display:none}
+  .apps{grid-template-columns:1fr}
+}
 </style></head><body>
 <div id="topcover"></div>
 <div class="topbar">
