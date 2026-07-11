@@ -94,8 +94,12 @@ firewalld (default zone `drop`, allow `ssh`, trust `tailscale0`).
   `./raise.sh --profile steam-machine` restores it idempotently without touching
   your data.
 - **The toolchain**: `grave update` runs `brew upgrade` on the immutable profile
-  (it never calls `pacman`). t3 is pinned to its compiled Node LTS; rebuild it
-  with `steamos-toolchain.sh` if you bump it.
+  (it never calls `pacman`) and updates T3 Code to npm's stable `latest` tag.
+  `grave t3 status` only checks its installed/latest versions; `grave t3 update`
+  performs that update directly. The updater rebuilds t3's native `node-pty`
+  against the pinned Node LTS before validating it and restarting the web
+  service. Nightly releases are never selected automatically. The dashboard's
+  **Update T3 Code** action runs the same guarded path.
 - **gravedecay itself**: `grave upgrade` as usual.
 
 ## Reboot, auto-start & self-heal
