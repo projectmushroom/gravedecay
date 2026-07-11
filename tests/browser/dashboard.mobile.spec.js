@@ -18,15 +18,18 @@ async function expectNoHorizontalOverflow(page, label) {
 test.beforeEach(async ({ page }) => {
   await page.goto('./');
   await expect(page.locator('#apps')).not.toBeEmpty();
+  // Generic CI runners have no active t3code.service and therefore report
+  // gaming mode. Keep the visual fixture in developer presentation even when
+  // a background poll reapplies the real host mode while a test is running.
+  await page.evaluate(() => {
+    const normalize = () => document.body.classList.remove('gaming');
+    new MutationObserver(normalize).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    normalize();
+  });
 });
 
 test('work and system dashboards fit the installed-app viewport', async ({ page }) => {
   await expectNoHorizontalOverflow(page, 'work tab');
-  // A generic CI runner has no active t3code.service, so the real backend
-  // correctly reports gaming mode and hides navigation. This test owns the
-  // presentation state it is exercising; host mode behavior is covered by
-  // the backend contracts rather than assumed from the runner.
-  await page.evaluate(() => document.body.classList.remove('gaming'));
   await page.locator('[data-tab="system"]').click();
   await expect(page.locator('[data-panel="stats"]')).toBeVisible();
   await expect(page.locator('[data-act="update-grave"]')).toBeVisible();
