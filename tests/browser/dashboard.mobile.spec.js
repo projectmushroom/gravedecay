@@ -22,6 +22,11 @@ test.beforeEach(async ({ page }) => {
 
 test('work and system dashboards fit the installed-app viewport', async ({ page }) => {
   await expectNoHorizontalOverflow(page, 'work tab');
+  // A generic CI runner has no active t3code.service, so the real backend
+  // correctly reports gaming mode and hides navigation. This test owns the
+  // presentation state it is exercising; host mode behavior is covered by
+  // the backend contracts rather than assumed from the runner.
+  await page.evaluate(() => document.body.classList.remove('gaming'));
   await page.locator('[data-tab="system"]').click();
   await expect(page.locator('[data-panel="stats"]')).toBeVisible();
   await expect(page.locator('[data-act="update-grave"]')).toBeVisible();
