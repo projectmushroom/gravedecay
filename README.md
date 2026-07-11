@@ -138,7 +138,11 @@ anywhere (cellular included), end-to-end encrypted by the tailnet.
 
 Install the PWA / macOS web app from `https://<box>.<tailnet>.ts.net/grave/`.
 Everything on the box is one tap from there, all same-origin so navigation
-never leaves the installed app. Terminal-styled (phosphor green, TUI frames,
+never leaves the installed app. The manifest deliberately scopes the app to
+the whole origin so `/grave/`, T3, Terminal, and pairing are one appliance app.
+If the tailnet path drops, the installed app shows a cached connection-help
+screen; live machine data and actions are never cached. Terminal-styled
+(phosphor green, TUI frames,
 scanlines), split into **🛠️ Work** and **📟 System** tabs:
 
 **Launcher** — tiles for T3 Code, Terminal, Claude, Codex, GitHub, a built-in

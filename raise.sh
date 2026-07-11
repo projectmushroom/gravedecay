@@ -224,6 +224,8 @@ sudo visudo -c -f "$SUDOERS_FILE" >/dev/null && ok "sudoers valid ($SUDOERS_FILE
 # ----------------------------------------------------------- 5. gravedecay ----
 step "gravedecay"
 install -m 755 "$REPO_DIR/dashboard/gravedecay.py" "$GRAVE_ROOT/scripts/gravedecay.py"
+install -d -m 755 "$GRAVE_ROOT/scripts/dashboard-static"
+install -m 644 "$REPO_DIR/dashboard/static/"* "$GRAVE_ROOT/scripts/dashboard-static/"
 install -m 644 "$REPO_DIR/assets/gravedecay.png" "$GRAVE_ROOT/config/gravedecay.png"
 sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
     -e "s|@DASH_PORT@|$DASH_PORT|g" -e "s|@ALLOWED_USERS@|$ALLOWED_USERS|g" \
