@@ -22,7 +22,9 @@ test.beforeEach(async ({ page }) => {
   // gaming mode. Keep the visual fixture in developer presentation even when
   // a background poll reapplies the real host mode while a test is running.
   await page.evaluate(() => {
-    const normalize = () => document.body.classList.remove('gaming');
+    const normalize = () => {
+      if (document.body.classList.contains('gaming')) document.body.classList.remove('gaming');
+    };
     new MutationObserver(normalize).observe(document.body, { attributes: true, attributeFilter: ['class'] });
     normalize();
   });
