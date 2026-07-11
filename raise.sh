@@ -232,6 +232,10 @@ sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
     -e "s|@TOOLPATH@|$TOOLPATH|g" -e "s|@DOCKER_HOST@|$DOCKER_HOSTV|g" \
     -e "s|@UNITS@|$UNITS|g" -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" \
     "$REPO_DIR/systemd/gravedecay.service.tmpl" | sudo tee /etc/systemd/system/gravedecay.service >/dev/null
+sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
+    -e "s|@TOOLPATH@|$TOOLPATH|g" -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" \
+    "$REPO_DIR/systemd/gravedecay-upgrade.service.tmpl" \
+    | sudo tee /etc/systemd/system/gravedecay-upgrade.service >/dev/null
 [[ -n "$ALLOWED_USERS" ]] && ok "dashboard actions allowed for: $ALLOWED_USERS" \
   || skip "dashboard is read-only until GRAVEDECAY_ALLOWED_USERS is set (auto-fills after tailscale login on re-raise)"
 # drop an empty DOCKER_HOST= line on system-docker hosts (empty would confuse the CLI)

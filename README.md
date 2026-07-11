@@ -167,7 +167,10 @@ to `$GRAVE_ROOT` with the secret store carved out; see `docs/SECURITY.md`.
 - 📦 **Repos** — branch, dirty state, last commit
 
 **System tab** — vitals (CPU/GPU temps, fans, load, memory, disk), action
-buttons, services, docker containers, journal errors.
+buttons, services, docker containers, journal errors. **Update gravedecay**
+starts a detached system upgrade on the configured `UPGRADE_CHANNEL`, re-runs
+the idempotent raise, and lets the dashboard reconnect after its own restart;
+agent tmux sessions are unaffected.
 
 **⚙️ Settings** (identity-gated, like all actions) — show/hide/reorder
 widgets, manage tiles (show, open-in-modal, open-in-new-tab per tile, and

@@ -121,6 +121,10 @@ ACTIONS = {
     "developer": [GRAVE, "developer"],
     "restart-t3": ["sudo", "-n", "systemctl", "restart", "t3code"],
     "update-t3": [GRAVE, "t3", "update"],
+    # Detached system unit: `grave upgrade` re-raises and restarts this
+    # dashboard, so it must not run inside gravedecay.service's cgroup.
+    "update-grave": ["sudo", "-n", "systemctl", "--no-block", "start",
+                     "gravedecay-upgrade.service"],
     "doctor": [GRAVE, "doctor"],
     # one-time device pairing token for T3 (viewer-gated like everything
     # else); --base-url is appended per-request from the Host header so the
@@ -1612,6 +1616,7 @@ body.gaming #foot{display:none}
       <button data-act="developer">💻 Developer mode</button>
       <button data-act="restart-t3" data-confirm="Restart T3 Code? Active agent sessions survive, the UI reconnects.">↻ Restart T3 Code</button>
       <button data-act="update-t3" data-confirm="Install the latest stable T3 Code release and restart its web service? Active agent sessions survive.">⬆ Update T3 Code</button>
+      <button data-act="update-grave" data-confirm="Update gravedecay using this appliance's configured release/edge channel, then re-raise it? The dashboard will briefly reconnect; agent sessions survive.">⬆ Update gravedecay</button>
       <button data-act="doctor">🩺 Run doctor</button>
       <button data-act="reboot" data-confirm="Reboot the machine? Agent sessions die; everything else comes back automatically in the configured boot mode.">🔁 Reboot box</button>
       <button id="kill-open">🗡️ Kill sessions…</button>

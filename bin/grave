@@ -615,6 +615,7 @@ cmd_doctor() {
   fi
   if systemctl is-active --quiet gravedecay; then
     check "gravedecay answering"         curl -sf -o /dev/null "http://127.0.0.1:$DASH_PORT/healthz"
+    check "dashboard self-updater installed" systemctl cat gravedecay-upgrade.service
     check "dashboard PWA owns app origin" bash -c \
       "curl -sf 'http://127.0.0.1:$DASH_PORT/manifest.webmanifest' | grep -q '\"scope\": \"/\"'"
     check "dashboard offline shell ready" bash -c \

@@ -16,6 +16,7 @@ services your projects need (databases, browsers). This is the opposite of
 | CLI agent sessions | `tmux -L agents` | Survive client disconnects; `grave agents new/attach` |
 | Backing services | Docker compose stacks in `$GRAVE_ROOT/docker/` | Postgres, Redis, Playwright — disposable, loopback-bound |
 | Control plane | `grave` (bash, `/usr/local/bin`) | One entrypoint for modes, doctor, logs, backup |
+| Self-updater | `gravedecay-upgrade.service`, detached oneshot | Survives the dashboard restart caused by its own re-raise |
 
 ## Filesystem
 
@@ -66,3 +67,10 @@ responses, machine state, file listings, and action output are always
 disconnected launch explains how to restore Tailscale instead of showing a
 blank browser error. `grave doctor` verifies the manifest scope and root-scoped
 service worker contract.
+
+Dashboard self-upgrades are queued with `systemctl --no-block` into
+`gravedecay-upgrade.service`. They must never execute as a child of the
+dashboard: `grave upgrade` invokes `raise.sh`, which restarts
+`gravedecay.service` and kills that service's remaining cgroup processes.
+The oneshot follows `UPGRADE_CHANNEL` from `/etc/gravedecay/grave.conf` and
+refuses to touch a checkout with uncommitted changes.

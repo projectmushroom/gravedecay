@@ -61,6 +61,15 @@ class DashboardContractTests(unittest.TestCase):
         self.assertNotIn("html{-webkit-text-size-adjust:100%;overflow-x:hidden}", page)
         self.assertIn("id=\"connection\"", page)
 
+    def test_self_upgrade_is_detached_from_the_dashboard_service(self):
+        command = DASHBOARD.ACTIONS["update-grave"]
+        self.assertIn("--no-block", command)
+        self.assertEqual(command[-1], "gravedecay-upgrade.service")
+        self.assertIn('data-act="update-grave"', DASHBOARD.PAGE)
+        unit = (ROOT / "systemd/gravedecay-upgrade.service.tmpl").read_text()
+        self.assertIn("Type=oneshot", unit)
+        self.assertIn("ExecStart=@GRAVE_BIN@ upgrade", unit)
+
 
 if __name__ == "__main__":
     unittest.main()

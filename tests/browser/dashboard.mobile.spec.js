@@ -24,6 +24,7 @@ test('work and system dashboards fit the installed-app viewport', async ({ page 
   await expectNoHorizontalOverflow(page, 'work tab');
   await page.locator('[data-tab="system"]').click();
   await expect(page.locator('[data-panel="stats"]')).toBeVisible();
+  await expect(page.locator('[data-act="update-grave"]')).toBeVisible();
   await expectNoHorizontalOverflow(page, 'system tab');
 });
 
