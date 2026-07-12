@@ -74,5 +74,19 @@ class WorkspaceTests(unittest.TestCase):
         p=self.run_cli("linear-set","alice",ok=False,input="not-a-key\n")
         self.assertNotIn("not-a-key",p.stderr)
         self.assertFalse((self.root/"workspaces/alice/config/secrets/linear.env").exists())
+    def test_shared_provider_is_single_copy_and_immediately_revocable(self):
+        self.run_cli("add","123","a@example.com","alice"); self.run_cli("add","456","b@example.com","bob")
+        value="sk-test-"+"z"*32
+        out=self.run_cli("provider-set",input="OPENAI_API_KEY="+value+"\n").stdout
+        shared=self.root/"config/secrets/provider.env"; a=self.root/"workspaces/alice/config/provider.env"; b=self.root/"workspaces/bob/config/provider.env"
+        self.assertEqual(shared.stat().st_mode&0o777,0o600); self.assertTrue(a.is_symlink()); self.assertTrue(b.is_symlink())
+        self.assertEqual(a.resolve(),shared.resolve()); self.assertEqual(b.resolve(),shared.resolve()); self.assertNotIn(value,out)
+        status=self.run_cli("provider-status").stdout; self.assertNotIn(value,status)
+        self.run_cli("provider-policy","revoke","bob"); self.assertTrue(a.is_symlink()); self.assertFalse(b.exists())
+        data=json.loads((self.root/"config/workspaces.json").read_text()); self.assertFalse(data["workspaces"][1]["provider"]["llm"])
+        self.run_cli("provider-policy","grant","bob"); self.assertTrue(b.is_symlink())
+    def test_provider_rejects_unknown_environment_names(self):
+        self.run_cli("provider-set",ok=False,input="PATH=/evil/credential-value-long\n")
+        self.assertFalse((self.root/"config/secrets/provider.env").exists())
 
 if __name__ == "__main__": unittest.main()

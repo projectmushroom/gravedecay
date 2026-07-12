@@ -76,3 +76,25 @@ GitHub authentication likewise runs with the workspace HOME: `github-login`,
 back to the appliance owner's `~/.config/gh`. Per-workspace dashboard and T3
 processes provide cache isolation through separate processes, HOME/XDG paths,
 and integration environments.
+
+## Shared coding provider
+
+Multi-user v1 supports administrator-managed API-key authentication only:
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or both. Pipe the assignments to
+`grave provider set`; the only credential copy is the root-owned mode-600
+`$GRAVE_ROOT/config/secrets/provider.env`. An entitled workspace gets a
+root-created reference consumed by systemd before it drops to `grave-<slug>`.
+Use `grave provider grant|revoke <workspace>` to change entitlement. Revocation
+removes the reference and restarts that T3 unit, terminating existing provider
+processes so a new session cannot inherit the key.
+
+This is administrative sharing, not credential confidentiality from an
+entitled developer. Agent processes receive a directly usable API key in their
+environment; a developer who controls those processes can extract and reuse
+it. The key is absent from registry/API/status output, generated unit text,
+process arguments, normal logs, and default backups. A future compatible local
+provider proxy with per-workspace tokens would strengthen this boundary.
+Every T3/provider process receives `GRAVE_WORKSPACE_ID`; systemd journal unit
+names also contain the workspace slug. These attribute sessions operationally.
+Provider-side usage attribution is available only when that provider/CLI
+supports forwarding custom metadata; the supported v1 CLIs currently do not.
