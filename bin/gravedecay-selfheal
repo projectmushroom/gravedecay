@@ -31,7 +31,13 @@ export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 # 1. drift detection — the /etc pieces a SteamOS update could wipe
 missing=()
 [[ -f "$CONF" ]] || missing+=("$CONF")
-for unit in gravedecay gravedecay-term t3code tailscaled; do
+units=(gravedecay tailscaled)
+if [[ "${MULTI_USER:-0}" == 1 ]]; then
+  units+=(gravedecay-gateway gravedecay-t3@ gravedecay-term@ gravedecay-dashboard@)
+else
+  units+=(gravedecay-term t3code)
+fi
+for unit in "${units[@]}"; do
   systemctl cat "$unit.service" >/dev/null 2>&1 || missing+=("$unit.service")
 done
 ls /etc/sudoers.d/ 2>/dev/null | grep -q gravedecay || missing+=("scoped sudoers")
@@ -50,7 +56,12 @@ rm -f "$MARK" 2>/dev/null || true
 # 2. no drift — make sure the dev stacks are actually up (container restart
 # policies usually handle this; this covers the edge cases), but only in the
 # developer boot posture so we never override `grave bootmode gaming`.
-if systemctl is-enabled --quiet t3code 2>/dev/null; then
+multi_dev=0
+if [[ "${MULTI_USER:-0}" == 1 && -r "$GRAVE_ROOT/config/workspaces.json" ]]; then
+  first_slug=$(jq -r '.workspaces[] | select(.enabled) | .slug' "$GRAVE_ROOT/config/workspaces.json" 2>/dev/null | head -1)
+  [[ -n "$first_slug" ]] && systemctl is-enabled --quiet "gravedecay-t3@$first_slug" 2>/dev/null && multi_dev=1
+fi
+if systemctl is-enabled --quiet t3code 2>/dev/null || [[ "$multi_dev" == 1 ]]; then
   systemctl --user start docker >/dev/null 2>&1 || true
   for stack in "${DEV_STACKS[@]:-}"; do
     [[ -n "$stack" ]] && grave docker up "$stack" >>"$LOG" 2>&1 || true

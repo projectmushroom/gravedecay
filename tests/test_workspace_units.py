@@ -16,5 +16,7 @@ class WorkspaceUnitContracts(unittest.TestCase):
         self.assertIn("-i lo",term); self.assertIn("TMUX_SOCKET=grave-%i",term)
         webterm=(ROOT/"bin/webterm").read_text()
         self.assertIn('WORKSPACE_ROLE" == admin',webterm); self.assertIn('tmux -L "$TMUX_SOCKET"',webterm)
+        dashboard=(ROOT/"dashboard/gravedecay.py").read_text()
+        self.assertIn('os.environ.get("DASH_PORT", "4712")',dashboard)
 
 if __name__ == "__main__": unittest.main()

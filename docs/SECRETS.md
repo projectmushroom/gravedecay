@@ -83,7 +83,9 @@ Multi-user v1 supports administrator-managed API-key authentication only:
 `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or both. Pipe the assignments to
 `grave provider set`; the only credential copy is the root-owned mode-600
 `$GRAVE_ROOT/config/secrets/provider.env`. An entitled workspace gets a
-root-created reference consumed by systemd before it drops to `grave-<slug>`.
+root-created reference under `config/workspace-services/` consumed by systemd
+before it drops to `grave-<slug>`. That directory is mode 700 and not writable
+by workspace users, so a revoked reference cannot be recreated by its user.
 Use `grave provider grant|revoke <workspace>` to change entitlement. Revocation
 removes the reference and restarts that T3 unit, terminating existing provider
 processes so a new session cannot inherit the key.

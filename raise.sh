@@ -32,7 +32,7 @@ ok()   { printf '  %b✓%b %s\n' "$GRN" "$RST" "$*"; }
 skip() { printf '  %b–%b %s\n' "$YLW" "$RST" "$*"; }
 
 [[ $EUID -eq 0 ]] && { echo "Run as your normal user, not root (sudo is used internally)."; exit 1; }
-sudo -n true 2>/dev/null || sudo -v || { echo "sudo access required"; exit 1; }
+sudo -n systemctl --version >/dev/null 2>&1 || sudo -v || { echo "sudo access required"; exit 1; }
 
 # ----------------------------------------------- 0. environment detection ----
 # Immutable rootfs (stock SteamOS, Silverblue, …): /usr is read-only and an OS
@@ -261,6 +261,8 @@ if [[ "${MULTI_USER:-0}" == 1 ]]; then
   done
   sudo systemctl daemon-reload
   sudo systemctl enable --now gravedecay-gateway
+  sudo -n "$GRAVE_BIN" __users reapply --t3-bin "$T3_BIN" --ttyd-bin "$TTYD_BIN" \
+    --tool-path "$TOOLPATH" --grave-bin "$GRAVE_BIN"
   while IFS= read -r slug; do
     sudo systemctl enable --now "gravedecay-t3@$slug" "gravedecay-term@$slug" "gravedecay-dashboard@$slug"
   done < <(jq -r '.workspaces[] | select(.enabled) | .slug' "$GRAVE_ROOT/config/workspaces.json" 2>/dev/null)
@@ -413,6 +415,19 @@ elif ! tailscale status --peers=false >/dev/null 2>&1; then
   skip "tailscale not logged in — run 'sudo tailscale up --ssh', rerun raise.sh"
 else
   sudo tailscale set --operator="$RUN_USER" 2>/dev/null || true
+  # The gateway's random Serve backend path is a local trust capability.
+  # Hide Serve configuration from workspace users by restricting LocalAPI to
+  # root and the appliance owner's existing primary group, including restarts.
+  RUN_GROUP=$(id -gn "$RUN_USER")
+  sudo mkdir -p /etc/systemd/system/tailscaled.service.d
+  sudo tee /etc/systemd/system/tailscaled.service.d/gravedecay-localapi.conf >/dev/null <<EOF
+[Service]
+ExecStartPost=+/usr/bin/chgrp $RUN_GROUP /run/tailscale/tailscaled.sock
+ExecStartPost=+/usr/bin/chmod 0660 /run/tailscale/tailscaled.sock
+EOF
+  sudo chgrp "$RUN_GROUP" /run/tailscale/tailscaled.sock
+  sudo chmod 0660 /run/tailscale/tailscaled.sock
+  sudo systemctl daemon-reload
   if [[ "${MULTI_USER:-0}" == 1 ]]; then
     gateway_token=$(<"$GRAVE_ROOT/config/secrets/gateway-token")
     tailscale serve --bg --https=443 "http://127.0.0.1:${GATEWAY_PORT:-4710}/_grave_proxy/$gateway_token" >/dev/null \

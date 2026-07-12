@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT=Path(os.environ.get("GRAVE_ROOT","/srv/dev"))
 REGISTRY=Path(os.environ.get("GRAVE_WORKSPACE_REGISTRY",ROOT/"config/workspaces.json"))
 HOST="127.0.0.1"; PORT=int(os.environ.get("GRAVE_GATEWAY_PORT","4710"))
+ADMIN_DASH_PORT=int(os.environ.get("GRAVE_ADMIN_DASH_PORT","4712"))
 TOKEN_FILE=Path(os.environ.get("GRAVE_GATEWAY_TOKEN_FILE",ROOT/"config/secrets/gateway-token"))
 AUDIT=Path(os.environ.get("GRAVE_AUDIT_LOG",ROOT/"logs/audit.jsonl"))
 MAX_HEADER=65536
@@ -118,12 +119,18 @@ class Handler(socketserver.BaseRequestHandler):
             audit("access_denied",headers.get("tailscale-user-login"),None,state); self.request.sendall(response(code,state)); return
         if admin_request(method,path,rest) and w["role"] != "admin":
             audit("admin_denied",w["id"],w["slug"],"forbidden"); self.request.sendall(response(403,"administrator access required")); return
+        if admin_request(method,path,rest): audit("administrative_action",w["id"],w["slug"])
+        if path.split("?",1)[0]=="/grave/api/action" and b't3-pair' in rest: audit("pairing_created",w["id"],w["slug"])
         clean=path
         if path == "/grave": clean="/grave/"
         if clean.startswith("/grave/"): kind="dash"; upstream_path=clean[len("/grave"):]
         elif clean.startswith("/term/") or clean == "/term": kind="term"; upstream_path=clean[len("/term"):] or "/"
         else: kind="t3"; upstream_path=clean
-        port=w["ports"][kind]
+        if kind=="term" or headers.get("upgrade","").lower()=="websocket": audit("session_created",w["id"],w["slug"])
+        # Appliance mutations execute in the legacy owner dashboard service,
+        # whose Unix account alone has the scoped sudoers grant. Developers
+        # are denied above; the admin workspace otherwise keeps private state.
+        port=ADMIN_DASH_PORT if kind=="dash" and admin_request(method,path,rest) and w["role"]=="admin" else w["ports"][kind]
         stripped={"tailscale-user-login","tailscale-user-id","x-grave-workspace","x-grave-role","x-forwarded-host","x-forwarded-user"}
         forwarded=[line for line in raw_headers if line.partition(":")[0].strip().lower() not in stripped]
         forwarded += [f"X-Grave-Workspace: {w['slug']}",f"X-Grave-Role: {w['role']}",f"X-Forwarded-User: {w['id']}"]
