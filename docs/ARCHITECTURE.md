@@ -26,6 +26,13 @@ T3, terminal, and dashboard ports. User input never selects an upstream. The
 proxy supports ordinary HTTP streaming and WebSocket upgrades by relaying the
 connection bidirectionally.
 
+Each workspace has three templated services running as `grave-<slug>`: T3,
+ttyd/tmux, and a workspace-scoped dashboard. HOME, XDG state/config/runtime,
+repos, logs, ports, and tmux socket names are private. Units use loopback-only
+listeners, restrictive umasks, `NoNewPrivileges`, and CPU/task/memory ceilings.
+Stopping or restarting one instance addresses only that workspace; enabled
+instances participate in boot and developer/gaming transitions.
+
 ## Filesystem
 
 Everything lives under `$GRAVE_ROOT` (default `/srv/dev`):

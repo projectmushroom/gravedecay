@@ -1,0 +1,26 @@
+[Unit]
+Description=gravedecay terminal workspace %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=grave-%i
+Group=grave-%i
+EnvironmentFile=@GRAVE_ROOT@/workspaces/%i/config/service.env
+ExecStart=/usr/bin/env ${TTYD_BIN} -p ${TERM_PORT} -i lo -W --url-arg -t fontSize=14 -t titleFixed=gravedecay-${WORKSPACE_SLUG} @GRAVE_ROOT@/scripts/webterm
+Environment=HOME=@GRAVE_ROOT@/workspaces/%i
+Environment=GRAVE_ROOT=@GRAVE_ROOT@/workspaces/%i
+Environment=TMUX_SOCKET=grave-%i
+Environment=TMUX_CONF=@GRAVE_ROOT@/config/tmux.conf
+Restart=always
+RestartSec=3
+NoNewPrivileges=yes
+UMask=0077
+TasksMax=256
+MemoryHigh=3G
+MemoryMax=4G
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target

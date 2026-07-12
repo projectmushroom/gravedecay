@@ -6,6 +6,8 @@
 # closing the tab never kills the process.
 set -euo pipefail
 GRAVE_ROOT="${GRAVE_ROOT:-/srv/dev}"
+TMUX_SOCKET="${TMUX_SOCKET:-agents}"
+WORKSPACE_ROLE="${WORKSPACE_ROLE:-admin}"
 
 choice="${1:-shell}"
 name="${choice//[^a-zA-Z0-9_-]/}"
@@ -18,8 +20,8 @@ case "$name" in
   # Opt-in per tile from ⚙️ settings (⚡). Safe-ish only because this box is a
   # single-human, tailnet-only appliance (see docs/SECURITY.md). These get
   # their own tmux session name so they never share state with a gated one.
-  claude-yolo) cmd=(claude --dangerously-skip-permissions) ;;
-  codex-yolo)  cmd=(codex --dangerously-bypass-approvals-and-sandbox) ;;
+  claude-yolo) [[ "$WORKSPACE_ROLE" == admin ]] || { echo "skip-permissions sessions are disabled for developers"; exit 126; }; cmd=(claude --dangerously-skip-permissions) ;;
+  codex-yolo)  [[ "$WORKSPACE_ROLE" == admin ]] || { echo "skip-permissions sessions are disabled for developers"; exit 126; }; cmd=(codex --dangerously-bypass-approvals-and-sandbox) ;;
   # auth shortcuts (⚙️ settings → opens a terminal running the login flow;
   # session ends when the flow exits)
   auth-claude) cmd=(claude /login) ;;
@@ -29,5 +31,5 @@ case "$name" in
 esac
 
 # -A: attach if the session exists, create it if not
-exec tmux -L agents -f "$GRAVE_ROOT/config/tmux.conf" \
+exec tmux -L "$TMUX_SOCKET" -f "${TMUX_CONF:-$GRAVE_ROOT/config/tmux.conf}" \
   new-session -A -s "$name" "${cmd[@]}"
