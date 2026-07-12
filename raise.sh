@@ -30,6 +30,13 @@ GRN=$'\e[32m'; YLW=$'\e[33m'; BLD=$'\e[1m'; RST=$'\e[0m'
 step() { printf '\n%b🪦 %s%b\n' "$BLD" "$*" "$RST"; }
 ok()   { printf '  %b✓%b %s\n' "$GRN" "$RST" "$*"; }
 skip() { printf '  %b–%b %s\n' "$YLW" "$RST" "$*"; }
+enable_restart() {
+  # `enable --now` starts an inactive unit but deliberately leaves an active
+  # process untouched. Raise has just replaced scripts and unit files, so an
+  # explicit restart is required for the running appliance to match disk.
+  sudo systemctl enable "$@" >/dev/null
+  sudo systemctl restart "$@"
+}
 
 [[ $EUID -eq 0 ]] && { echo "Run as your normal user, not root (sudo is used internally)."; exit 1; }
 sudo -n systemctl --version >/dev/null 2>&1 || sudo -v || { echo "sudo access required"; exit 1; }
@@ -248,7 +255,7 @@ sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
 # drop an empty DOCKER_HOST= line on system-docker hosts (empty would confuse the CLI)
 sudo sed -i '/^Environment=DOCKER_HOST=$/d' /etc/systemd/system/gravedecay.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now gravedecay
+enable_restart gravedecay
 curl -sf -o /dev/null "http://127.0.0.1:$DASH_PORT/healthz" && ok "gravedecay answering on :$DASH_PORT"
 
 # Multi-user front door is installed only when explicitly enabled in grave.conf.
@@ -264,11 +271,11 @@ if [[ "${MULTI_USER:-0}" == 1 ]]; then
       | sudo tee "/etc/systemd/system/$template.service" >/dev/null
   done
   sudo systemctl daemon-reload
-  sudo systemctl enable --now gravedecay-gateway
+  enable_restart gravedecay-gateway
   sudo -n "$GRAVE_BIN" __users reapply --t3-bin "$T3_BIN" --ttyd-bin "$TTYD_BIN" \
     --tool-path "$TOOLPATH" --grave-bin "$GRAVE_BIN"
   while IFS= read -r slug; do
-    sudo systemctl enable --now "gravedecay-t3@$slug" "gravedecay-term@$slug" "gravedecay-dashboard@$slug"
+    enable_restart "gravedecay-t3@$slug" "gravedecay-term@$slug" "gravedecay-dashboard@$slug"
   done < <(jq -r '.workspaces[] | select(.enabled) | .slug' "$GRAVE_ROOT/config/workspaces.json" 2>/dev/null)
   curl -sf -o /dev/null "http://127.0.0.1:${GATEWAY_PORT:-4710}/healthz" && ok "identity gateway answering"
 fi
@@ -284,7 +291,7 @@ if command -v ttyd >/dev/null; then
       "$REPO_DIR/systemd/gravedecay-term.service.tmpl" | sudo tee /etc/systemd/system/gravedecay-term.service >/dev/null
   sudo sed -i '/^Environment=DOCKER_HOST=$/d' /etc/systemd/system/gravedecay-term.service
   sudo systemctl daemon-reload
-  sudo systemctl enable --now gravedecay-term
+  enable_restart gravedecay-term
   curl -sf -o /dev/null "http://127.0.0.1:$TERM_PORT/" && ok "web terminal answering on :$TERM_PORT"
 else
   skip "ttyd missing — web terminal not installed"
@@ -306,7 +313,7 @@ sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
     -e "s|@T3@|$T3_BIN|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
     "$REPO_DIR/systemd/t3code.service.tmpl" | sudo tee /etc/systemd/system/t3code.service >/dev/null
 sudo systemctl daemon-reload
-sudo systemctl enable --now t3code
+enable_restart t3code
 sleep 2
 curl -sf -o /dev/null "http://127.0.0.1:$T3_PORT/" && ok "t3code answering on :$T3_PORT" \
   || skip "t3code not answering yet — check: grave logs t3"
@@ -333,7 +340,7 @@ if [[ "$IMMUTABLE" == 1 ]]; then
       -e "s|@HOME@|$HOME_DIR|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
       "$REPO_DIR/systemd/gravedecay-gamewatch.service.tmpl" | sudo tee /etc/systemd/system/gravedecay-gamewatch.service >/dev/null
   sudo systemctl daemon-reload
-  sudo systemctl enable --now gravedecay-gamewatch >/dev/null 2>&1 || true
+  enable_restart gravedecay-gamewatch >/dev/null 2>&1 || true
   ok "game-mode watcher installed (flip on with: grave gamewatch on)"
 fi
 
