@@ -728,6 +728,7 @@ grave — gravedecay appliance control 🪦
   grave doctor               verify every platform invariant
   grave users [list|add|inspect|disable|remove]
   grave projects [list|grant|revoke|git-config]
+  grave integrations [status|github-login|github-logout|linear-set|linear-logout]
 
   grave gaming               🎮 free resources: stop services, FREEZE agent
                              sessions in place (🧊 torpor — RAM kept, zero CPU)
@@ -791,6 +792,13 @@ case "${1:-help}" in
       list) exec sudo -n "$0" __users projects "$@" ;;
       grant|revoke|git-config) exec sudo -n "$0" __users "$sub" "$@" ;;
       *) say "usage: grave projects [list <workspace>|grant <workspace> <name> <url>|revoke <workspace> <name>|git-config <workspace> --name N --email E]"; exit 1 ;;
+    esac ;;
+  integrations)
+    shift || true; sub="${1:-status}"; shift || true
+    case "$sub" in
+      status) exec sudo -n "$0" __users integration-status "$@" ;;
+      github-login|github-logout|linear-set|linear-logout) exec sudo -n "$0" __users "$sub" "$@" ;;
+      *) say "usage: grave integrations [status <workspace>|github-login <workspace>|github-logout <workspace> --user U|linear-set <workspace>|linear-logout <workspace>]"; exit 1 ;;
     esac ;;
   __users)    shift || true; [[ $EUID == 0 ]] || { bad "internal users helper requires root"; exit 1; }; exec "$(dirname "$0")/grave-workspaces" "$@" ;;
   backup)     cmd_backup ;;

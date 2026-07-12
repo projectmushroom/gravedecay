@@ -7,9 +7,9 @@ class WorkspaceTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(); self.root=Path(self.temp.name)
     def tearDown(self): self.temp.cleanup()
-    def run_cli(self,*args,ok=True):
+    def run_cli(self,*args,ok=True,input=None):
         env={**os.environ,"GRAVE_ROOT":str(self.root),"GRAVE_WORKSPACE_TEST":"1"}
-        p=subprocess.run([SCRIPT,*args],env=env,text=True,capture_output=True)
+        p=subprocess.run([SCRIPT,*args],env=env,text=True,capture_output=True,input=input)
         self.assertEqual(p.returncode==0,ok,p.stderr)
         return p
     def test_lifecycle_is_idempotent_and_isolated(self):
@@ -59,5 +59,20 @@ class WorkspaceTests(unittest.TestCase):
         alice=(self.root/"workspaces/alice/.gitconfig").read_text(); bob=(self.root/"workspaces/bob/.gitconfig").read_text()
         self.assertIn("Alice Dev",alice); self.assertNotIn("Bob Dev",alice)
         self.assertIn("Bob Dev",bob); self.assertIn("ABC123",bob); self.assertIn("gpgsign = true",bob)
+    def test_linear_credentials_are_private_separate_and_revocable(self):
+        self.run_cli("add","123","a@example.com","alice"); self.run_cli("add","456","b@example.com","bob")
+        self.run_cli("linear-set","alice",input="lin_api_"+"a"*32+"\n")
+        self.run_cli("linear-set","bob",input="lin_api_"+"b"*32+"\n")
+        alice=self.root/"workspaces/alice/config/secrets/linear.env"; bob=self.root/"workspaces/bob/config/secrets/linear.env"
+        self.assertNotEqual(alice.read_text(),bob.read_text()); self.assertEqual(alice.stat().st_mode&0o777,0o600)
+        status=self.run_cli("integration-status","alice").stdout
+        self.assertIn('"linear": "configured"',status); self.assertNotIn("lin_api_",status)
+        self.run_cli("linear-logout","alice"); self.assertFalse(alice.exists()); self.assertTrue(bob.exists())
+        self.assertIn('"linear": "onboarding"',self.run_cli("integration-status","alice").stdout)
+    def test_invalid_linear_key_is_never_stored(self):
+        self.run_cli("add","123","a@example.com","alice")
+        p=self.run_cli("linear-set","alice",ok=False,input="not-a-key\n")
+        self.assertNotIn("not-a-key",p.stderr)
+        self.assertFalse((self.root/"workspaces/alice/config/secrets/linear.env").exists())
 
 if __name__ == "__main__": unittest.main()

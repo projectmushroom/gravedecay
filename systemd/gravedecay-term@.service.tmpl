@@ -8,6 +8,7 @@ Type=simple
 User=grave-%i
 Group=grave-%i
 EnvironmentFile=@GRAVE_ROOT@/workspaces/%i/config/service.env
+EnvironmentFile=-@GRAVE_ROOT@/workspaces/%i/config/secrets/linear.env
 ExecStart=/usr/bin/env ${TTYD_BIN} -p ${TERM_PORT} -i lo -W --url-arg -t fontSize=14 -t titleFixed=gravedecay-${WORKSPACE_SLUG} @GRAVE_ROOT@/scripts/webterm
 Environment=HOME=@GRAVE_ROOT@/workspaces/%i
 Environment=GRAVE_ROOT=@GRAVE_ROOT@/workspaces/%i

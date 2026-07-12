@@ -60,3 +60,19 @@ The box is headless: MCP OAuth flows want a browser with a localhost callback
 *on the box*. Most serious MCP providers (Linear, GitHub, Sentry, …) accept
 `Authorization: Bearer <api key>` — prefer that. Rotate by editing the one
 env file and restarting t3code.
+
+## Multi-user workspaces
+
+Never reuse the appliance owner's integration environment in a developer
+unit. Use `grave integrations linear-set <workspace>` and paste the key on
+stdin; it writes only that workspace's `config/secrets/linear.env` (600,
+owned by its Unix user), registers Linear in that user's Claude and Codex
+configuration using `${LINEAR_API_KEY}`, and restarts only that workspace.
+`grave integrations status <workspace>` reports configured/onboarding without
+printing a value. `linear-logout` deletes the secret and MCP entries.
+
+GitHub authentication likewise runs with the workspace HOME: `github-login`,
+`github-logout --user <login>`, and ordinary `gh auth status` can never fall
+back to the appliance owner's `~/.config/gh`. Per-workspace dashboard and T3
+processes provide cache isolation through separate processes, HOME/XDG paths,
+and integration environments.
