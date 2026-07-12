@@ -1736,6 +1736,9 @@ let cfg=null,cfgSrv='',envApps=[],layoutKey='';
 let graveReleasesLoaded=false;
 let pollFailures=0,lastConnected=0;
 let activeTab=localStorage.getItem('grave-tab')||'work';
+let scrollInput=0;
+['touchstart','touchmove','wheel','pointerdown','keydown'].forEach(type=>
+  addEventListener(type,()=>scrollInput++,{passive:true}));
 // deep-link a tab: /grave/?tab=system (also handy for screenshots)
 {const qp=new URLSearchParams(location.search).get('tab');
  if(qp==='work'||qp==='system')activeTab=qp;}
@@ -1796,9 +1799,9 @@ $('install-grave-release').onclick=async()=>{
 function render(s){
   // Replacing live regions above the viewport can make iOS WebKit discard its
   // document scroll anchor and jump to the top. Preserve the window position
-  // explicitly across every poll-driven render. Do this synchronously so a
-  // user's subsequent touch scroll is never overwritten by a delayed restore.
-  const scrollX=window.scrollX,scrollY=window.scrollY;
+  // explicitly across every poll-driven render. WebKit can adjust its anchor
+  // on the next frame, so repeat then unless fresh input says the user moved.
+  const scrollX=window.scrollX,scrollY=window.scrollY,inputAtRender=scrollInput;
   pollFailures=0;lastConnected=Date.now();paintConnection();
   envApps=s.apps||[];
   lastTmux=s.tmux||[];
@@ -1928,6 +1931,10 @@ function render(s){
        ||'<tr><td class="dim">nothing assigned 🎉</td></tr>');
   if(window.scrollX!==scrollX||window.scrollY!==scrollY)
     window.scrollTo(scrollX,scrollY);
+  requestAnimationFrame(()=>{
+    if(scrollInput===inputAtRender&&(window.scrollX!==scrollX||window.scrollY!==scrollY))
+      window.scrollTo(scrollX,scrollY);
+  });
 }
 async function poll(){
   if(document.hidden)return;
