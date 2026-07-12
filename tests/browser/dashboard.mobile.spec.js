@@ -99,6 +99,36 @@ test('settings and narrow data records remain usable', async ({ page }) => {
   expect(box.height).toBeGreaterThanOrEqual(32);
 });
 
+test('an administrator can select an exact stable release', async ({ page }) => {
+  // WebKit's registered service worker owns requests before Playwright's
+  // route mock can see them. Stub fetch in-page for this UI-only interaction;
+  // Python contract tests exercise the real API and exact systemd command.
+  await page.evaluate(() => {
+    const realFetch = window.fetch.bind(window);
+    window.requestedReleaseTag = null;
+    window.fetch = (input, init = {}) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url.endsWith('api/admin/releases')) return Promise.resolve(new Response(JSON.stringify({
+        current: 'v0.4.0', checkout: 'v0.4.0', releases: ['v0.5.0', 'v0.4.0'],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      if (url.endsWith('api/admin/upgrade')) {
+        window.requestedReleaseTag = JSON.parse(init.body).tag;
+        return Promise.resolve(new Response(JSON.stringify({ ok: true }), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        }));
+      }
+      return realFetch(input, init);
+    };
+  });
+  await page.locator('[data-tab="system"]').click();
+  await expect(page.locator('#grave-release')).toHaveValue('v0.4.0');
+  await page.locator('#grave-release').selectOption('v0.5.0');
+  page.once('dialog', dialog => dialog.accept());
+  await page.locator('#install-grave-release').click();
+  await expect(page.locator('#grave-release-state')).toContainText('v0.5.0 queued');
+  expect(await page.evaluate(() => window.requestedReleaseTag)).toBe('v0.5.0');
+});
+
 test('PWA contract spans the appliance origin', async ({ request, baseURL }) => {
   const manifest = await (await request.get(new URL('manifest.webmanifest', baseURL).href)).json();
   expect(manifest.scope).toBe('/');

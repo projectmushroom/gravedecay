@@ -498,25 +498,69 @@ cmd_gamewatch() {
 }
 
 # --------------------------------------------------------------- upgrade ----
-cmd_upgrade() { # grave upgrade [--edge|--release] — update gravedecay itself
-  local channel="${UPGRADE_CHANNEL:-release}"
+upgrade_repo() {
   local repo="${REPO_DIR:-$GRAVE_ROOT/repos/gravedecay}"
-  case "${1:-}" in
-    --edge) channel=edge ;;
-    --release) channel=release ;;
-    "") ;;
-    *) say "usage: grave upgrade [--edge|--release]"; exit 1 ;;
-  esac
   [[ -d "$repo/.git" ]] || { bad "gravedecay checkout not found at $repo (set REPO_DIR in grave.conf)"; exit 1; }
+  printf '%s\n' "$repo"
+}
+
+fetch_upgrade_refs() {
+  local repo="$1"
+  git -C "$repo" fetch --tags --prune -q origin
+  git -C "$repo" remote set-head origin -a >/dev/null 2>&1 || true
+}
+
+cmd_releases() { # grave releases [--json] — list selectable stable releases
+  local format="${1:-}" repo current checkout
+  [[ -z "$format" || "$format" == "--json" ]] || { say "usage: grave releases [--json]"; exit 1; }
+  repo=$(upgrade_repo)
+  fetch_upgrade_refs "$repo"
+  current=$(git -C "$repo" describe --tags --exact-match HEAD 2>/dev/null || true)
+  checkout="${current:-$(git -C "$repo" branch --show-current)}"
+  [[ -n "$checkout" ]] || checkout=$(git -C "$repo" rev-parse --short HEAD)
+  local tags
+  tags=$(git -C "$repo" tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname \
+    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -20 || true)
+  if [[ "$format" == "--json" ]]; then
+    jq -n --arg current "$current" --arg checkout "$checkout" \
+      --argjson releases "$(printf '%s\n' "$tags" | jq -Rsc 'split("\n")|map(select(length>0))')" \
+      '{current:$current,checkout:$checkout,releases:$releases}'
+  else
+    say "gravedecay checkout: $checkout"
+    [[ -n "$tags" ]] && printf '  %s\n' $tags || say "  no stable releases found"
+  fi
+}
+
+cmd_upgrade() { # grave upgrade [--edge|--release|--tag vX.Y.Z]
+  local channel="${UPGRADE_CHANNEL:-release}"
+  local repo tag=""
+  repo=$(upgrade_repo)
+  while (($#)); do
+    case "$1" in
+      --edge) channel=edge; shift ;;
+      --release) channel=release; shift ;;
+      --tag)
+        [[ $# -ge 2 && "$2" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+          say "usage: grave upgrade [--edge|--release|--tag vX.Y.Z]"; exit 1;
+        }
+        channel=tag; tag="$2"; shift 2 ;;
+      *) say "usage: grave upgrade [--edge|--release|--tag vX.Y.Z]"; exit 1 ;;
+    esac
+  done
   if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then
     bad "checkout at $repo has local changes — commit or stash them first"
     exit 1
   fi
   say "Fetching updates (${channel} channel)..."
-  git -C "$repo" fetch --tags --prune -q origin
-  git -C "$repo" remote set-head origin -a >/dev/null 2>&1 || true
+  fetch_upgrade_refs "$repo"
   local target=""
-  if [[ "$channel" == release ]]; then
+  if [[ "$channel" == tag ]]; then
+    git -C "$repo" rev-parse -q --verify "refs/tags/$tag^{commit}" >/dev/null || {
+      bad "release $tag does not exist in the configured repository"
+      exit 1
+    }
+    target="$tag"
+  elif [[ "$channel" == release ]]; then
     target=$(git -C "$repo" tag -l 'v*' --sort=-v:refname | head -1)
     if [[ -z "$target" ]]; then
       say "${YLW}no release tags found — following main instead${RST}"
@@ -638,6 +682,7 @@ cmd_doctor() {
   if systemctl is-active --quiet gravedecay; then
     check "gravedecay answering"         curl -sf -o /dev/null "http://127.0.0.1:$DASH_PORT/healthz"
     check "dashboard self-updater installed" systemctl cat gravedecay-upgrade.service
+    check "selectable release updater installed" systemctl cat 'gravedecay-upgrade@.service'
     check "dashboard PWA owns app origin" bash -c \
       "curl -sf 'http://127.0.0.1:$DASH_PORT/manifest.webmanifest' | grep -q '\"scope\": \"/\"'"
     check "dashboard offline shell ready" bash -c \
@@ -840,9 +885,10 @@ grave — gravedecay appliance control 🪦
   grave preview off <port>   stop a preview
 
   grave t3 [status|update]   show versions or install npm's stable T3 release
+  grave releases            list selectable stable gravedecay releases
   grave update               snapshot (if snapper), update pkgs/npm/images
   grave upgrade              update gravedecay itself: pull latest release
-                             (or --edge for main), re-run the ritual
+                             (--tag vX.Y.Z pins one; --edge follows main)
   grave bootmode [dev|game]  what a reboot boots into: developer services
                              up (default) or gaming (ALWAYS_ON only)
   grave gamewatch [on|off]   auto gaming/developer flip when a game launches
@@ -867,6 +913,7 @@ case "${1:-help}" in
   preview)    shift || true; cmd_preview "$@" ;;
   t3|t3code)  shift || true; cmd_t3 "$@" ;;
   update)     cmd_update ;;
+  releases)   shift || true; cmd_releases "$@" ;;
   upgrade)    shift || true; cmd_upgrade "$@" ;;
   bootmode)   shift || true; cmd_bootmode "$@" ;;
   gamewatch)  shift || true; cmd_gamewatch "$@" ;;

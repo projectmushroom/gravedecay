@@ -1063,6 +1063,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, '{"ok":true}')
         elif p == "/api/state":
             self._send(200, json.dumps(state(self.headers)))
+        elif p == "/api/admin/releases":
+            rc, out, err = sh([GRAVE, "releases", "--json"], timeout=30)
+            if rc:
+                self._send(502, json.dumps({"ok": False, "output": ANSI.sub("", out + err)}))
+            else:
+                self._send(200, out)
         elif p == "/api/files":
             if self._forbidden():
                 return
@@ -1140,6 +1146,18 @@ class Handler(BaseHTTPRequestHandler):
                 return
             rc, out, err = sh(["tmux", "-L", "agents", "kill-session", "-t", name])
             self._send(200, json.dumps({"ok": rc == 0, "output": out + err}))
+        elif p == "/api/admin/upgrade":
+            tag = str(data.get("tag", ""))
+            if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
+                self._send(400, json.dumps({"ok": False, "output": "invalid release tag"}))
+                return
+            unit = f"gravedecay-upgrade@{tag}.service"
+            rc, out, err = sh(["sudo", "-n", "systemctl", "--no-block", "start", unit])
+            self._send(200 if rc == 0 else 500, json.dumps({
+                "ok": rc == 0,
+                "output": "upgrade queued; the dashboard will reconnect" if rc == 0
+                else ANSI.sub("", out + err),
+            }))
         elif p == "/api/action":
             try:
                 cmd = ACTIONS[data["action"]]
@@ -1426,6 +1444,11 @@ body.gaming #foot{display:none}
   .panel #tmux td.num{text-align:right;width:auto}
   .panel #tmux td:last-child{grid-column:3;width:auto}
 }
+.release-picker{margin-top:12px;padding-top:10px;border-top:1px dashed var(--hairline)}
+.release-picker label{color:var(--muted)}
+.release-picker select{background:var(--inset);color:var(--ink);border:1px solid var(--ring);
+  min-height:40px;padding:6px 9px;font:13px ui-monospace,Menlo,monospace}
+#grave-release-state{flex:1 1 180px;color:var(--muted)}
 /* Compact phones: preserve every action, but remove the last intrinsic-width
    traps and make controls comfortable without allowing horizontal scrolling. */
 @media(max-width:520px){
@@ -1637,6 +1660,14 @@ body.gaming #foot{display:none}
       <button data-act="reboot" data-confirm="Reboot the machine? Agent sessions die; everything else comes back automatically in the configured boot mode.">🔁 Reboot box</button>
       <button id="kill-open">🗡️ Kill sessions…</button>
     </div>
+    <div class="setrow release-picker">
+      <label for="grave-release">🪦 Release</label>
+      <select id="grave-release" aria-label="gravedecay release">
+        <option value="">load releases…</option>
+      </select>
+      <button class="mini" id="install-grave-release" disabled>⬆ Install selected</button>
+      <span id="grave-release-state">Choose an exact stable release; config and agent sessions are preserved.</span>
+    </div>
   </div>
   <div class="panel" data-panel="services"><h2>⚙️ Services</h2><table id="services"></table></div>
   <div class="panel" data-panel="docker"><h2>🐳 Docker</h2><table id="docker"></table></div>
@@ -1699,6 +1730,7 @@ const PANEL_TABS={prs:'work',ci:'work',linear:'work',usage:'work',
   stats:'system',actions:'system',services:'system',docker:'system',journal:'system'};
 let linearConfigured=false,lastMode=null,lastTmux=[];
 let cfg=null,cfgSrv='',envApps=[],layoutKey='';
+let graveReleasesLoaded=false;
 let pollFailures=0,lastConnected=0;
 let activeTab=localStorage.getItem('grave-tab')||'work';
 // deep-link a tab: /grave/?tab=system (also handy for screenshots)
@@ -1721,7 +1753,43 @@ function applyLayout(){
 document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
   activeTab=t.dataset.tab;localStorage.setItem('grave-tab',activeTab);
   if(cfg)applyLayout();
+  if(activeTab==='system')loadGraveReleases();
 });
+async function loadGraveReleases(force=false){
+  if(graveReleasesLoaded&&!force)return;
+  graveReleasesLoaded=true;
+  const select=$('grave-release'),button=$('install-grave-release'),status=$('grave-release-state');
+  status.textContent='fetching stable releases…';button.disabled=true;
+  try{
+    const r=await fetch('api/admin/releases',{cache:'no-store'}),data=await r.json();
+    if(!r.ok)throw new Error(data.output||`HTTP ${r.status}`);
+    select.innerHTML=(data.releases||[]).map(tag=>
+      `<option value="${esc(tag)}"${tag===data.current?' selected':''}>${esc(tag)}${tag===data.current?' (installed)':''}</option>`).join('');
+    if(!select.options.length)select.innerHTML='<option value="">no stable releases</option>';
+    // WebKit retains the removed placeholder's empty value after innerHTML is
+    // replaced; selected="..." on a new option is not enough in iOS Safari.
+    if(data.current&&(data.releases||[]).includes(data.current))select.value=data.current;
+    else if(select.options.length)select.selectedIndex=0;
+    button.disabled=!select.value;
+    status.textContent=`installed: ${data.current||data.checkout||'development checkout'}`;
+  }catch(e){
+    select.innerHTML='<option value="">release lookup failed</option>';
+    status.textContent=e.message;button.disabled=true;
+  }
+}
+$('grave-release').onchange=()=>{$('install-grave-release').disabled=!$('grave-release').value;};
+$('install-grave-release').onclick=async()=>{
+  const tag=$('grave-release').value;
+  if(!tag||!confirm(`Install gravedecay ${tag} and re-raise the appliance?`))return;
+  const button=$('install-grave-release'),status=$('grave-release-state');
+  button.disabled=true;status.textContent=`queueing ${tag}…`;
+  try{
+    const r=await fetch('api/admin/upgrade',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({tag})}),data=await r.json();
+    if(!r.ok)throw new Error(data.output||`HTTP ${r.status}`);
+    status.textContent=`${tag} queued — reconnecting after raise…`;
+  }catch(e){status.textContent=e.message;button.disabled=false;}
+};
 function render(s){
   pollFailures=0;lastConnected=Date.now();paintConnection();
   envApps=s.apps||[];
@@ -1746,6 +1814,7 @@ function render(s){
   if(modeChanged)schedule();
   const k=JSON.stringify([cfg.panel_order,cfg.hidden_panels,activeTab]);
   if(k!==layoutKey){layoutKey=k;applyLayout();}
+  if(activeTab==='system')loadGraveReleases();
   // 📁 Files is a built-in tile: opens the native file-manager modal.
   const tiles=[{name:'📁 Files',url:FILES_URL}].concat(allApps());
   $('apps').innerHTML=tiles.filter(a=>!cfg.hidden_apps.includes(a.name)).map(a=>{

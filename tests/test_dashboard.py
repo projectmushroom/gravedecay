@@ -3,6 +3,7 @@ import json
 import pathlib
 import threading
 import unittest
+import urllib.error
 import urllib.request
 
 
@@ -28,6 +29,14 @@ class DashboardContractTests(unittest.TestCase):
 
     def get(self, path):
         return urllib.request.urlopen(self.origin + path, timeout=2)
+
+    def post(self, path, data):
+        return urllib.request.urlopen(urllib.request.Request(
+            self.origin + path,
+            data=json.dumps(data).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        ), timeout=2)
 
     def test_manifest_owns_the_appliance_origin(self):
         manifest = json.loads(DASHBOARD.MANIFEST)
@@ -71,6 +80,29 @@ class DashboardContractTests(unittest.TestCase):
         unit = (ROOT / "systemd/gravedecay-upgrade.service.tmpl").read_text()
         self.assertIn("Type=oneshot", unit)
         self.assertIn("ExecStart=@GRAVE_BIN@ upgrade", unit)
+        selected = (ROOT / "systemd/gravedecay-upgrade@.service.tmpl").read_text()
+        self.assertIn("ExecStart=@GRAVE_BIN@ upgrade --tag %i", selected)
+        self.assertIn('id="grave-release"', DASHBOARD.PAGE)
+        self.assertIn('id="install-grave-release"', DASHBOARD.PAGE)
+        self.assertIn('p == "/api/admin/releases"', pathlib.Path(
+            ROOT / "dashboard/gravedecay.py").read_text())
+
+    def test_release_upgrade_validates_and_queues_a_detached_instance(self):
+        calls = []
+        original = DASHBOARD.sh
+        DASHBOARD.sh = lambda cmd, timeout=10: (calls.append(cmd) or (0, "", ""))
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                self.post("/api/admin/upgrade", {"tag": "v0.5.0;reboot"})
+            self.assertEqual(error.exception.code, 400)
+            self.assertEqual(calls, [])
+            with self.post("/api/admin/upgrade", {"tag": "v0.5.0"}) as response:
+                payload = json.loads(response.read())
+            self.assertTrue(payload["ok"])
+        finally:
+            DASHBOARD.sh = original
+        self.assertEqual(calls, [["sudo", "-n", "systemctl", "--no-block", "start",
+                                  "gravedecay-upgrade@v0.5.0.service"]])
 
 
 if __name__ == "__main__":
