@@ -415,6 +415,19 @@ elif ! tailscale status --peers=false >/dev/null 2>&1; then
   skip "tailscale not logged in — run 'sudo tailscale up --ssh', rerun raise.sh"
 else
   sudo tailscale set --operator="$RUN_USER" 2>/dev/null || true
+  # The gateway's random Serve backend path is a local trust capability.
+  # Hide Serve configuration from workspace users by restricting LocalAPI to
+  # root and the appliance owner's existing primary group, including restarts.
+  RUN_GROUP=$(id -gn "$RUN_USER")
+  sudo mkdir -p /etc/systemd/system/tailscaled.service.d
+  sudo tee /etc/systemd/system/tailscaled.service.d/gravedecay-localapi.conf >/dev/null <<EOF
+[Service]
+ExecStartPost=+/usr/bin/chgrp $RUN_GROUP /run/tailscale/tailscaled.sock
+ExecStartPost=+/usr/bin/chmod 0660 /run/tailscale/tailscaled.sock
+EOF
+  sudo chgrp "$RUN_GROUP" /run/tailscale/tailscaled.sock
+  sudo chmod 0660 /run/tailscale/tailscaled.sock
+  sudo systemctl daemon-reload
   if [[ "${MULTI_USER:-0}" == 1 ]]; then
     gateway_token=$(<"$GRAVE_ROOT/config/secrets/gateway-token")
     tailscale serve --bg --https=443 "http://127.0.0.1:${GATEWAY_PORT:-4710}/_grave_proxy/$gateway_token" >/dev/null \

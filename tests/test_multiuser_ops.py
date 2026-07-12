@@ -38,6 +38,8 @@ class MultiUserEndToEnd(unittest.TestCase):
         self.assertIn("cmd_multiuser",grave); self.assertIn("--reflink=auto",grave)
         self.assertIn("migration failed; single-user config restored",grave)
         self.assertIn("workspaces.tar.gz",grave); self.assertIn("--include-secrets",grave)
+        self.assertIn("Tailscale LocalAPI hidden from workspaces",grave)
+        self.assertIn("chmod 0660 /run/tailscale/tailscaled.sock",(ROOT/"raise.sh").read_text())
         self.assertIn("grave restore <ts> workspaces",recovery)
         self.assertIn("Secrets are excluded by default",recovery)
 

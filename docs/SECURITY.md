@@ -21,6 +21,10 @@ people—not mutually hostile or public tenants.
    tailnet and proxies to loopback. Identity comes from the tailnet — serve
    injects `Tailscale-User-Login`, which gravedecay checks before allowing
    action buttons (`GRAVEDECAY_ALLOWED_USERS`).
+   In multi-user mode, the LocalAPI socket is mode 660 for root and the
+   appliance owner's primary group. Workspace users must not read Serve
+   configuration, because its random backend path is the gateway's local
+   anti-spoofing capability. `grave doctor` enforces the socket mode.
 3. **SSH**: key-only (`PasswordAuthentication no` — doctor-enforced),
    plus Tailscale SSH as a fallback door. Note: Tailscale SSH intercepts
    port 22 *over the tailnet*; plain sshd remains reachable via LAN IPs only.
