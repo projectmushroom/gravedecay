@@ -118,14 +118,17 @@ coding-provider access with `grave provider grant|revoke`. See
 
 ```sh
 grave upgrade           # pull the latest release tag, re-run the ritual
+grave releases          # list stable releases available to this appliance
+grave upgrade --tag v0.5.0  # install one exact stable release
 grave upgrade --edge    # follow main instead (UPGRADE_CHANNEL=edge to default)
 ```
 
 Once the dashboard self-updater has been installed, the same operation is
-available under **System → Update gravedecay**. It follows `UPGRADE_CHANNEL`
-from `/etc/gravedecay/grave.conf` (`release` by default), runs outside the
-dashboard service so its own restart cannot interrupt it, and reconnects the
-installed app when the raise completes.
+available under **System → Actions**. The quick update follows
+`UPGRADE_CHANNEL` from `/etc/gravedecay/grave.conf` (`release` by default),
+while the adjacent release picker installs an exact stable `vX.Y.Z` tag. Both
+run outside the dashboard service so its own restart cannot interrupt them,
+and reconnect the installed app when the raise completes.
 
 The release that first introduces the updater still needs one manual re-raise
 to install its systemd unit. Contributors following merged `master` should use
@@ -202,9 +205,10 @@ to `$GRAVE_ROOT` with the secret store carved out; see `docs/SECURITY.md`.
 
 **System tab** — vitals (CPU/GPU temps, fans, load, memory, disk), action
 buttons, services, docker containers, journal errors. **Update gravedecay**
-starts a detached system upgrade on the configured `UPGRADE_CHANNEL`, re-runs
-the idempotent raise, and lets the dashboard reconnect after its own restart;
-agent tmux sessions are unaffected.
+starts a detached system upgrade on the configured `UPGRADE_CHANNEL`; the
+release picker can instead pin any published stable release. Both re-run the
+idempotent raise and let the dashboard reconnect after its own restart; agent
+tmux sessions are unaffected.
 
 **⚙️ Settings** (identity-gated, like all actions) — show/hide/reorder
 widgets, manage tiles (show, open-in-modal, open-in-new-tab per tile, and

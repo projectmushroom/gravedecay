@@ -1,0 +1,17 @@
+[Unit]
+Description=gravedecay - install release %i and re-raise
+Documentation=https://github.com/projectmushroom/gravedecay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=@USER@
+Group=@USER@
+ExecStart=@GRAVE_BIN@ upgrade --tag %i
+Environment=GRAVE_ROOT=@GRAVE_ROOT@
+Environment=PATH=@TOOLPATH@/usr/local/bin:/usr/bin:/bin
+SyslogIdentifier=gravedecay-upgrade
+
+# Instance names are strictly validated vX.Y.Z release tags. Like the default
+# updater, this unit must outlive the dashboard service that raise.sh restarts.

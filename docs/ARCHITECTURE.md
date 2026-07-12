@@ -91,9 +91,11 @@ disconnected launch explains how to restore Tailscale instead of showing a
 blank browser error. `grave doctor` verifies the manifest scope and root-scoped
 service worker contract.
 
-Dashboard self-upgrades are queued with `systemctl --no-block` into
-`gravedecay-upgrade.service`. They must never execute as a child of the
-dashboard: `grave upgrade` invokes `raise.sh`, which restarts
-`gravedecay.service` and kills that service's remaining cgroup processes.
-The oneshot follows `UPGRADE_CHANNEL` from `/etc/gravedecay/grave.conf` and
-refuses to touch a checkout with uncommitted changes.
+Dashboard self-upgrades are queued with `systemctl --no-block` into either
+`gravedecay-upgrade.service` (configured release/edge channel) or the validated
+`gravedecay-upgrade@vX.Y.Z.service` instance selected in the release picker.
+They must never execute as a child of the dashboard: `grave upgrade` invokes
+`raise.sh`, which restarts `gravedecay.service` and kills that service's
+remaining cgroup processes. Both paths refuse to touch a checkout with
+uncommitted changes; explicit tags must exist after fetching the configured
+repository.
