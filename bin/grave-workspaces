@@ -21,6 +21,10 @@ def as_user(w,*args):
     if os.environ.get("GRAVE_WORKSPACE_TEST") == "1":
         subprocess.run(args,check=True,env={**os.environ,"HOME":str(home),"XDG_CONFIG_HOME":str(home/"config")}); return
     run("runuser","-u",unix_name(w["slug"]),"--","env",f"HOME={home}",f"XDG_CONFIG_HOME={home/'config'}",*args)
+def as_user_result(w,*args,check=True,capture=False):
+    home=HOME_ROOT/w["slug"]; env=["env",f"HOME={home}",f"XDG_CONFIG_HOME={home/'config'}"]
+    if os.environ.get("GRAVE_WORKSPACE_TEST") == "1": return subprocess.run(args,check=check,capture_output=capture,text=True,env={**os.environ,"HOME":str(home),"XDG_CONFIG_HOME":str(home/"config")})
+    return subprocess.run(["runuser","-u",unix_name(w["slug"]),"--",*env,*args],check=check,capture_output=capture,text=True)
 
 def load():
     try: data = json.loads(REGISTRY.read_text())
@@ -135,6 +139,8 @@ def cmd_doctor(a):
                 resolved=checkout.resolve()
                 if resolved in checkout_paths: die("unsafe shared writable checkout")
                 checkout_paths.add(resolved)
+            secret=linear_secret(w)
+            if secret.exists() and (secret.stat().st_uid != account.pw_uid or secret.stat().st_mode & 0o077): die(f"Linear secret ownership drift: {w['slug']}")
             for unit in ("gravedecay-t3","gravedecay-term","gravedecay-dashboard"):
                 enabled=subprocess.run(["systemctl","is-enabled",f"{unit}@{w['slug']}.service"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0
                 if enabled != w["enabled"]: die(f"service enablement drift: {unit}@{w['slug']}")
@@ -181,6 +187,38 @@ def cmd_git_config(a):
     print(f"configured Git identity for {w['slug']}")
 def cmd_projects(a):
     data=load(); w=find(data,a.workspace); print(json.dumps(w["projects"],indent=2))
+def linear_secret(w): return HOME_ROOT/w["slug"]/"config/secrets/linear.env"
+def cmd_integration_status(a):
+    data=load(); w=find(data,a.workspace); secret=linear_secret(w)
+    github=as_user_result(w,"gh","auth","status","--hostname","github.com",check=False,capture=True).returncode==0 if shutil.which("gh") else False
+    linear=secret.is_file() and not secret.stat().st_mode & 0o077
+    print(json.dumps({"workspace":w["slug"],"github":"configured" if github else "onboarding","linear":"configured" if linear else "onboarding"}))
+def cmd_github_login(a):
+    data=load(); w=find(data,a.workspace); as_user_result(w,"gh","auth","login","--hostname","github.com","--git-protocol","ssh","--web"); print(f"GitHub configured for {w['slug']}")
+def cmd_github_logout(a):
+    data=load(); w=find(data,a.workspace); as_user_result(w,"gh","auth","logout","--hostname","github.com","--user",a.user); print(f"GitHub login removed for {w['slug']}")
+def cmd_linear_set(a):
+    data=load(); w=find(data,a.workspace); value=sys.stdin.readline().strip()
+    if not value.startswith("lin_api_") or len(value)<20 or any(c.isspace() for c in value): die("invalid Linear API key on stdin")
+    secret=linear_secret(w); fd=os.open(secret,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
+    try: os.write(fd,f"LINEAR_API_KEY={value}\n".encode()); os.fchmod(fd,0o600)
+    finally: os.close(fd)
+    if os.environ.get("GRAVE_WORKSPACE_TEST") != "1":
+        account=pwd.getpwnam(unix_name(w["slug"])); os.chown(secret,account.pw_uid,account.pw_gid)
+        as_user_result(w,"codex","mcp","remove","linear",check=False)
+        as_user_result(w,"codex","mcp","add","linear","--url","https://mcp.linear.app/mcp","--bearer-token-env-var","LINEAR_API_KEY")
+        as_user_result(w,"claude","mcp","remove","--scope","user","linear",check=False)
+        as_user_result(w,"claude","mcp","add","--transport","http","--scope","user","linear","https://mcp.linear.app/mcp","--header","Authorization: Bearer ${LINEAR_API_KEY}")
+        run("systemctl","restart",f"gravedecay-t3@{w['slug']}",f"gravedecay-term@{w['slug']}",f"gravedecay-dashboard@{w['slug']}")
+    print(f"Linear configured for {w['slug']}")
+def cmd_linear_logout(a):
+    data=load(); w=find(data,a.workspace); secret=linear_secret(w)
+    try: secret.unlink()
+    except FileNotFoundError: pass
+    if os.environ.get("GRAVE_WORKSPACE_TEST") != "1":
+        as_user_result(w,"codex","mcp","remove","linear",check=False); as_user_result(w,"claude","mcp","remove","--scope","user","linear",check=False)
+        run("systemctl","restart",f"gravedecay-t3@{w['slug']}",f"gravedecay-term@{w['slug']}",f"gravedecay-dashboard@{w['slug']}")
+    print(f"Linear login removed for {w['slug']}")
 
 def main():
     p=argparse.ArgumentParser(prog="grave users"); s=p.add_subparsers(required=True)
@@ -194,6 +232,11 @@ def main():
     q=s.add_parser("revoke"); q.add_argument("workspace"); q.add_argument("name"); q.set_defaults(fn=cmd_revoke)
     q=s.add_parser("projects"); q.add_argument("workspace"); q.set_defaults(fn=cmd_projects)
     q=s.add_parser("git-config"); q.add_argument("workspace"); q.add_argument("--name",required=True); q.add_argument("--email",required=True); q.add_argument("--signing-key"); q.set_defaults(fn=cmd_git_config)
+    q=s.add_parser("integration-status"); q.add_argument("workspace"); q.set_defaults(fn=cmd_integration_status)
+    q=s.add_parser("github-login"); q.add_argument("workspace"); q.set_defaults(fn=cmd_github_login)
+    q=s.add_parser("github-logout"); q.add_argument("workspace"); q.add_argument("--user",required=True); q.set_defaults(fn=cmd_github_logout)
+    q=s.add_parser("linear-set"); q.add_argument("workspace"); q.set_defaults(fn=cmd_linear_set)
+    q=s.add_parser("linear-logout"); q.add_argument("workspace"); q.set_defaults(fn=cmd_linear_logout)
     a=p.parse_args(); REGISTRY.parent.mkdir(parents=True,exist_ok=True)
     lock=REGISTRY.with_suffix(".lock")
     with lock.open("a") as f: fcntl.flock(f,fcntl.LOCK_EX); a.fn(a)
