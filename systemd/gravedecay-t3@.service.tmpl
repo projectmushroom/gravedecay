@@ -1,0 +1,29 @@
+[Unit]
+Description=gravedecay T3 workspace %i
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=grave-%i
+Group=grave-%i
+EnvironmentFile=@GRAVE_ROOT@/workspaces/%i/config/service.env
+EnvironmentFile=-@GRAVE_ROOT@/workspaces/%i/config/provider.env
+WorkingDirectory=@GRAVE_ROOT@/workspaces/%i/repos
+ExecStart=/usr/bin/env ${T3_BIN} serve --mode web --host 127.0.0.1 --port ${T3_PORT} --base-dir @GRAVE_ROOT@/workspaces/%i/state/t3 @GRAVE_ROOT@/workspaces/%i/repos
+Environment=HOME=@GRAVE_ROOT@/workspaces/%i
+Environment=XDG_CONFIG_HOME=@GRAVE_ROOT@/workspaces/%i/config
+Environment=XDG_STATE_HOME=@GRAVE_ROOT@/workspaces/%i/state
+Environment=XDG_RUNTIME_DIR=@GRAVE_ROOT@/workspaces/%i/runtime
+Restart=always
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+UMask=0077
+TasksMax=512
+MemoryHigh=6G
+MemoryMax=8G
+CPUQuota=400%
+
+[Install]
+WantedBy=multi-user.target

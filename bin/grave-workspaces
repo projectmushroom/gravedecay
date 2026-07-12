@@ -68,6 +68,16 @@ def provision(w):
     else:
         run("install", "-d", "-m", "700", "-o", name, "-g", name, *(str(d) for d in (home, home/"repos", home/"state", home/"state/t3", home/"config", home/"config/secrets", home/"runtime", home/"logs")))
     if account and (account.pw_dir != str(home) or account.pw_uid == 0): die(f"unsafe Unix account drift for {name}")
+    env=home/"config/service.env"
+    values={"WORKSPACE_SLUG":w["slug"],"WORKSPACE_ROLE":w["role"],"WORKSPACE_HOME":str(home),
+            "T3_PORT":w["ports"]["t3"],"TERM_PORT":w["ports"]["term"],"DASH_PORT":w["ports"]["dash"],
+            "T3_BIN":os.environ.get("GRAVE_T3_BIN","/usr/bin/t3"),"TTYD_BIN":os.environ.get("GRAVE_TTYD_BIN","/usr/bin/ttyd"),
+            "PATH":os.environ.get("GRAVE_TOOL_PATH","")+"/usr/local/bin:/usr/bin:/bin"}
+    env.write_text("".join(f'{key}="{str(value).replace(chr(34), "")}"\n' for key,value in values.items()))
+    env.chmod(0o600)
+    if os.environ.get("GRAVE_WORKSPACE_TEST") != "1":
+        if env.stat().st_uid != 0: die("service environment must be root-owned")
+        if w["enabled"]: run("systemctl","enable","--now",f"gravedecay-t3@{w['slug']}.service",f"gravedecay-term@{w['slug']}.service",f"gravedecay-dashboard@{w['slug']}.service")
 
 def cmd_add(a):
     if not SLUG.fullmatch(a.slug): die("slug must match ^[a-z][a-z0-9-]{2,30}$")
@@ -92,7 +102,7 @@ def cmd_inspect(a):
     data=load(); validate(data); print(json.dumps(find(data,a.workspace),indent=2,sort_keys=True))
 def cmd_disable(a):
     data=load(); w=find(data,a.workspace); w["enabled"]=False; save(data)
-    run("systemctl","stop",f"gravedecay-t3@{w['slug']}.service",f"gravedecay-term@{w['slug']}.service")
+    run("systemctl","disable","--now",f"gravedecay-t3@{w['slug']}.service",f"gravedecay-term@{w['slug']}.service",f"gravedecay-dashboard@{w['slug']}.service")
     print(f"disabled {w['slug']}")
 def cmd_doctor(a):
     data=load(); validate(data)
@@ -104,12 +114,17 @@ def cmd_doctor(a):
             if account.pw_uid == 0 or account.pw_dir != str(home): die(f"unsafe account: {w['slug']}")
             if not home.is_dir() or home.stat().st_uid != account.pw_uid or home.stat().st_mode & 0o077:
                 die(f"ownership or mode drift: {w['slug']}")
+            service_env=home/"config/service.env"
+            if service_env.stat().st_uid != 0 or service_env.stat().st_mode & 0o077: die(f"unsafe service environment: {w['slug']}")
+            for unit in ("gravedecay-t3","gravedecay-term","gravedecay-dashboard"):
+                enabled=subprocess.run(["systemctl","is-enabled",f"{unit}@{w['slug']}.service"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0
+                if enabled != w["enabled"]: die(f"service enablement drift: {unit}@{w['slug']}")
     print(f"ok: {len(data['workspaces'])} workspace(s)")
 def cmd_remove(a):
     if a.confirm != a.workspace: die("destructive removal requires --confirm WORKSPACE")
     data=load(); w=find(data,a.workspace)
     if w["enabled"]: die("disable workspace before removal")
-    run("systemctl","stop",f"gravedecay-t3@{w['slug']}.service",f"gravedecay-term@{w['slug']}.service")
+    run("systemctl","disable","--now",f"gravedecay-t3@{w['slug']}.service",f"gravedecay-term@{w['slug']}.service",f"gravedecay-dashboard@{w['slug']}.service")
     archive=ROOT/"backups/removed-workspaces"/w["slug"]
     home=HOME_ROOT/w["slug"]
     if home.exists(): archive.parent.mkdir(parents=True,exist_ok=True); shutil.move(str(home),str(archive))

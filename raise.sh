@@ -255,8 +255,15 @@ if [[ "${MULTI_USER:-0}" == 1 ]]; then
   chmod 600 "$GRAVE_ROOT/config/secrets/gateway-token"
   sed -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" "$REPO_DIR/systemd/gravedecay-gateway.service.tmpl" \
     | sudo tee /etc/systemd/system/gravedecay-gateway.service >/dev/null
+  for template in gravedecay-t3@ gravedecay-term@ gravedecay-dashboard@; do
+    sed -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" "$REPO_DIR/systemd/$template.service.tmpl" \
+      | sudo tee "/etc/systemd/system/$template.service" >/dev/null
+  done
   sudo systemctl daemon-reload
   sudo systemctl enable --now gravedecay-gateway
+  while IFS= read -r slug; do
+    sudo systemctl enable --now "gravedecay-t3@$slug" "gravedecay-term@$slug" "gravedecay-dashboard@$slug"
+  done < <(jq -r '.workspaces[] | select(.enabled) | .slug' "$GRAVE_ROOT/config/workspaces.json" 2>/dev/null)
   curl -sf -o /dev/null "http://127.0.0.1:${GATEWAY_PORT:-4710}/healthz" && ok "identity gateway answering"
 fi
 

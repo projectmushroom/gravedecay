@@ -1,0 +1,30 @@
+[Unit]
+Description=gravedecay dashboard workspace %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=grave-%i
+Group=grave-%i
+EnvironmentFile=@GRAVE_ROOT@/workspaces/%i/config/service.env
+ExecStart=/usr/bin/python3 @GRAVE_ROOT@/scripts/gravedecay.py
+Environment=HOME=@GRAVE_ROOT@/workspaces/%i
+Environment=GRAVE_ROOT=@GRAVE_ROOT@/workspaces/%i
+Environment=GRAVEDECAY_PORT=${DASH_PORT}
+Environment=GRAVEDECAY_BASE=/grave
+Environment=GRAVEDECAY_ALLOWED_USERS=
+Environment=GRAVEDECAY_UNITS=
+Environment=GRAVEDECAY_GRAVE=/bin/false
+Restart=always
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+UMask=0077
+TasksMax=128
+MemoryHigh=1G
+MemoryMax=2G
+CPUQuota=100%
+
+[Install]
+WantedBy=multi-user.target

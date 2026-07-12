@@ -33,6 +33,12 @@ hdr() { printf '\n%b%s%b\n' "$BLD" "$*" "$RST"; }
 need_root_helper() { sudo -n true 2>/dev/null || { say "grave needs passwordless sudo for this (see docs/SECURITY.md)"; exit 1; }; }
 
 tmuxa() { tmux -L "$TMUX_SOCKET" "$@"; }
+workspace_services() {
+  [[ "${MULTI_USER:-0}" == 1 && -r "$GRAVE_ROOT/config/workspaces.json" ]] || return 0
+  jq -r '.workspaces[] | select(.enabled) | .slug' "$GRAVE_ROOT/config/workspaces.json" | while read -r slug; do
+    printf '%s\n' "gravedecay-t3@$slug" "gravedecay-term@$slug" "gravedecay-dashboard@$slug"
+  done
+}
 
 # Container engine: rootless Docker (per-user, no sudo — durable on immutable
 # hosts like SteamOS) vs system Docker (sudo). dk = the docker CLI, dkctl =
@@ -183,6 +189,7 @@ start_dev() {
   done
   local s
   for s in "${DEV_SERVICES[@]}"; do sudo systemctl start "$s"; ok "$s"; done
+  while read -r s; do [[ -n "$s" ]] && { sudo systemctl start "$s"; ok "$s"; }; done < <(workspace_services)
   log "developer mode: started"
 }
 
@@ -224,6 +231,7 @@ stop_dev() { # stop_dev [kill]  — kill: also destroy tmux sessions (max free R
   say "Stopping developer services..."
   local s
   for s in "${DEV_SERVICES[@]}"; do sudo systemctl stop "$s" 2>/dev/null || true; ok "stopped $s"; done
+  while read -r s; do [[ -n "$s" ]] && { sudo systemctl stop "$s" 2>/dev/null || true; ok "stopped $s"; }; done < <(workspace_services)
   if [[ "$kill_sessions" == kill ]]; then
     if tmuxa list-sessions >/dev/null 2>&1; then
       tmuxa kill-server 2>/dev/null || true
@@ -775,7 +783,8 @@ case "${1:-help}" in
   gamewatch)  shift || true; cmd_gamewatch "$@" ;;
   logs)       shift; cmd_logs "$@" ;;
   doctor)     cmd_doctor ;;
-  users)      shift || true; exec "$(dirname "$0")/grave-workspaces" "$@" ;;
+  users)      shift || true; exec sudo -n "$0" __users "$@" ;;
+  __users)    shift || true; [[ $EUID == 0 ]] || { bad "internal users helper requires root"; exit 1; }; exec "$(dirname "$0")/grave-workspaces" "$@" ;;
   backup)     cmd_backup ;;
   restore)    shift || true; cmd_restore "$@" ;;
   help|--help|-h) cmd_help ;;
