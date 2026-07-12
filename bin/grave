@@ -629,6 +629,9 @@ cmd_doctor() {
     say "  ${YLW}– web terminal stopped${RST}"
   fi
   check "backups dir writable"          test -w "$BACKUP_DIR"
+  if [[ -e "$GRAVE_ROOT/config/workspaces.json" ]]; then
+    check "workspace registry and ownership" "$(dirname "$0")/grave-workspaces" doctor
+  fi
   echo
   if (( FAILURES == 0 )); then say "${GRN}${BLD}All checks passed.${RST}"; else say "${RED}${BLD}$FAILURES check(s) failed.${RST}"; exit 1; fi
 }
@@ -710,6 +713,7 @@ grave — gravedecay appliance control 🪦
 
   grave status               overview: services, containers, agents, system
   grave doctor               verify every platform invariant
+  grave users [list|add|inspect|disable|remove]
 
   grave gaming               🎮 free resources: stop services, FREEZE agent
                              sessions in place (🧊 torpor — RAM kept, zero CPU)
@@ -766,6 +770,8 @@ case "${1:-help}" in
   gamewatch)  shift || true; cmd_gamewatch "$@" ;;
   logs)       shift; cmd_logs "$@" ;;
   doctor)     cmd_doctor ;;
+  users)      shift || true; exec sudo -n "$0" __users "$@" ;;
+  __users)    shift || true; [[ $EUID == 0 ]] || { bad "internal users helper requires root"; exit 1; }; exec "$(dirname "$0")/grave-workspaces" "$@" ;;
   backup)     cmd_backup ;;
   restore)    shift || true; cmd_restore "$@" ;;
   help|--help|-h) cmd_help ;;
