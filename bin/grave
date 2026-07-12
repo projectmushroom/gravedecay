@@ -681,6 +681,8 @@ cmd_doctor() {
   fi
   if systemctl is-active --quiet gravedecay; then
     check "gravedecay answering"         curl -sf -o /dev/null "http://127.0.0.1:$DASH_PORT/healthz"
+    check "dashboard running installed build" bash -c \
+      "test \"\$(sha256sum '$GRAVE_ROOT/scripts/gravedecay.py' | cut -d' ' -f1)\" = \"\$(curl -sf 'http://127.0.0.1:$DASH_PORT/healthz' | jq -r .build)\""
     check "dashboard self-updater installed" systemctl cat gravedecay-upgrade.service
     check "selectable release updater installed" systemctl cat 'gravedecay-upgrade@.service'
     check "dashboard PWA owns app origin" bash -c \

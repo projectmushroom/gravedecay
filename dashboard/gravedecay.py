@@ -18,6 +18,7 @@
 
 import functools
 import glob
+import hashlib
 import io
 import json
 import os
@@ -38,6 +39,8 @@ GRAVE_ROOT = os.environ.get("GRAVE_ROOT", "/srv/dev")
 BASE = os.environ.get("GRAVEDECAY_BASE", "/grave").rstrip("/")
 ICON_PATH = os.environ.get("GRAVEDECAY_ICON", os.path.join(GRAVE_ROOT, "config", "gravedecay.png"))
 HOST = socket.gethostname()
+with open(__file__, "rb") as _source:
+    BUILD_ID = hashlib.sha256(_source.read()).hexdigest()
 # File manager: browse / upload / edit files from the browser, as a modal in
 # the dashboard. Confined to the appliance root — every request path is
 # realpath'd and prefix-checked against FILES_ROOT (see _safe_path), so `..`
@@ -1060,7 +1063,7 @@ class Handler(BaseHTTPRequestHandler):
             self._stream_action()
             return
         if p == "/healthz":
-            self._send(200, '{"ok":true}')
+            self._send(200, json.dumps({"ok": True, "build": BUILD_ID}))
         elif p == "/api/state":
             self._send(200, json.dumps(state(self.headers)))
         elif p == "/api/admin/releases":

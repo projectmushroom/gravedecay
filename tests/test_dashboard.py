@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 import pathlib
 import threading
@@ -54,6 +55,16 @@ class DashboardContractTests(unittest.TestCase):
         self.assertNotIn("/api/", worker)
         with self.get("/healthz") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-store")
+            health = json.loads(response.read())
+        self.assertEqual(health["build"], hashlib.sha256(
+            (ROOT / "dashboard/gravedecay.py").read_bytes()).hexdigest())
+
+    def test_raise_restarts_services_after_installing_their_files(self):
+        ritual = (ROOT / "raise.sh").read_text()
+        self.assertIn("enable_restart gravedecay", ritual)
+        self.assertIn("enable_restart gravedecay-term", ritual)
+        self.assertIn("enable_restart t3code", ritual)
+        self.assertNotIn("systemctl enable --now gravedecay\n", ritual)
 
     def test_offline_shell_contains_no_machine_state(self):
         with self.get("/offline.html") as response:
