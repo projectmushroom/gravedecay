@@ -186,8 +186,10 @@ step "grave CLI"
 if [[ "$IMMUTABLE" == 1 ]]; then
   mkdir -p "$(dirname "$GRAVE_BIN")"
   install -m 755 "$REPO_DIR/bin/grave" "$GRAVE_BIN"   # /usr/local is read-only here
+  install -m 755 "$REPO_DIR/bin/grave-workspaces" "$(dirname "$GRAVE_BIN")/grave-workspaces"
 else
   sudo install -m 755 "$REPO_DIR/bin/grave" "$GRAVE_BIN"
+  sudo install -m 755 "$REPO_DIR/bin/grave-workspaces" "$(dirname "$GRAVE_BIN")/grave-workspaces"
 fi
 sudo mkdir -p /etc/gravedecay
 if [[ ! -f /etc/gravedecay/grave.conf ]]; then
