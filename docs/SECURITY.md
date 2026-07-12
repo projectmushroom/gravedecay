@@ -6,6 +6,12 @@ A personal box on a home LAN, reachable only over a personal tailnet. The
 goal: LAN compromise or a stray port-forward exposes nothing; a lost laptop
 or phone can be evicted from the tailnet centrally.
 
+When opt-in multi-user mode is enabled, the identity, role, request-flow, and
+failure contract is defined in [MULTIUSER.md](MULTIUSER.md). Each collaborator
+runs as a distinct unprivileged Unix user. This protects ordinary credentials,
+worktrees, and sessions from other collaborators, but v1 remains for trusted
+people—not mutually hostile or public tenants.
+
 ## Rules
 
 1. **Nothing listens beyond loopback.** Every service binds `127.0.0.1`.
