@@ -33,6 +33,14 @@ listeners, restrictive umasks, `NoNewPrivileges`, and CPU/task/memory ceilings.
 Stopping or restarting one instance addresses only that workspace; enabled
 instances participate in boot and developer/gaming transitions.
 
+Project grants are registry records, not shared filesystem permissions. A grant
+clones into that workspace's private `repos/<project>` as its Unix identity;
+two collaborators therefore have independent indexes, branches, remotes, and
+dirty files. Revocation removes the checkout from T3/dashboard visibility at
+once by moving it into the same private workspace's `revoked/` retention tree.
+It never deletes dirty or unpushed work. Git identity and signing configuration
+are written to that workspace user's own global Git configuration.
+
 ## Filesystem
 
 Everything lives under `$GRAVE_ROOT` (default `/srv/dev`):

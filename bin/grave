@@ -727,6 +727,7 @@ grave — gravedecay appliance control 🪦
   grave status               overview: services, containers, agents, system
   grave doctor               verify every platform invariant
   grave users [list|add|inspect|disable|remove]
+  grave projects [list|grant|revoke|git-config]
 
   grave gaming               🎮 free resources: stop services, FREEZE agent
                              sessions in place (🧊 torpor — RAM kept, zero CPU)
@@ -784,6 +785,13 @@ case "${1:-help}" in
   logs)       shift; cmd_logs "$@" ;;
   doctor)     cmd_doctor ;;
   users)      shift || true; exec sudo -n "$0" __users "$@" ;;
+  projects)
+    shift || true; sub="${1:-list}"; shift || true
+    case "$sub" in
+      list) exec sudo -n "$0" __users projects "$@" ;;
+      grant|revoke|git-config) exec sudo -n "$0" __users "$sub" "$@" ;;
+      *) say "usage: grave projects [list <workspace>|grant <workspace> <name> <url>|revoke <workspace> <name>|git-config <workspace> --name N --email E]"; exit 1 ;;
+    esac ;;
   __users)    shift || true; [[ $EUID == 0 ]] || { bad "internal users helper requires root"; exit 1; }; exec "$(dirname "$0")/grave-workspaces" "$@" ;;
   backup)     cmd_backup ;;
   restore)    shift || true; cmd_restore "$@" ;;
