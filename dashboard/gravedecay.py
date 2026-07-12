@@ -1794,6 +1794,11 @@ $('install-grave-release').onclick=async()=>{
   }catch(e){status.textContent=e.message;button.disabled=false;}
 };
 function render(s){
+  // Replacing live regions above the viewport can make iOS WebKit discard its
+  // document scroll anchor and jump to the top. Preserve the window position
+  // explicitly across every poll-driven render. Do this synchronously so a
+  // user's subsequent touch scroll is never overwritten by a delayed restore.
+  const scrollX=window.scrollX,scrollY=window.scrollY;
   pollFailures=0;lastConnected=Date.now();paintConnection();
   envApps=s.apps||[];
   lastTmux=s.tmux||[];
@@ -1921,6 +1926,8 @@ function render(s){
         <td class="dim">${esc(i.state)}</td></tr>`).join('')
        +moreRow(5,(li.issues||[]).length,li.more_url)
        ||'<tr><td class="dim">nothing assigned 🎉</td></tr>');
+  if(window.scrollX!==scrollX||window.scrollY!==scrollY)
+    window.scrollTo(scrollX,scrollY);
 }
 async function poll(){
   if(document.hidden)return;

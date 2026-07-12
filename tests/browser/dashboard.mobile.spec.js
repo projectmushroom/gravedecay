@@ -99,6 +99,28 @@ test('settings and narrow data records remain usable', async ({ page }) => {
   expect(box.height).toBeGreaterThanOrEqual(32);
 });
 
+test('a polling refresh preserves the document scroll position', async ({ page }) => {
+  await renderLongMobileRecords(page);
+  const before = await page.evaluate(async () => {
+    window.scrollTo(0, Math.min(150, document.documentElement.scrollHeight - innerHeight));
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    return window.scrollY;
+  });
+  expect(before).toBeGreaterThan(0);
+
+  const after = await page.evaluate(async () => {
+    const state = await (await fetch('api/state')).json();
+    // Exercise the same render path as the refresh interval with changed live
+    // regions both above and below the current iOS viewport.
+    state.apps = state.apps.concat({ name: 'Fresh poll result', url: '/fresh' });
+    state.system.uptime_s += 5;
+    render(state);
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    return window.scrollY;
+  });
+  expect(after).toBe(before);
+});
+
 test('an administrator can select an exact stable release', async ({ page }) => {
   // WebKit's registered service worker owns requests before Playwright's
   // route mock can see them. Stub fetch in-page for this UI-only interaction;
