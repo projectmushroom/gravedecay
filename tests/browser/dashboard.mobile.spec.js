@@ -15,6 +15,54 @@ async function expectNoHorizontalOverflow(page, label) {
   expect(dimensions.document, `${label}: ${dimensions.offenders.join(', ')}`).toBeLessThanOrEqual(dimensions.viewport);
 }
 
+async function expectPanelsContainContent(page, label) {
+  const clipped = await page.evaluate(() => [...document.querySelectorAll('.panel')]
+    .filter(panel => getComputedStyle(panel).display !== 'none')
+    .flatMap(panel => {
+      const panelRect = panel.getBoundingClientRect();
+      const overflow = panel.scrollWidth > panel.clientWidth + 1
+        ? [`${panel.dataset.panel}: ${panel.clientWidth}/${panel.scrollWidth}`]
+        : [];
+      const paintedPastEdge = [...panel.querySelectorAll('td, .tile, pre')]
+        .filter(el => {
+          const rect = el.getBoundingClientRect();
+          return rect.right > panelRect.right + 1 || rect.left < panelRect.left - 1;
+        })
+        .map(el => `${panel.dataset.panel} > ${el.tagName.toLowerCase()}#${el.id}`);
+      return overflow.concat(paintedPastEdge);
+    }));
+  expect(clipped, label).toEqual([]);
+}
+
+async function renderLongMobileRecords(page) {
+  await page.evaluate(async () => {
+    const state = await (await fetch('api/state')).json();
+    state.tmux = [
+      { name: 'claude-yolo-with-a-deliberately-long-session-name', windows: 12, attached: 'detached' },
+    ];
+    state.repos = [
+      { name: 'wecollect4you-with-a-long-name', branch: 'codex/aggregate-wec-68-prs-95-104', dirty: 1,
+        last_when: '3 days ago', last_subject: 'A deliberately long commit subject' },
+    ];
+    state.usage = {
+      claude: {
+        today: { in: 0, out: 0, cache: 0, cost: 0, msgs: 0 },
+        week: { in: 89000, out: 675000, cache: 100000000, cost: 106.51, msgs: 668 },
+      },
+      codex: {
+        today: { in: 48100000, cached: 47300000, out: 138000, sessions: 5 },
+        week: { in: 50900000, cached: 50400000, out: 151000, sessions: 7 },
+      },
+      codex_limits: {
+        plan: 'plus',
+        primary: { pct: 46, mins: 300, resets_at: 1783877854 },
+        secondary: { pct: 28, mins: 10080, resets_at: 1784409683 },
+      },
+    };
+    render(state);
+  });
+}
+
 test.beforeEach(async ({ page }) => {
   await page.goto('./');
   await expect(page.locator('#apps')).not.toBeEmpty();
@@ -31,11 +79,14 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('work and system dashboards fit the installed-app viewport', async ({ page }) => {
+  await renderLongMobileRecords(page);
   await expectNoHorizontalOverflow(page, 'work tab');
+  await expectPanelsContainContent(page, 'work panels clip their rendered records');
   await page.locator('[data-tab="system"]').click();
   await expect(page.locator('[data-panel="stats"]')).toBeVisible();
   await expect(page.locator('[data-act="update-grave"]')).toBeVisible();
   await expectNoHorizontalOverflow(page, 'system tab');
+  await expectPanelsContainContent(page, 'system panels clip their rendered records');
 });
 
 test('settings and narrow data records remain usable', async ({ page }) => {

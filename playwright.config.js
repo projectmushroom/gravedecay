@@ -13,6 +13,7 @@ module.exports = defineConfig({
     { name: 'webkit-iphone-se', use: { ...devices['iPhone SE'] } },
     { name: 'webkit-iphone-13', use: { ...devices['iPhone 13'] } },
     { name: 'webkit-ipad', use: { ...devices['iPad Mini'] } },
+    { name: 'chromium-phone', use: { browserName: 'chromium', viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true } },
     { name: 'chromium-narrow-mac', use: { browserName: 'chromium', viewport: { width: 640, height: 800 } } },
   ],
 });

@@ -1410,6 +1410,22 @@ body.gaming #foot{display:none}
   #tmux td.num{text-align:right;width:auto}
   #tmux td:last-child{grid-column:3;width:auto}
 }
+/* Safari fallback: older installed PWAs can ignore container queries even
+   though the phone viewport is narrow.  Repeat the record reflow behind a
+   universally-supported viewport query so live usage/repo/session values can
+   never keep their desktop table width and paint past the panel edge. */
+@media(max-width:500px){
+  .panel table,.panel tbody,.panel tr,.panel td{display:block;width:100%}
+  .panel tr{padding:7px 0;border-top:1px dashed var(--hairline)}
+  .panel tr:first-child{border-top:0}
+  .panel td{padding:1px 0;border:0!important;white-space:normal!important}
+  .panel td.num{text-align:left}
+  .panel td:empty{display:none}
+  .panel #tmux tr{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:0 8px}
+  .panel #tmux td:first-child{grid-column:1/-1}
+  .panel #tmux td.num{text-align:right;width:auto}
+  .panel #tmux td:last-child{grid-column:3;width:auto}
+}
 /* Compact phones: preserve every action, but remove the last intrinsic-width
    traps and make controls comfortable without allowing horizontal scrolling. */
 @media(max-width:520px){

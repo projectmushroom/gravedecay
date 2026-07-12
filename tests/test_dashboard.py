@@ -56,6 +56,8 @@ class DashboardContractTests(unittest.TestCase):
     def test_compact_layout_reflows_instead_of_clipping(self):
         page = DASHBOARD.PAGE
         self.assertIn("@media(max-width:520px)", page)
+        self.assertIn("@media(max-width:500px)", page)
+        self.assertIn(".panel table,.panel tbody,.panel tr,.panel td{display:block", page)
         self.assertIn("table,tbody,tr,td{display:block", page)
         self.assertIn("height:100dvh", page)
         self.assertNotIn("html{-webkit-text-size-adjust:100%;overflow-x:hidden}", page)
