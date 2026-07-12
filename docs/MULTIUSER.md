@@ -106,3 +106,26 @@ switches Serve to the gateway. Failure before the switch leaves single-user
 services intact. Rollback restores the previous Serve configuration and
 units; workspace data is retained. Ambiguous identity, duplicate IDs/slugs or
 ports, unsafe ownership, and an unconfirmed owner ID stop migration.
+
+## Operations
+
+Migration is explicit: `grave multiuser enable <stable-id> <owner-login>
+owner --profile <profile>`. It takes a normal backup plus a migration snapshot,
+creates the admin workspace without starting it, copies owner state and adopts
+existing Git remotes, then sets `MULTI_USER=1` and re-runs the ritual. Serve
+changes only during successful re-raise. Failure restores single-user config
+and retains the copied workspace for inspection.
+
+Administrators use `grave users`, `grave projects`, `grave integrations`, and
+`grave provider` for lifecycle, grants, onboarding and entitlement. Run
+`grave users status` and `grave doctor` after changes. Developers are confined
+to their routed dashboard/T3/terminal and private HOME; they cannot manage
+users, grants, provider policy, modes, upgrades, reboot, global files/units,
+or unrestricted logs. Disablement stops all workspace units immediately;
+removal requires prior disablement and archives rather than deletes its home.
+
+`grave backup` includes registry-backed workspace state and dirty work but
+excludes credentials by default. `--include-secrets` is an explicit sensitive
+choice. `grave restore <timestamp> workspaces`, followed by re-raise and doctor,
+reproduces grants, service config, checkouts and state; omitted credentials
+require reauthentication.

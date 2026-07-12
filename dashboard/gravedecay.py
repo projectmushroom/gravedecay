@@ -31,7 +31,7 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-PORT = int(os.environ.get("GRAVEDECAY_PORT", "4712"))
+PORT = int(os.environ.get("GRAVEDECAY_PORT", os.environ.get("DASH_PORT", "4712")))
 GRAVE_ROOT = os.environ.get("GRAVE_ROOT", "/srv/dev")
 # Mount prefix when path-routed behind `tailscale serve --set-path` on the same
 # origin as T3 (single entry point). Bare paths keep working for localhost.

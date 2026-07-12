@@ -93,6 +93,27 @@ Requirements: a systemd-based distro (Arch-family is first-class; Debian/Fedora
 best-effort), ~8 GB RAM, and a [Tailscale](https://tailscale.com) account
 (free tier is fine).
 
+### Optional trusted collaborators
+
+Single-user behavior remains the default. To migrate an existing appliance,
+obtain the owner's stable numeric ID from `tailscale status --json`, then:
+
+```sh
+grave multiuser enable <tailscale-user-id> <owner-login> owner --profile steam-machine
+grave users add <id> <login> <safe-slug>
+grave projects grant <slug> <project> <https-or-ssh-remote>
+grave users status
+grave doctor
+```
+
+Enable performs a preflight backup, copies—not moves—the owner's T3 state,
+repos, and integrations into an admin workspace, installs the gateway, and
+switches Serve only after re-raise succeeds. Failure restores single-user
+configuration and retains the prepared workspace for inspection. Developers
+onboard GitHub/Linear in their own HOME; the administrator controls shared
+coding-provider access with `grave provider grant|revoke`. See
+[the multi-user contract](docs/MULTIUSER.md) and [security model](docs/SECURITY.md).
+
 ### Updating
 
 ```sh

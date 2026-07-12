@@ -20,6 +20,7 @@ source "$CONF"
 # documented in docs/PORTS.md and grave.conf.example.
 : "${PREVIEW_RANGE:=3000-3999}"
 : "${PREVIEW_RESERVED:=3050}"
+: "${MULTI_USER:=0}"
 
 LOG_FILE="$GRAVE_ROOT/logs/grave.log"
 RED=$'\e[31m'; GRN=$'\e[32m'; YLW=$'\e[33m'; BLD=$'\e[1m'; RST=$'\e[0m'
@@ -30,7 +31,7 @@ ok()  { printf '  %b✓%b %s\n' "$GRN" "$RST" "$*"; }
 bad() { printf '  %b✗%b %s\n' "$RED" "$RST" "$*"; }
 hdr() { printf '\n%b%s%b\n' "$BLD" "$*" "$RST"; }
 
-need_root_helper() { sudo -n true 2>/dev/null || { say "grave needs passwordless sudo for this (see docs/SECURITY.md)"; exit 1; }; }
+need_root_helper() { [[ $EUID == 0 ]] && return; sudo -n systemctl --version >/dev/null 2>&1 || { say "grave needs passwordless sudo for this (see docs/SECURITY.md)"; exit 1; }; }
 
 tmuxa() { tmux -L "$TMUX_SOCKET" "$@"; }
 workspace_services() {
@@ -118,7 +119,16 @@ cmd_t3() { # grave t3 [status|update] — inspect/update the stable T3 Code CLI
         bad "update validation failed: expected v$latest, found v${updated:-unknown}"
         exit 1
       }
-      if systemctl is-active --quiet t3code; then
+      if [[ "${MULTI_USER:-0}" == 1 && -r "$GRAVE_ROOT/config/workspaces.json" ]]; then
+        local slug port any=0
+        while read -r slug port; do
+          systemctl is-active --quiet "gravedecay-t3@$slug" || continue; any=1
+          sudo -n systemctl restart "gravedecay-t3@$slug"
+          curl -sf --retry 10 --retry-delay 1 -o /dev/null "http://127.0.0.1:$port/" || { bad "T3 workspace $slug did not answer"; exit 1; }
+          ok "T3 workspace $slug answering after restart"
+        done < <(jq -r '.workspaces[] | select(.enabled) | "\(.slug) \(.ports.t3)"' "$GRAVE_ROOT/config/workspaces.json")
+        (( any )) || say "  workspace T3 services are stopped (gaming mode?) — they will use v$updated next start"
+      elif systemctl is-active --quiet t3code; then
         sudo -n systemctl restart t3code
         if curl -sf --retry 10 --retry-delay 1 -o /dev/null \
             "http://127.0.0.1:$T3_PORT/"; then
@@ -446,7 +456,8 @@ cmd_update() {
 cmd_bootmode() { # what the box boots into: developer (dev services up) or gaming
   case "${1:-}" in
     "")
-      if systemctl is-enabled --quiet t3code 2>/dev/null; then
+      local first_workspace; first_workspace=$(workspace_services | head -1)
+      if systemctl is-enabled --quiet t3code 2>/dev/null || { [[ -n "$first_workspace" ]] && systemctl is-enabled --quiet "$first_workspace"; }; then
         say "boot mode: developer (dev services start at boot)"
       else
         say "boot mode: gaming (dev services stay down until 'grave developer')"
@@ -454,11 +465,13 @@ cmd_bootmode() { # what the box boots into: developer (dev services up) or gamin
     developer|dev)
       need_root_helper
       sudo systemctl enable t3code >/dev/null 2>&1 || true
+      while read -r s; do [[ -n "$s" ]] && sudo systemctl enable "$s" >/dev/null 2>&1 || true; done < <(workspace_services)
       dkctl enable docker >/dev/null 2>&1 || true   # rootless: per-user unit
       ok "boot mode: developer — dev services start automatically after reboot" ;;
     gaming|game)
       need_root_helper
       sudo systemctl disable t3code >/dev/null 2>&1 || true
+      while read -r s; do [[ -n "$s" ]] && sudo systemctl disable "$s" >/dev/null 2>&1 || true; done < <(workspace_services)
       dkctl disable docker docker.socket >/dev/null 2>&1 || true
       ok "boot mode: gaming — after reboot only ALWAYS_ON runs; 'grave developer' wakes the rest" ;;
     *) say "usage: grave bootmode [developer|gaming]"; exit 1 ;;
@@ -538,6 +551,7 @@ cmd_logs() {
     system)     sudo journalctl -p warning -n 100 -f ;;
     grave)      tail -n 50 -f "$LOG_FILE" ;;
     agent)      tail -n 100 -f "$GRAVE_ROOT"/agents/"${2:?agent name}"/session-*.log ;;
+    workspace)  sudo journalctl -u "gravedecay-t3@${2:?workspace}" -u "gravedecay-term@${2}" -u "gravedecay-dashboard@${2}" -n 150 -f ;;
     *)          dk logs --tail 100 -f "$target" 2>/dev/null || \
                 sudo journalctl -u "$target" -n 100 -f ;;
   esac
@@ -651,6 +665,8 @@ cmd_doctor() {
 
 # ---------------------------------------------------------------- backup ----
 cmd_backup() {
+  local include_secrets=0
+  [[ "${1:-}" == "--include-secrets" ]] && include_secrets=1
   need_root_helper
   local ts dest; ts=$(date +%Y%m%d-%H%M%S); dest="$BACKUP_DIR/$ts"
   mkdir -p "$dest"/{repos,volumes,configs}
@@ -663,10 +679,17 @@ cmd_backup() {
     git -C "$repo" bundle create "$dest/repos/$name.bundle" --all 2>/dev/null && ok "repo $name (git bundle)"
   done
 
-  tar -C "$GRAVE_ROOT" -czf "$dest/configs/grave-platform.tar.gz" config docker docs scripts 2>/dev/null && ok "platform config"
+  local excludes=(--exclude='config/secrets' --exclude='workspaces/*/config/secrets' --exclude='workspaces/*/.config/gh' --exclude='workspaces/*/.codex/auth.json' --exclude='workspaces/*/.claude/.credentials.json' --exclude='workspaces/*/.claude.json')
+  (( include_secrets )) && excludes=()
+  tar "${excludes[@]}" -C "$GRAVE_ROOT" -czf "$dest/configs/grave-platform.tar.gz" config docker docs scripts 2>/dev/null && ok "platform config"
+  if [[ -d "$GRAVE_ROOT/workspaces" ]]; then
+    tar "${excludes[@]}" -C "$GRAVE_ROOT" -czf "$dest/configs/workspaces.tar.gz" workspaces \
+      && ok "workspace homes, state, and dirty worktrees"
+  fi
+  printf '{"version":1,"secrets_included":%s,"created":"%s"}\n' "$([[ $include_secrets == 1 ]] && echo true || echo false)" "$(date -u +%FT%TZ)" >"$dest/manifest.json"
   local d
   for d in "${AGENT_CONFIG_DIRS[@]}"; do
-    [[ -e "$HOME/$d" ]] && tar -C "$HOME" -czf "$dest/configs/${d#.}.tar.gz" "$d" 2>/dev/null && ok "agent config $d"
+    [[ -e "$HOME/$d" ]] && tar --exclude="$d/auth.json" --exclude="$d/.credentials.json" -C "$HOME" -czf "$dest/configs/${d#.}.tar.gz" "$d" 2>/dev/null && ok "agent config $d"
   done
   [[ -d "$GRAVE_ROOT/agents/t3code" ]] && tar -C "$GRAVE_ROOT/agents" -czf "$dest/configs/t3code-state.tar.gz" t3code && ok "t3code state"
 
@@ -712,10 +735,71 @@ cmd_restore() {
       local name="${3:?repo name}"
       git clone "$dest/repos/$name.bundle" "$GRAVE_ROOT/repos/$name-restored"
       ok "repo restored to $GRAVE_ROOT/repos/$name-restored" ;;
+    workspaces)
+      [[ -f "$dest/configs/workspaces.tar.gz" ]] || { bad "backup has no workspace archive"; exit 1; }
+      tar -C "$GRAVE_ROOT" -xzf "$dest/configs/grave-platform.tar.gz" config/workspaces.json 2>/dev/null || true
+      tar -C "$GRAVE_ROOT" -xzf "$dest/configs/workspaces.tar.gz"
+      ok "workspace data restored; run raise.sh then grave doctor" ;;
     *)
       say "Backup contents of $ts:"; find "$dest" -type f | sed "s|$dest/|  |"
       say ""; say "Restore a piece: grave restore $ts volume <name> | repo <name>"
       say "Full procedures: $GRAVE_ROOT/docs/RECOVERY.md" ;;
+  esac
+}
+
+# ------------------------------------------------------------ multi-user ----
+cmd_multiuser() {
+  local sub="${1:-status}"; shift || true
+  case "$sub" in
+    status)
+      say "multi-user: $([[ "${MULTI_USER:-0}" == 1 ]] && echo enabled || echo disabled)"
+      [[ -r "$GRAVE_ROOT/config/workspaces.json" ]] && "$(dirname "$0")/grave-workspaces" list || true
+      ;;
+    enable)
+      [[ $EUID == 0 ]] || { bad "multi-user migration requires root helper"; exit 1; }
+      [[ "${MULTI_USER:-0}" != 1 ]] || { ok "multi-user mode already enabled"; return; }
+      local identity="${1:?stable Tailscale numeric user ID}" login="${2:?owner Tailscale login}" slug="${3:?owner workspace slug}"; shift 3
+      tailscale status --json | jq -e --arg id "$identity" --arg login "$login" '.User[$id].LoginName == $login' >/dev/null \
+        || { bad "owner stable ID/login is not confirmed by local Tailscale state"; exit 1; }
+      local profile=generic
+      [[ "${1:-}" == --profile ]] && { profile="${2:?profile}"; shift 2; }
+      local owner="${SUDO_USER:-$(stat -c %U "$GRAVE_ROOT")}" owner_home helper migration conf_backup
+      owner_home=$(getent passwd "$owner" | cut -d: -f6); helper="$(dirname "$0")/grave-workspaces"
+      migration="$GRAVE_ROOT/backups/migration-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$migration"
+      conf_backup="$migration/grave.conf"; cp "$CONF" "$conf_backup"
+      tailscale serve get-config "$migration/serve.json" >/dev/null 2>&1 || true
+      HOME="$owner_home" cmd_backup
+      GRAVE_ROOT="$GRAVE_ROOT" GRAVE_WORKSPACE_START=0 "$helper" add "$identity" "$login" "$slug" --role admin
+      local target="$GRAVE_ROOT/workspaces/$slug"
+      [[ -d "$GRAVE_ROOT/agents/t3code" ]] && cp -a --reflink=auto "$GRAVE_ROOT/agents/t3code/." "$target/state/t3/"
+      [[ -d "$GRAVE_ROOT/repos" ]] && cp -a --reflink=auto "$GRAVE_ROOT/repos/." "$target/repos/"
+      for d in .config/gh .codex .claude; do [[ -e "$owner_home/$d" ]] && { mkdir -p "$target/$(dirname "$d")"; cp -a "$owner_home/$d" "$target/$d"; }; done
+      [[ -f "$owner_home/.gitconfig" ]] && cp -a "$owner_home/.gitconfig" "$target/.gitconfig"
+      [[ -f "$GRAVE_ROOT/config/secrets/linear.env" ]] && cp -a "$GRAVE_ROOT/config/secrets/linear.env" "$target/config/secrets/linear.env"
+      [[ -f "$GRAVE_ROOT/config/gravedecay-settings.json" ]] && cp -a "$GRAVE_ROOT/config/gravedecay-settings.json" "$target/config/gravedecay-settings.json"
+      local provider_lines
+      provider_lines=$(grep -E '^(OPENAI_API_KEY|ANTHROPIC_API_KEY)=' "$GRAVE_ROOT/config/secrets/t3.env" 2>/dev/null || true)
+      [[ -n "$provider_lines" && ! -e "$GRAVE_ROOT/config/secrets/provider.env" ]] && { printf '%s\n' "$provider_lines" >"$GRAVE_ROOT/config/secrets/provider.env"; chmod 600 "$GRAVE_ROOT/config/secrets/provider.env"; }
+      chown -R "grave-$slug:grave-$slug" "$target"
+      chown root:root "$GRAVE_ROOT/config/workspace-services/$slug.env"; chmod 600 "$GRAVE_ROOT/config/workspace-services/$slug.env"
+      local repo name url
+      for repo in "$target"/repos/*; do
+        [[ -d "$repo/.git" ]] || continue; name=$(basename "$repo"); url=$(git -C "$repo" remote get-url origin 2>/dev/null || true)
+        [[ -n "$url" ]] && GRAVE_ROOT="$GRAVE_ROOT" "$helper" adopt "$slug" "$name" "$url"
+      done
+      if grep -q '^MULTI_USER=' "$CONF"; then sed -i 's/^MULTI_USER=.*/MULTI_USER=1/' "$CONF"; else printf '\nMULTI_USER=1\nGATEWAY_PORT=4710\n' >>"$CONF"; fi
+      if sudo -u "$owner" -H "$REPO_DIR/raise.sh" --profile "$profile"; then
+        systemctl disable --now t3code gravedecay-term >/dev/null 2>&1 || true
+        printf '{"state":"enabled","owner":"%s","backup":"%s"}\n' "$slug" "$migration" >"$GRAVE_ROOT/config/multiuser-migration.json"
+        audit_msg="multi-user enabled owner=$slug"; log "$audit_msg"; ok "$audit_msg"
+      else
+        cp "$conf_backup" "$CONF"
+        sudo -u "$owner" -H "$REPO_DIR/raise.sh" --profile "$profile" || true
+        printf '{"state":"rolled-back","workspace_retained":"%s"}\n' "$slug" >"$GRAVE_ROOT/config/multiuser-migration.json"
+        bad "migration failed; single-user config restored and workspace retained"; exit 1
+      fi
+      ;;
+    *) say "usage: grave multiuser [status|enable <tailscale-id> <login> <slug> --profile <profile>]"; exit 1 ;;
   esac
 }
 
@@ -730,6 +814,7 @@ grave — gravedecay appliance control 🪦
   grave projects [list|grant|revoke|git-config]
   grave integrations [status|github-login|github-logout|linear-set|linear-logout]
   grave provider [set|grant|revoke|status]
+  grave multiuser [status|enable]
 
   grave gaming               🎮 free resources: stop services, FREEZE agent
                              sessions in place (🧊 torpor — RAM kept, zero CPU)
@@ -809,8 +894,10 @@ case "${1:-help}" in
       status) exec sudo -n "$0" __users provider-status "$@" ;;
       *) say "usage: grave provider [set|grant <workspace>|revoke <workspace>|status]"; exit 1 ;;
     esac ;;
+  multiuser)  shift || true; exec sudo -n "$0" __multiuser "$@" ;;
+  __multiuser) shift || true; cmd_multiuser "$@" ;;
   __users)    shift || true; [[ $EUID == 0 ]] || { bad "internal users helper requires root"; exit 1; }; exec "$(dirname "$0")/grave-workspaces" "$@" ;;
-  backup)     cmd_backup ;;
+  backup)     shift || true; cmd_backup "$@" ;;
   restore)    shift || true; cmd_restore "$@" ;;
   help|--help|-h) cmd_help ;;
   *) say "unknown command: $1"; cmd_help; exit 1 ;;

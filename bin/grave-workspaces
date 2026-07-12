@@ -11,6 +11,7 @@ PROJECT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 ROLES = {"admin", "developer"}
 PORT_BASE = {"t3": 4810, "term": 4910, "dash": 5010}
 PROVIDER_SECRET=ROOT/"config/secrets/provider.env"
+SERVICE_ROOT=ROOT/"config/workspace-services"
 PROVIDER_NAMES={"OPENAI_API_KEY","ANTHROPIC_API_KEY"}
 
 def die(message): raise SystemExit(f"grave users: {message}")
@@ -18,6 +19,12 @@ def unix_name(slug): return f"grave-{slug}"
 def run(*args):
     if os.environ.get("GRAVE_WORKSPACE_TEST") == "1": return
     subprocess.run(args, check=True)
+def audit(event,workspace=None,target=None,result="ok"):
+    path=ROOT/"logs/audit.jsonl"; path.parent.mkdir(parents=True,exist_ok=True)
+    record={"ts":time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime()),"event":event,"actor":"appliance-admin","workspace":workspace,"target":target,"result":result}
+    fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_APPEND,0o600)
+    try: os.write(fd,(json.dumps(record,separators=(",",":"))+"\n").encode())
+    finally: os.close(fd)
 def as_user(w,*args):
     home=HOME_ROOT/w["slug"]
     if os.environ.get("GRAVE_WORKSPACE_TEST") == "1":
@@ -41,6 +48,8 @@ def save(data):
     fd, name = tempfile.mkstemp(prefix=".workspaces.", dir=REGISTRY.parent)
     try:
         os.fchmod(fd, 0o600)
+        if os.environ.get("GRAVE_WORKSPACE_TEST") != "1" and os.environ.get("SUDO_UID"):
+            os.fchown(fd,int(os.environ["SUDO_UID"]),int(os.environ.get("SUDO_GID","0")))
         with os.fdopen(fd, "w") as out:
             json.dump(data, out, indent=2, sort_keys=True); out.write("\n"); out.flush(); os.fsync(out.fileno())
         os.replace(name, REGISTRY)
@@ -74,7 +83,8 @@ def find(data, value):
     matches=[w for w in data["workspaces"] if value in (w["id"], w["slug"])]
     if len(matches) != 1: die(f"workspace not found: {value}")
     return matches[0]
-def provider_link(w): return HOME_ROOT/w["slug"]/"config/provider.env"
+def service_env(w): return SERVICE_ROOT/(w["slug"]+".env")
+def provider_link(w): return SERVICE_ROOT/(w["slug"]+"-provider.env")
 def sync_provider(w):
     link=provider_link(w)
     try: link.unlink()
@@ -92,17 +102,18 @@ def provision(w):
     else:
         run("install", "-d", "-m", "700", "-o", name, "-g", name, *(str(d) for d in (home, home/"repos", home/"state", home/"state/t3", home/"config", home/"config/secrets", home/"runtime", home/"logs")))
     if account and (account.pw_dir != str(home) or account.pw_uid == 0): die(f"unsafe Unix account drift for {name}")
-    env=home/"config/service.env"
+    SERVICE_ROOT.mkdir(parents=True,exist_ok=True); SERVICE_ROOT.chmod(0o700)
+    env=service_env(w)
     values={"WORKSPACE_SLUG":w["slug"],"GRAVE_WORKSPACE_ID":w["id"],"WORKSPACE_ROLE":w["role"],"WORKSPACE_HOME":str(home),
             "T3_PORT":w["ports"]["t3"],"TERM_PORT":w["ports"]["term"],"DASH_PORT":w["ports"]["dash"],
-            "T3_BIN":os.environ.get("GRAVE_T3_BIN","/usr/bin/t3"),"TTYD_BIN":os.environ.get("GRAVE_TTYD_BIN","/usr/bin/ttyd"),
+            "T3_BIN":os.environ.get("GRAVE_T3_BIN","/usr/bin/t3"),"TTYD_BIN":os.environ.get("GRAVE_TTYD_BIN","/usr/bin/ttyd"),"GRAVEDECAY_GRAVE":os.environ.get("GRAVE_BIN","/usr/local/bin/grave"),
             "PATH":os.environ.get("GRAVE_TOOL_PATH","")+"/usr/local/bin:/usr/bin:/bin"}
     env.write_text("".join(f'{key}="{str(value).replace(chr(34), "")}"\n' for key,value in values.items()))
     env.chmod(0o600)
     sync_provider(w)
     if os.environ.get("GRAVE_WORKSPACE_TEST") != "1":
         if env.stat().st_uid != 0: die("service environment must be root-owned")
-        if w["enabled"]: run("systemctl","enable","--now",f"gravedecay-t3@{w['slug']}.service",f"gravedecay-term@{w['slug']}.service",f"gravedecay-dashboard@{w['slug']}.service")
+        if w["enabled"] and os.environ.get("GRAVE_WORKSPACE_START","1")=="1": run("systemctl","enable","--now",f"gravedecay-t3@{w['slug']}.service",f"gravedecay-term@{w['slug']}.service",f"gravedecay-dashboard@{w['slug']}.service")
 
 def cmd_add(a):
     if not SLUG.fullmatch(a.slug): die("slug must match ^[a-z][a-z0-9-]{2,30}$")
@@ -115,23 +126,45 @@ def cmd_add(a):
         provision(w); print(f"unchanged {w['slug']}"); return
     w={"id":identity,"login":a.login,"slug":a.slug,"role":a.role,"enabled":True,"projects":[],
        "ports":{kind:allocate(data,kind) for kind in PORT_BASE},"provider":{"llm":a.llm}}
-    data["workspaces"].append(w); validate(data); provision(w); save(data); print(f"added {w['slug']}")
+    data["workspaces"].append(w); validate(data); provision(w); save(data); audit("workspace_added",w["slug"]); print(f"added {w['slug']}")
 
 def cmd_list(a):
     data=load(); validate(data)
     if a.json: print(json.dumps(data["workspaces"], indent=2)); return
     print("SLUG\tROLE\tSTATE\tLOGIN\tTAILSCALE ID")
     for w in data["workspaces"]: print(f"{w['slug']}\t{w['role']}\t{'enabled' if w['enabled'] else 'disabled'}\t{w['login']}\t{w['id']}")
+def cmd_status(a):
+    data=load(); validate(data); rows=[]
+    for w in data["workspaces"]:
+        home=HOME_ROOT/w["slug"]; size=sum(p.stat().st_size for p in home.rglob("*") if p.is_file()) if home.exists() else 0
+        services={}
+        for kind in ("t3","term","dashboard"):
+            if os.environ.get("GRAVE_WORKSPACE_TEST")=="1": services[kind]="test"
+            else: services[kind]="active" if subprocess.run(["systemctl","is-active","--quiet",f"gravedecay-{kind}@{w['slug']}"],check=False).returncode==0 else "inactive"
+        rows.append({"slug":w["slug"],"enabled":w["enabled"],"bytes":size,"services":services,"projects":len(w["projects"]),"llm":w["provider"]["llm"]})
+    print(json.dumps(rows,indent=2))
 
 def cmd_inspect(a):
     data=load(); validate(data); print(json.dumps(find(data,a.workspace),indent=2,sort_keys=True))
 def cmd_disable(a):
     data=load(); w=find(data,a.workspace); w["enabled"]=False; save(data)
     run("systemctl","disable","--now",f"gravedecay-t3@{w['slug']}.service",f"gravedecay-term@{w['slug']}.service",f"gravedecay-dashboard@{w['slug']}.service")
-    print(f"disabled {w['slug']}")
+    audit("workspace_disabled",w["slug"]); print(f"disabled {w['slug']}")
 def cmd_doctor(a):
     data=load(); validate(data)
     checkout_paths=set()
+    if os.environ.get("GRAVE_WORKSPACE_TEST") != "1" and (not SERVICE_ROOT.is_dir() or SERVICE_ROOT.stat().st_uid!=0 or SERVICE_ROOT.stat().st_mode&0o077): die("workspace service directory ownership drift")
+    registered={w["slug"] for w in data["workspaces"]}
+    if HOME_ROOT.exists():
+        orphan_dirs={p.name for p in HOME_ROOT.iterdir() if p.is_dir()}-registered
+        if orphan_dirs: die("orphaned workspace directories: "+", ".join(sorted(orphan_dirs)))
+    if os.environ.get("GRAVE_WORKSPACE_TEST") != "1":
+        try: tail_users=json.loads(subprocess.check_output(["tailscale","status","--json"],text=True))["User"]
+        except Exception: die("cannot verify Tailscale identities")
+        missing_ids=[w["id"] for w in data["workspaces"] if w["id"].removeprefix("ts:") not in tail_users]
+        if missing_ids: die("Tailscale identity missing: "+", ".join(missing_ids))
+        orphan_users={entry.pw_name.removeprefix("grave-") for entry in pwd.getpwall() if entry.pw_name.startswith("grave-")}-registered
+        if orphan_users: die("orphaned workspace users: "+", ".join(sorted(orphan_users)))
     entitled=any(w["provider"]["llm"] for w in data["workspaces"])
     if entitled and not PROVIDER_SECRET.is_file(): die("shared provider is required by an entitled workspace")
     if PROVIDER_SECRET.exists() and (PROVIDER_SECRET.stat().st_mode&0o077 or (os.environ.get("GRAVE_WORKSPACE_TEST") != "1" and PROVIDER_SECRET.stat().st_uid != 0)):
@@ -144,8 +177,8 @@ def cmd_doctor(a):
             if account.pw_uid == 0 or account.pw_dir != str(home): die(f"unsafe account: {w['slug']}")
             if not home.is_dir() or home.stat().st_uid != account.pw_uid or home.stat().st_mode & 0o077:
                 die(f"ownership or mode drift: {w['slug']}")
-            service_env=home/"config/service.env"
-            if service_env.stat().st_uid != 0 or service_env.stat().st_mode & 0o077: die(f"unsafe service environment: {w['slug']}")
+            env_file=service_env(w)
+            if env_file.stat().st_uid != 0 or env_file.stat().st_mode & 0o077: die(f"unsafe service environment: {w['slug']}")
             for project in w["projects"]:
                 checkout=home/"repos"/project["name"]
                 if checkout.is_symlink() or not checkout.is_dir() or checkout.stat().st_uid != account.pw_uid: die(f"project ownership drift: {w['slug']}/{project['name']}")
@@ -160,6 +193,15 @@ def cmd_doctor(a):
             for unit in ("gravedecay-t3","gravedecay-term","gravedecay-dashboard"):
                 enabled=subprocess.run(["systemctl","is-enabled",f"{unit}@{w['slug']}.service"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0
                 if enabled != w["enabled"]: die(f"service enablement drift: {unit}@{w['slug']}")
+                instance=f"{unit}@{w['slug']}.service"
+                active=subprocess.run(["systemctl","is-active","--quiet",instance]).returncode==0
+                if active:
+                    user=subprocess.check_output(["systemctl","show","-p","User","--value",instance],text=True).strip()
+                    if user != unix_name(w["slug"]): die(f"service identity drift: {instance}")
+            for kind,port in w["ports"].items():
+                listeners=subprocess.run(["ss","-H","-ltn",f"sport = :{port}"],capture_output=True,text=True).stdout
+                if listeners and any(addr not in ("127.0.0.1","[::ffff:127.0.0.1]") for addr in re.findall(r"\s(\S+):\d+\s",listeners)):
+                    die(f"non-loopback workspace listener: {w['slug']}/{kind}")
     print(f"ok: {len(data['workspaces'])} workspace(s)")
 def cmd_remove(a):
     if a.confirm != a.workspace: die("destructive removal requires --confirm WORKSPACE")
@@ -169,7 +211,10 @@ def cmd_remove(a):
     archive=ROOT/"backups/removed-workspaces"/w["slug"]
     home=HOME_ROOT/w["slug"]
     if home.exists(): archive.parent.mkdir(parents=True,exist_ok=True); shutil.move(str(home),str(archive))
-    run("userdel",unix_name(w["slug"])); data["workspaces"].remove(w); save(data); print(f"removed {w['slug']}; retained at {archive}")
+    for path in (service_env(w),provider_link(w)):
+        try: path.unlink()
+        except FileNotFoundError: pass
+    run("userdel",unix_name(w["slug"])); data["workspaces"].remove(w); save(data); audit("workspace_removed",w["slug"],str(archive)); print(f"removed {w['slug']}; retained at {archive}")
 
 def valid_remote(url):
     return (url.startswith("https://") or url.startswith("ssh://") or re.fullmatch(r"git@[^: ]+:[^ ]+",url)) and "\n" not in url
@@ -185,14 +230,14 @@ def cmd_grant(a):
     if dest.exists(): die("unmanaged destination already exists")
     if os.environ.get("GRAVE_WORKSPACE_TEST") == "1": dest.mkdir(parents=True)
     else: as_user(w,"git","clone","--",a.url,str(dest))
-    w["projects"].append({"name":a.name,"url":a.url}); save(data); print(f"granted {w['slug']}/{a.name}")
+    w["projects"].append({"name":a.name,"url":a.url}); save(data); audit("project_granted",w["slug"],a.name); print(f"granted {w['slug']}/{a.name}")
 def cmd_revoke(a):
     data=load(); w=find(data,a.workspace); matches=[p for p in w["projects"] if p["name"]==a.name]
     if not matches: print(f"unchanged {w['slug']}/{a.name}"); return
     src=HOME_ROOT/w["slug"]/"repos"/a.name
     archive=HOME_ROOT/w["slug"]/"revoked"/(a.name+"-"+time.strftime("%Y%m%d-%H%M%S",time.gmtime()))
     if src.exists(): archive.parent.mkdir(parents=True,exist_ok=True); src.rename(archive)
-    w["projects"].remove(matches[0]); save(data); print(f"revoked {w['slug']}/{a.name}; retained at {archive}")
+    w["projects"].remove(matches[0]); save(data); audit("project_revoked",w["slug"],a.name); print(f"revoked {w['slug']}/{a.name}; retained at {archive}")
 def cmd_git_config(a):
     data=load(); w=find(data,a.workspace)
     as_user(w,"git","config","--global","user.name",a.name)
@@ -203,6 +248,15 @@ def cmd_git_config(a):
     print(f"configured Git identity for {w['slug']}")
 def cmd_projects(a):
     data=load(); w=find(data,a.workspace); print(json.dumps(w["projects"],indent=2))
+def cmd_adopt(a):
+    if not PROJECT.fullmatch(a.name) or not valid_remote(a.url): die("invalid adopted project")
+    data=load(); w=find(data,a.workspace); dest=HOME_ROOT/w["slug"]/"repos"/a.name
+    if not dest.is_dir(): die("adopted checkout does not exist")
+    matches=[p for p in w["projects"] if p["name"]==a.name]
+    if matches:
+        if matches[0]["url"]!=a.url: die("adopted project remote mismatch")
+        return
+    w["projects"].append({"name":a.name,"url":a.url}); save(data); audit("project_adopted",w["slug"],a.name)
 def linear_secret(w): return HOME_ROOT/w["slug"]/"config/secrets/linear.env"
 def cmd_integration_status(a):
     data=load(); w=find(data,a.workspace); secret=linear_secret(w)
@@ -210,9 +264,9 @@ def cmd_integration_status(a):
     linear=secret.is_file() and not secret.stat().st_mode & 0o077
     print(json.dumps({"workspace":w["slug"],"github":"configured" if github else "onboarding","linear":"configured" if linear else "onboarding"}))
 def cmd_github_login(a):
-    data=load(); w=find(data,a.workspace); as_user_result(w,"gh","auth","login","--hostname","github.com","--git-protocol","ssh","--web"); print(f"GitHub configured for {w['slug']}")
+    data=load(); w=find(data,a.workspace); as_user_result(w,"gh","auth","login","--hostname","github.com","--git-protocol","ssh","--web"); audit("integration_login",w["slug"],"github"); print(f"GitHub configured for {w['slug']}")
 def cmd_github_logout(a):
-    data=load(); w=find(data,a.workspace); as_user_result(w,"gh","auth","logout","--hostname","github.com","--user",a.user); print(f"GitHub login removed for {w['slug']}")
+    data=load(); w=find(data,a.workspace); as_user_result(w,"gh","auth","logout","--hostname","github.com","--user",a.user); audit("integration_logout",w["slug"],"github"); print(f"GitHub login removed for {w['slug']}")
 def cmd_linear_set(a):
     data=load(); w=find(data,a.workspace); value=sys.stdin.readline().strip()
     if not value.startswith("lin_api_") or len(value)<20 or any(c.isspace() for c in value): die("invalid Linear API key on stdin")
@@ -226,7 +280,7 @@ def cmd_linear_set(a):
         as_user_result(w,"claude","mcp","remove","--scope","user","linear",check=False)
         as_user_result(w,"claude","mcp","add","--transport","http","--scope","user","linear","https://mcp.linear.app/mcp","--header","Authorization: Bearer ${LINEAR_API_KEY}")
         run("systemctl","restart",f"gravedecay-t3@{w['slug']}",f"gravedecay-term@{w['slug']}",f"gravedecay-dashboard@{w['slug']}")
-    print(f"Linear configured for {w['slug']}")
+    audit("integration_login",w["slug"],"linear"); print(f"Linear configured for {w['slug']}")
 def cmd_linear_logout(a):
     data=load(); w=find(data,a.workspace); secret=linear_secret(w)
     try: secret.unlink()
@@ -234,7 +288,7 @@ def cmd_linear_logout(a):
     if os.environ.get("GRAVE_WORKSPACE_TEST") != "1":
         as_user_result(w,"codex","mcp","remove","linear",check=False); as_user_result(w,"claude","mcp","remove","--scope","user","linear",check=False)
         run("systemctl","restart",f"gravedecay-t3@{w['slug']}",f"gravedecay-term@{w['slug']}",f"gravedecay-dashboard@{w['slug']}")
-    print(f"Linear login removed for {w['slug']}")
+    audit("integration_logout",w["slug"],"linear"); print(f"Linear login removed for {w['slug']}")
 def cmd_provider_set(a):
     lines=[line.strip() for line in sys.stdin if line.strip()]
     parsed=[]
@@ -259,7 +313,16 @@ def cmd_provider_policy(a):
     data=load(); w=find(data,a.workspace); enabled=a.policy=="grant"
     w["provider"]["llm"]=enabled; save(data); sync_provider(w)
     if os.environ.get("GRAVE_WORKSPACE_TEST") != "1": run("systemctl","restart",f"gravedecay-t3@{w['slug']}")
-    print(f"shared provider {'granted to' if enabled else 'revoked from'} {w['slug']}")
+    audit("provider_policy_changed",w["slug"],result=a.policy); print(f"shared provider {'granted to' if enabled else 'revoked from'} {w['slug']}")
+def cmd_reapply(a):
+    if a.t3_bin: os.environ["GRAVE_T3_BIN"]=a.t3_bin
+    if a.ttyd_bin: os.environ["GRAVE_TTYD_BIN"]=a.ttyd_bin
+    if a.tool_path is not None: os.environ["GRAVE_TOOL_PATH"]=a.tool_path
+    if a.grave_bin: os.environ["GRAVE_BIN"]=a.grave_bin
+    data=load(); validate(data)
+    if os.environ.get("SUDO_UID"): os.chown(REGISTRY,int(os.environ["SUDO_UID"]),int(os.environ.get("SUDO_GID","0")))
+    for w in data["workspaces"]: provision(w)
+    print(f"reapplied {len(data['workspaces'])} workspace(s)")
 def cmd_provider_status(a):
     data=load(); configured=PROVIDER_SECRET.is_file() and not PROVIDER_SECRET.stat().st_mode&0o077
     print(json.dumps({"configured":configured,"workspaces":[{"slug":w["slug"],"llm":w["provider"]["llm"]} for w in data["workspaces"]]}))
@@ -267,6 +330,7 @@ def cmd_provider_status(a):
 def main():
     p=argparse.ArgumentParser(prog="grave users"); s=p.add_subparsers(required=True)
     q=s.add_parser("list"); q.add_argument("--json",action="store_true"); q.set_defaults(fn=cmd_list)
+    q=s.add_parser("status"); q.set_defaults(fn=cmd_status)
     q=s.add_parser("add"); q.add_argument("identity"); q.add_argument("login"); q.add_argument("slug"); q.add_argument("--role",choices=sorted(ROLES),default="developer"); q.add_argument("--no-llm",dest="llm",action="store_false",default=True); q.set_defaults(fn=cmd_add)
     q=s.add_parser("inspect"); q.add_argument("workspace"); q.set_defaults(fn=cmd_inspect)
     q=s.add_parser("disable"); q.add_argument("workspace"); q.set_defaults(fn=cmd_disable)
@@ -275,6 +339,7 @@ def main():
     q=s.add_parser("grant"); q.add_argument("workspace"); q.add_argument("name"); q.add_argument("url"); q.set_defaults(fn=cmd_grant)
     q=s.add_parser("revoke"); q.add_argument("workspace"); q.add_argument("name"); q.set_defaults(fn=cmd_revoke)
     q=s.add_parser("projects"); q.add_argument("workspace"); q.set_defaults(fn=cmd_projects)
+    q=s.add_parser("adopt"); q.add_argument("workspace"); q.add_argument("name"); q.add_argument("url"); q.set_defaults(fn=cmd_adopt)
     q=s.add_parser("git-config"); q.add_argument("workspace"); q.add_argument("--name",required=True); q.add_argument("--email",required=True); q.add_argument("--signing-key"); q.set_defaults(fn=cmd_git_config)
     q=s.add_parser("integration-status"); q.add_argument("workspace"); q.set_defaults(fn=cmd_integration_status)
     q=s.add_parser("github-login"); q.add_argument("workspace"); q.set_defaults(fn=cmd_github_login)
@@ -284,6 +349,7 @@ def main():
     q=s.add_parser("provider-set"); q.set_defaults(fn=cmd_provider_set)
     q=s.add_parser("provider-policy"); q.add_argument("policy",choices=("grant","revoke")); q.add_argument("workspace"); q.set_defaults(fn=cmd_provider_policy)
     q=s.add_parser("provider-status"); q.set_defaults(fn=cmd_provider_status)
+    q=s.add_parser("reapply"); q.add_argument("--t3-bin"); q.add_argument("--ttyd-bin"); q.add_argument("--tool-path"); q.add_argument("--grave-bin"); q.set_defaults(fn=cmd_reapply)
     a=p.parse_args(); REGISTRY.parent.mkdir(parents=True,exist_ok=True)
     lock=REGISTRY.with_suffix(".lock")
     with lock.open("a") as f: fcntl.flock(f,fcntl.LOCK_EX); a.fn(a)

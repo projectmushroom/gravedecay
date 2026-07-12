@@ -62,6 +62,13 @@ CLIs (`claude mcp add … --header 'Authorization: Bearer ${VAR}'` and
 live tool call from each CLI. Prefer API-key/bearer auth over OAuth — this
 box is headless.
 
+For opt-in multi-user mode, never place a collaborator credential in the
+appliance owner HOME or shared secret store. Use `grave integrations` and
+`grave projects` so commands execute as the workspace Unix identity. Shared
+LLM API keys are the sole exception and require explicit `grave provider`
+entitlement. `grave users status` and `grave doctor` must agree before and
+after user, grant, integration, or provider changes.
+
 ## 5. Btrfs niceties (only if / is btrfs)
 
 - `$GRAVE_ROOT` on its own subvolume (e.g. `@srv`) with a snapper config

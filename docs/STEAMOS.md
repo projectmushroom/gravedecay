@@ -136,6 +136,12 @@ broad passwordless sudo, which the platform deliberately doesn't keep (sudo is
 scoped to specific commands). Flagging the rare `/etc`-reset with a clear
 one-liner is the safer trade.
 
+With multi-user mode enabled, self-heal additionally requires the gateway and
+all three workspace unit templates to survive under `/etc`, and developer boot
+posture is derived from enabled per-workspace T3 instances. Re-running the same
+raise command recreates templates and reapplies registry users without moving
+workspace data or provider/integration secrets.
+
 ## Game Mode auto-throttle
 
 The `steam-machine` profile installs `gravedecay-gamewatch.service` and turns it

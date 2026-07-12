@@ -20,10 +20,10 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(len(data["workspaces"]),2)
         self.assertNotEqual(data["workspaces"][0]["ports"],data["workspaces"][1]["ports"])
         self.assertTrue((self.root/"workspaces/alice/state/t3").is_dir())
-        env=(self.root/"workspaces/alice/config/service.env").read_text()
+        env=(self.root/"config/workspace-services/alice.env").read_text()
         self.assertIn('WORKSPACE_HOME="'+str(self.root/"workspaces/alice")+'"',env)
         self.assertIn('T3_PORT="4810"',env)
-        self.assertEqual((self.root/"workspaces/alice/config/service.env").stat().st_mode & 0o777,0o600)
+        self.assertEqual((self.root/"config/workspace-services/alice.env").stat().st_mode & 0o777,0o600)
         self.run_cli("disable","alice")
         self.assertFalse(json.loads((self.root/"config/workspaces.json").read_text())["workspaces"][0]["enabled"])
         self.run_cli("remove","alice","--confirm","wrong",ok=False)
@@ -78,7 +78,7 @@ class WorkspaceTests(unittest.TestCase):
         self.run_cli("add","123","a@example.com","alice"); self.run_cli("add","456","b@example.com","bob")
         value="sk-test-"+"z"*32
         out=self.run_cli("provider-set",input="OPENAI_API_KEY="+value+"\n").stdout
-        shared=self.root/"config/secrets/provider.env"; a=self.root/"workspaces/alice/config/provider.env"; b=self.root/"workspaces/bob/config/provider.env"
+        shared=self.root/"config/secrets/provider.env"; a=self.root/"config/workspace-services/alice-provider.env"; b=self.root/"config/workspace-services/bob-provider.env"
         self.assertEqual(shared.stat().st_mode&0o777,0o600); self.assertTrue(a.is_symlink()); self.assertTrue(b.is_symlink())
         self.assertEqual(a.resolve(),shared.resolve()); self.assertEqual(b.resolve(),shared.resolve()); self.assertNotIn(value,out)
         status=self.run_cli("provider-status").stdout; self.assertNotIn(value,status)

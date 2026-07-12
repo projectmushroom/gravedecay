@@ -28,7 +28,7 @@ class GatewayTests(unittest.TestCase):
         status=self.root/"status.json"; status.write_text(json.dumps({"User":{"123":{"LoginName":"a@example.com"},"456":{"LoginName":"b@example.com"}}}))
         token="a"*64; (self.root/"config/secrets").mkdir(); (self.root/"config/secrets/gateway-token").write_text(token)
         probe=socket.socket(); probe.bind(("127.0.0.1",0)); self.port=probe.getsockname()[1]; probe.close(); self.prefix=f"/_grave_proxy/{token}"
-        env={**os.environ,"GRAVE_ROOT":str(self.root),"GRAVE_GATEWAY_PORT":str(self.port),"GRAVE_TAILSCALE_STATUS":str(status)}
+        env={**os.environ,"GRAVE_ROOT":str(self.root),"GRAVE_GATEWAY_PORT":str(self.port),"GRAVE_ADMIN_DASH_PORT":str(ports[2]),"GRAVE_TAILSCALE_STATUS":str(status)}
         self.proc=subprocess.Popen([GATEWAY],env=env)
         for _ in range(100):
             try:
@@ -76,6 +76,9 @@ class GatewayTests(unittest.TestCase):
         s=socket.create_connection(("127.0.0.1",self.port))
         req=(f"POST {self.prefix}/grave/api/action HTTP/1.1\r\nHost: box\r\nTailscale-User-Login: b@example.com\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()+body)
         s.sendall(req); out=s.recv(4096); s.close(); self.assertIn(b"403",out)
+    def test_admin_action_routes_to_privileged_owner_dashboard(self):
+        out=self.request("/grave/api/action-stream?action=reboot","a@example.com")
+        self.assertIn(b"alice-dash",out)
     def test_websocket_upgrade_is_bidirectional(self):
         s=socket.create_connection(("127.0.0.1",self.port))
         s.sendall(f"GET {self.prefix}/socket HTTP/1.1\r\nHost: box\r\nTailscale-User-Login: a@example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n".encode())

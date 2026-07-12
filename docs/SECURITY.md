@@ -41,6 +41,11 @@ other human users, tighten it.
 
 ## The web terminal
 
+The following shared-terminal behavior applies only to default single-user
+mode. Multi-user mode routes `/term` to a ttyd/tmux instance running as the
+caller's dedicated Unix user; the gateway denies unknown/disabled callers and
+prevents backend selection.
+
 `/term` (ttyd → the shared `tmux -L agents` socket) is an interactive shell as
 your user for **anyone who can reach it** — ttyd does not check the
 `Tailscale-User-Login` header. On a personal tailnet this is the same trust

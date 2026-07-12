@@ -32,7 +32,7 @@ ok()   { printf '  %b✓%b %s\n' "$GRN" "$RST" "$*"; }
 skip() { printf '  %b–%b %s\n' "$YLW" "$RST" "$*"; }
 
 [[ $EUID -eq 0 ]] && { echo "Run as your normal user, not root (sudo is used internally)."; exit 1; }
-sudo -n true 2>/dev/null || sudo -v || { echo "sudo access required"; exit 1; }
+sudo -n systemctl --version >/dev/null 2>&1 || sudo -v || { echo "sudo access required"; exit 1; }
 
 # ----------------------------------------------- 0. environment detection ----
 # Immutable rootfs (stock SteamOS, Silverblue, …): /usr is read-only and an OS
@@ -261,6 +261,8 @@ if [[ "${MULTI_USER:-0}" == 1 ]]; then
   done
   sudo systemctl daemon-reload
   sudo systemctl enable --now gravedecay-gateway
+  sudo -n "$GRAVE_BIN" __users reapply --t3-bin "$T3_BIN" --ttyd-bin "$TTYD_BIN" \
+    --tool-path "$TOOLPATH" --grave-bin "$GRAVE_BIN"
   while IFS= read -r slug; do
     sudo systemctl enable --now "gravedecay-t3@$slug" "gravedecay-term@$slug" "gravedecay-dashboard@$slug"
   done < <(jq -r '.workspaces[] | select(.enabled) | .slug' "$GRAVE_ROOT/config/workspaces.json" 2>/dev/null)
