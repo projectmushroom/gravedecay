@@ -102,6 +102,9 @@ test('settings and narrow data records remain usable', async ({ page }) => {
 test('a polling refresh preserves the document scroll position', async ({ page }) => {
   await renderLongMobileRecords(page);
   const before = await page.evaluate(async () => {
+    // Let the setup render finish its guarded WebKit anchor restoration before
+    // simulating the user's later scroll.
+    await new Promise(resolve => requestAnimationFrame(resolve));
     // Keep enough scroll range even when the next poll replaces the deliberately
     // long records with the fixture server's shorter real state.
     document.body.insertAdjacentHTML('beforeend', '<div style="height:1000px" aria-hidden="true"></div>');
