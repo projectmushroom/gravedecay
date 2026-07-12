@@ -226,6 +226,7 @@ sudo visudo -c -f "$SUDOERS_FILE" >/dev/null && ok "sudoers valid ($SUDOERS_FILE
 # ----------------------------------------------------------- 5. gravedecay ----
 step "gravedecay"
 install -m 755 "$REPO_DIR/dashboard/gravedecay.py" "$GRAVE_ROOT/scripts/gravedecay.py"
+install -m 755 "$REPO_DIR/dashboard/gateway.py" "$GRAVE_ROOT/scripts/gateway.py"
 install -d -m 755 "$GRAVE_ROOT/scripts/dashboard-static"
 install -m 644 "$REPO_DIR/dashboard/static/"* "$GRAVE_ROOT/scripts/dashboard-static/"
 install -m 644 "$REPO_DIR/assets/gravedecay.png" "$GRAVE_ROOT/config/gravedecay.png"
@@ -245,6 +246,19 @@ sudo sed -i '/^Environment=DOCKER_HOST=$/d' /etc/systemd/system/gravedecay.servi
 sudo systemctl daemon-reload
 sudo systemctl enable --now gravedecay
 curl -sf -o /dev/null "http://127.0.0.1:$DASH_PORT/healthz" && ok "gravedecay answering on :$DASH_PORT"
+
+# Multi-user front door is installed only when explicitly enabled in grave.conf.
+if [[ "${MULTI_USER:-0}" == 1 ]]; then
+  if [[ ! -s "$GRAVE_ROOT/config/secrets/gateway-token" ]]; then
+    umask 077; python3 -c 'import secrets; print(secrets.token_hex(32))' >"$GRAVE_ROOT/config/secrets/gateway-token"
+  fi
+  chmod 600 "$GRAVE_ROOT/config/secrets/gateway-token"
+  sed -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" "$REPO_DIR/systemd/gravedecay-gateway.service.tmpl" \
+    | sudo tee /etc/systemd/system/gravedecay-gateway.service >/dev/null
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now gravedecay-gateway
+  curl -sf -o /dev/null "http://127.0.0.1:${GATEWAY_PORT:-4710}/healthz" && ok "identity gateway answering"
+fi
 
 # --------------------------------------------------------- 5b. web terminal ----
 step "Web terminal (ttyd → tmux agents socket)"
@@ -392,11 +406,17 @@ elif ! tailscale status --peers=false >/dev/null 2>&1; then
   skip "tailscale not logged in — run 'sudo tailscale up --ssh', rerun raise.sh"
 else
   sudo tailscale set --operator="$RUN_USER" 2>/dev/null || true
+  if [[ "${MULTI_USER:-0}" == 1 ]]; then
+    gateway_token=$(<"$GRAVE_ROOT/config/secrets/gateway-token")
+    tailscale serve --bg --https=443 "http://127.0.0.1:${GATEWAY_PORT:-4710}/_grave_proxy/$gateway_token" >/dev/null \
+      && ok "identity gateway → HTTPS origin on tailnet"
+  else
   # one origin: T3 at the root, gravedecay mounted at /grave — gravedecay is the
   # entry point (install the PWA from /grave/), apps hop stays same-origin
   tailscale serve --bg --https=443 "http://127.0.0.1:$T3_PORT" >/dev/null && ok "T3 → https / on tailnet"
   tailscale serve --bg --https=443 --set-path=/grave "http://127.0.0.1:$DASH_PORT" >/dev/null && ok "gravedecay → https /grave on tailnet"
   command -v ttyd >/dev/null && tailscale serve --bg --https=443 --set-path=/term "http://127.0.0.1:$TERM_PORT" >/dev/null && ok "web terminal → https /term on tailnet"
+  fi
 fi
 
 # ------------------------------------------------------------ 10. profile ----

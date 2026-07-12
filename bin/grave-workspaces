@@ -8,7 +8,7 @@ REGISTRY = Path(os.environ.get("GRAVE_WORKSPACE_REGISTRY", ROOT / "config/worksp
 HOME_ROOT = Path(os.environ.get("GRAVE_WORKSPACE_HOME_ROOT", ROOT / "workspaces"))
 SLUG = re.compile(r"^[a-z][a-z0-9-]{2,30}$")
 ROLES = {"admin", "developer"}
-PORT_BASE = {"t3": 4810, "term": 4910}
+PORT_BASE = {"t3": 4810, "term": 4910, "dash": 5010}
 
 def die(message): raise SystemExit(f"grave users: {message}")
 def unix_name(slug): return f"grave-{slug}"
@@ -43,7 +43,7 @@ def validate(data):
         if not SLUG.fullmatch(w.get("slug", "")): die(f"unsafe slug: {w.get('slug', '')}")
         if w.get("role") not in ROLES or not isinstance(w.get("enabled"), bool): die(f"invalid record: {w['slug']}")
         ports=w.get("ports", {})
-        if set(ports) != {"t3", "term"} or any(not isinstance(p, int) or not 1024 <= p <= 65535 for p in ports.values()):
+        if set(ports) != set(PORT_BASE) or any(not isinstance(p, int) or not 1024 <= p <= 65535 for p in ports.values()):
             die(f"invalid ports: {w['slug']}")
         if w["id"] in seen_id or w["slug"] in seen_slug or seen_port.intersection(ports.values()): die("duplicate identity, slug, or port")
         seen_id.add(w["id"]); seen_slug.add(w["slug"]); seen_port.update(ports.values())
@@ -79,7 +79,7 @@ def cmd_add(a):
         if w["id"] != identity or w["slug"] != a.slug: die("identity or slug already belongs to another workspace")
         provision(w); print(f"unchanged {w['slug']}"); return
     w={"id":identity,"login":a.login,"slug":a.slug,"role":a.role,"enabled":True,"projects":[],
-       "ports":{"t3":allocate(data,"t3"),"term":allocate(data,"term")},"provider":{"llm":a.llm}}
+       "ports":{kind:allocate(data,kind) for kind in PORT_BASE},"provider":{"llm":a.llm}}
     data["workspaces"].append(w); validate(data); provision(w); save(data); print(f"added {w['slug']}")
 
 def cmd_list(a):
