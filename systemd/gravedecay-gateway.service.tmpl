@@ -1,0 +1,22 @@
+[Unit]
+Description=gravedecay identity-aware Tailscale gateway
+After=tailscaled.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/python3 @GRAVE_ROOT@/scripts/gateway.py
+Environment=GRAVE_ROOT=@GRAVE_ROOT@
+Environment=GRAVE_GATEWAY_PORT=4710
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadOnlyPaths=@GRAVE_ROOT@/config/workspaces.json @GRAVE_ROOT@/config/secrets/gateway-token
+ReadWritePaths=@GRAVE_ROOT@/logs
+
+[Install]
+WantedBy=multi-user.target

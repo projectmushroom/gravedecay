@@ -18,6 +18,14 @@ services your projects need (databases, browsers). This is the opposite of
 | Control plane | `grave` (bash, `/usr/local/bin`) | One entrypoint for modes, doctor, logs, backup |
 | Self-updater | `gravedecay-upgrade.service`, detached oneshot | Survives the dashboard restart caused by its own re-raise |
 
+In opt-in multi-user mode, Tailscale Serve sends the whole HTTPS origin to the
+identity gateway on loopback :4710 using a root-only random capability path.
+The gateway confirms the Serve identity against local Tailscale state, resolves
+the stable ID in the workspace registry, enforces the role, and selects fixed
+T3, terminal, and dashboard ports. User input never selects an upstream. The
+proxy supports ordinary HTTP streaming and WebSocket upgrades by relaying the
+connection bidirectionally.
+
 ## Filesystem
 
 Everything lives under `$GRAVE_ROOT` (default `/srv/dev`):

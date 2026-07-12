@@ -632,6 +632,11 @@ cmd_doctor() {
   if [[ -e "$GRAVE_ROOT/config/workspaces.json" ]]; then
     check "workspace registry and ownership" "$(dirname "$0")/grave-workspaces" doctor
   fi
+  if [[ "${MULTI_USER:-0}" == 1 ]]; then
+    check "identity gateway loopback health" curl -sf -o /dev/null "http://127.0.0.1:${GATEWAY_PORT:-4710}/healthz"
+    check "gateway capability is private" bash -c "[[ \$(stat -c %a '$GRAVE_ROOT/config/secrets/gateway-token') == 600 ]]"
+    check "gateway is the Serve origin" bash -c "tailscale serve status | grep -q '127.0.0.1:${GATEWAY_PORT:-4710}'"
+  fi
   echo
   if (( FAILURES == 0 )); then say "${GRN}${BLD}All checks passed.${RST}"; else say "${RED}${BLD}$FAILURES check(s) failed.${RST}"; exit 1; fi
 }
