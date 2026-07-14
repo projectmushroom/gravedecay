@@ -300,10 +300,16 @@ cmd_agents() {
       tmuxa list-sessions 2>/dev/null || say "No agent sessions. Start one: grave agents new <name> [dir]" ;;
     new)
       local name="${1:?usage: grave agents new <name> [dir]}"
+      # The name is interpolated into a path and into the pipe-pane command tmux
+      # runs via /bin/sh, so restrict it to a safe charset (traversal + injection).
+      [[ "$name" =~ ^[A-Za-z0-9_-]+$ ]] || { bad "session name must be letters, digits, '-' or '_'"; exit 1; }
       local dir="${2:-$GRAVE_ROOT/repos}"
       tmuxa -f "$TMUX_CONF" new-session -d -s "$name" -c "$dir"
       mkdir -p "$GRAVE_ROOT/agents/$name"
-      tmuxa pipe-pane -t "$name" -o "cat >> $GRAVE_ROOT/agents/$name/session-\$(date +%%Y%%m%%d).log" 2>/dev/null || true
+      # Resolve the dated log path in bash: the old deferred date-in-tmux form
+      # double-escaped the percents and logged a literal filename, never a date.
+      local logfile="$GRAVE_ROOT/agents/$name/session-$(date +%Y%m%d).log"
+      tmuxa pipe-pane -t "$name" -o "cat >> '$logfile'" 2>/dev/null || true
       ok "session '$name' created in $dir (attach: grave agents attach $name)" ;;
     attach)
       exec tmux -L "$TMUX_SOCKET" attach -t "${1:?usage: grave agents attach <name>}" ;;
@@ -337,7 +343,7 @@ cmd_docker() {
 # is `serve`, not `funnel` — nothing is exposed to the public internet).
 # Ports are confined to PREVIEW_RANGE so a preview can never shadow a platform
 # service (4711-4713) or anything outside the sandbox.
-tailnet_host() { tailscale status --json 2>/dev/null | sed -n 's/.*"DNSName": *"\([^"]*\)\.".*/\1/p' | head -1; }
+tailnet_host() { local h; h=$(tailscale status --json 2>/dev/null | sed -n 's/.*"DNSName": *"\([^"]*\)\.".*/\1/p'); printf '%s\n' "${h%%$'\n'*}"; }
 
 preview_reserved() { # preview_reserved <port>  — a platform service sits on it
   local p="$1" r
@@ -456,7 +462,10 @@ cmd_update() {
 cmd_bootmode() { # what the box boots into: developer (dev services up) or gaming
   case "${1:-}" in
     "")
-      local first_workspace; first_workspace=$(workspace_services | head -1)
+      # Capture then take the first line in bash — piping the streaming
+      # workspace_services into `head -1` closes the pipe early, SIGPIPEs the
+      # producer, and under `set -o pipefail` aborts `grave bootmode` (exit 141).
+      local first_workspace; first_workspace=$(workspace_services); first_workspace=${first_workspace%%$'\n'*}
       if systemctl is-enabled --quiet t3code 2>/dev/null || { [[ -n "$first_workspace" ]] && systemctl is-enabled --quiet "$first_workspace"; }; then
         say "boot mode: developer (dev services start at boot)"
       else
@@ -779,11 +788,14 @@ cmd_backup() {
     say "  ${YLW}docker stopped — volumes skipped this run${RST}"
   fi
 
-  # retention
+  # retention — only timestamped backups (YYYYMMDD-HHMMSS). $BACKUP_DIR also holds
+  # migration-* and removed-workspaces/, which sort AFTER the digits and would
+  # otherwise occupy the "keep last N" slots, pruning real backups early (and
+  # risk rm-ing non-backup dirs). Filter to the backup name shape.
   local old
   while IFS= read -r old; do
     rm -rf "$BACKUP_DIR/${old:?}"; say "  pruned old backup $old"
-  done < <(ls -1 "$BACKUP_DIR" | sort | head -n -"$BACKUP_KEEP")
+  done < <(ls -1 "$BACKUP_DIR" 2>/dev/null | grep -E '^[0-9]{8}-[0-9]{6}$' | sort | head -n -"$BACKUP_KEEP")
   log "backup: $ts complete"
   ok "backup complete: $dest"
 }
@@ -803,6 +815,9 @@ cmd_restore() {
   case "${2:-}" in
     volume)
       local vol="${3:?volume name}"
+      # $vol flows into `docker run -v $vol:/data` and a container `sh -c`, so an
+      # unvalidated value could bind a host path (vol=/etc) or inject shell.
+      [[ "$vol" =~ ^[A-Za-z0-9_.-]+$ ]] || { bad "volume name must be letters, digits, '.', '-' or '_'"; exit 1; }
       dk volume create "$vol" >/dev/null
       dk run --rm -v "$vol":/data -v "$dest/volumes":/backup:ro alpine \
         sh -c "cd /data && tar -xzf /backup/$vol.tar.gz"
