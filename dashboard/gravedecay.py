@@ -34,6 +34,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("GRAVEDECAY_PORT", os.environ.get("DASH_PORT", "4712")))
 GRAVE_ROOT = os.environ.get("GRAVE_ROOT", "/srv/dev")
+# tmux socket carrying the agent sessions. Single-user uses "agents"; a workspace
+# dashboard is handed its per-workspace socket (grave-<slug>) via TMUX_SOCKET so
+# the sessions panel and kill button see the same sessions the workspace terminal
+# creates. MUST match TMUX_SOCKET on the matching gravedecay-term unit.
+TMUX_SOCKET = os.environ.get("TMUX_SOCKET", "agents")
+# Where the T3 instance this dashboard drives keeps its pairing state. Single-user
+# T3 serves from $GRAVE_ROOT/agents/t3code; a workspace dashboard is handed its
+# per-workspace state dir (state/t3) so minted tokens land where its T3 reads them.
+T3_BASE_DIR = os.environ.get("GRAVEDECAY_T3_BASE_DIR", f"{GRAVE_ROOT}/agents/t3code")
 # Mount prefix when path-routed behind `tailscale serve --set-path` on the same
 # origin as T3 (single entry point). Bare paths keep working for localhost.
 BASE = os.environ.get("GRAVEDECAY_BASE", "/grave").rstrip("/")
@@ -133,7 +142,7 @@ ACTIONS = {
     # else); --base-url is appended per-request from the Host header so the
     # printed /pair#token=... link lands on the right origin
     "t3-pair": [T3, "auth", "pairing", "create",
-                "--base-dir", f"{GRAVE_ROOT}/agents/t3code",
+                "--base-dir", T3_BASE_DIR,
                 "--ttl", "15m", "--label", "gravedecay-dashboard"],
     "reboot": ["sudo", "-n", "systemctl", "reboot"],
     "bootmode-developer": [GRAVE, "bootmode", "developer"],
@@ -275,7 +284,7 @@ def collect_docker():
 
 
 def collect_tmux():
-    rc, out, _ = sh(["tmux", "-L", "agents", "list-sessions", "-F",
+    rc, out, _ = sh(["tmux", "-L", TMUX_SOCKET, "list-sessions", "-F",
                      "#{session_name}\t#{session_windows}\t#{?session_attached,attached,detached}\t#{t:session_activity}"])
     if rc != 0:
         return []
@@ -1147,7 +1156,7 @@ class Handler(BaseHTTPRequestHandler):
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,50}", name):
                 self._send(400, json.dumps({"ok": False, "output": "bad session name"}))
                 return
-            rc, out, err = sh(["tmux", "-L", "agents", "kill-session", "-t", name])
+            rc, out, err = sh(["tmux", "-L", TMUX_SOCKET, "kill-session", "-t", name])
             self._send(200, json.dumps({"ok": rc == 0, "output": out + err}))
         elif p == "/api/admin/upgrade":
             tag = str(data.get("tag", ""))
