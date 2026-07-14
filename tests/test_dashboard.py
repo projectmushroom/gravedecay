@@ -66,6 +66,20 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("enable_restart t3code", ritual)
         self.assertNotIn("systemctl enable --now gravedecay\n", ritual)
 
+    def test_raise_reads_multi_user_from_conf_before_gating_on_it(self):
+        # Regression for the keystone multi-user bug: raise.sh gates the gateway
+        # + workspace-unit install on ${MULTI_USER}, which lives ONLY in
+        # grave.conf. sudo scrubs the environment, so raise.sh must read the
+        # value back from the installed conf — otherwise `grave multiuser enable`
+        # silently leaves the box on single-user ports with no gateway.
+        ritual = (ROOT / "raise.sh").read_text()
+        read = ritual.find(". /etc/gravedecay/grave.conf")
+        self.assertNotEqual(read, -1, "raise.sh never sources grave.conf to load MULTI_USER")
+        self.assertIn('MULTI_USER=$(. /etc/gravedecay/grave.conf', ritual)
+        gate = ritual.find('if [[ "${MULTI_USER:-0}" == 1 ]]')
+        self.assertNotEqual(gate, -1)
+        self.assertLess(read, gate, "MULTI_USER must be read from the conf before it gates the install")
+
     def test_offline_shell_contains_no_machine_state(self):
         with self.get("/offline.html") as response:
             page = response.read().decode()
