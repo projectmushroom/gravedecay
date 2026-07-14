@@ -485,7 +485,9 @@ cmd_bootmode() { # what the box boots into: developer (dev services up) or gamin
 cmd_gamewatch() {
   local flag="$GRAVE_ROOT/config/gamewatch.on"
   case "${1:-status}" in
-    on)  mkdir -p "$GRAVE_ROOT/config"; : > "$flag"
+    on)  systemctl cat gravedecay-gamewatch.service >/dev/null 2>&1 \
+           || { bad "gravedecay-gamewatch.service not installed on this host — raise with --profile steam-machine first"; exit 1; }
+         mkdir -p "$GRAVE_ROOT/config"; : > "$flag"
          ok "auto-throttle ON — launching a game freezes agents; 'grave gamewatch off' to stop" ;;
     off) rm -f "$flag"; ok "auto-throttle OFF (games no longer flip modes)" ;;
     status)
@@ -606,8 +608,17 @@ check() { # check <description> <command...>
   if "${@:2}" >/dev/null 2>&1; then ok "$1"; else bad "$1"; FAILURES=$((FAILURES+1)); fi
 }
 firewall_active() {
-  if command -v ufw >/dev/null; then sudo ufw status | grep -q "Status: active"
-  elif command -v firewall-cmd >/dev/null; then firewall-cmd --state >/dev/null 2>&1
+  # Not merely "a firewall is running": the appliance boundary (AGENTS.md §3) is
+  # default-deny incoming (only ssh + tailscale0 allowed). A firewall that is up
+  # but defaults to allow-in still violates it, so assert the default policy too.
+  if command -v ufw >/dev/null; then
+    local s; s=$(sudo ufw status verbose 2>/dev/null) || return 1
+    grep -q "Status: active" <<<"$s" && grep -qE "Default: (deny|reject) \(incoming\)" <<<"$s"
+  elif command -v firewall-cmd >/dev/null; then
+    firewall-cmd --state >/dev/null 2>&1 || return 1
+    local zone; zone=$(firewall-cmd --get-default-zone 2>/dev/null) || return 1
+    # the default zone must not blanket-accept inbound (trusted, or target ACCEPT)
+    [[ "$zone" != trusted ]] && ! firewall-cmd --info-zone="$zone" 2>/dev/null | grep -q 'target: ACCEPT'
   else return 1; fi
 }
 cmd_doctor() {
@@ -653,9 +664,17 @@ cmd_doctor() {
   # but not enabled won't come back after a reboot, so surviving a reboot is
   # only real if these pass. (Doctor is the contract.)
   local u
-  for u in "${ALWAYS_ON[@]}" "${DEV_SERVICES[@]}"; do
+  for u in "${ALWAYS_ON[@]}"; do
     systemctl cat "$u.service" >/dev/null 2>&1 || continue   # unit not on this host
     check "$u enabled (starts at boot)"  systemctl is-enabled --quiet "$u"
+  done
+  # DEV_SERVICES enablement IS the boot-mode toggle: `grave bootmode gaming`
+  # deliberately disables them, so a disabled dev service is an expected state,
+  # not a reboot-readiness failure. Report the mode instead of counting a failure.
+  for u in "${DEV_SERVICES[@]}"; do
+    systemctl cat "$u.service" >/dev/null 2>&1 || continue
+    if systemctl is-enabled --quiet "$u"; then ok "$u enabled (boot mode: developer)"
+    else say "  ${YLW}– $u disabled at boot (boot mode: gaming — 'grave developer' to wake)${RST}"; fi
   done
   if [[ "${DOCKER_ROOTLESS:-0}" == 1 ]]; then
     check "rootless docker enabled at boot"   systemctl --user is-enabled --quiet docker
@@ -663,8 +682,13 @@ cmd_doctor() {
       bash -c "loginctl show-user \"\$(id -un)\" 2>/dev/null | grep -q 'Linger=yes'"
   fi
   if [[ -e "$GRAVE_ROOT/config/gamewatch.on" ]]; then
-    check "game-mode watcher running"   systemctl is-active --quiet gravedecay-gamewatch
-    check "game-mode watcher enabled"   systemctl is-enabled --quiet gravedecay-gamewatch
+    if systemctl cat gravedecay-gamewatch.service >/dev/null 2>&1; then
+      check "game-mode watcher running"   systemctl is-active --quiet gravedecay-gamewatch
+      check "game-mode watcher enabled"   systemctl is-enabled --quiet gravedecay-gamewatch
+    else
+      bad "gamewatch on but gravedecay-gamewatch.service not installed — 'grave gamewatch off' or raise with --profile steam-machine"
+      FAILURES=$((FAILURES+1))
+    fi
   fi
   if dkctl is-active --quiet docker; then
     check "docker healthy"              dk info
@@ -699,7 +723,11 @@ cmd_doctor() {
   fi
   check "backups dir writable"          test -w "$BACKUP_DIR"
   if [[ -e "$GRAVE_ROOT/config/workspaces.json" ]]; then
-    check "workspace registry and ownership" "$(dirname "$0")/grave-workspaces" doctor
+    # Route through the root helper: the workspace doctor stats root-owned 0700
+    # service-env files and grave-<slug>-owned homes, which the invoking owner
+    # can't traverse — run unprivileged it raises PermissionError and fails on a
+    # healthy box. Same path as every other `grave users` operation.
+    check "workspace registry and ownership" sudo -n "$0" __users doctor
   fi
   if [[ "${MULTI_USER:-0}" == 1 ]]; then
     check "identity gateway loopback health" curl -sf -o /dev/null "http://127.0.0.1:${GATEWAY_PORT:-4710}/healthz"
