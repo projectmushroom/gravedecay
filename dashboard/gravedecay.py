@@ -89,6 +89,32 @@ DEFAULT_SETTINGS = {
 }
 
 
+def _safe_tile_url(url):
+    """Return url only if it is an internal root-relative path or an http(s) URL.
+    Everything else — javascript:, data:, etc. — is dropped: a custom tile is
+    rendered as an <a href> and an iframe src, so a javascript: URL would run in
+    the dashboard origin (stored XSS driving every privileged endpoint)."""
+    url = str(url)[:200]
+    if url.startswith("/"):
+        return url
+    try:
+        scheme = urllib.parse.urlparse(url).scheme.lower()
+    except ValueError:
+        return ""
+    return url if scheme in ("http", "https") else ""
+
+
+def _sanitize_custom_apps(apps):
+    out = []
+    for a in apps if isinstance(apps, list) else []:
+        if not isinstance(a, dict) or not a.get("url"):
+            continue
+        url = _safe_tile_url(a.get("url", ""))
+        if url:
+            out.append({"name": str(a.get("name", "app"))[:40], "url": url})
+    return out[:12]
+
+
 def load_settings():
     try:
         with open(SETTINGS_PATH) as f:
@@ -100,6 +126,7 @@ def load_settings():
         if k in data and isinstance(data[k], type(default)):
             s[k] = data[k]
     s["poll_ms"] = max(2000, min(60000, int(s["poll_ms"])))
+    s["custom_apps"] = _sanitize_custom_apps(s["custom_apps"])  # neutralize a poisoned file
     return s
 
 
@@ -109,9 +136,7 @@ def save_settings(data):
         if k in data and isinstance(data[k], type(default)):
             merged[k] = data[k]
     merged["poll_ms"] = max(2000, min(60000, int(merged["poll_ms"])))
-    merged["custom_apps"] = [
-        {"name": str(a.get("name", "app"))[:40], "url": str(a.get("url", ""))[:200]}
-        for a in merged["custom_apps"] if isinstance(a, dict) and a.get("url")][:12]
+    merged["custom_apps"] = _sanitize_custom_apps(merged["custom_apps"])
     tmp = SETTINGS_PATH + ".tmp"
     with open(tmp, "w") as f:
         json.dump(merged, f, indent=2)
@@ -740,6 +765,25 @@ def state(headers):
             "docker": {"error": "docker stopped (gaming)", "containers": []},
             "journal": [], "backups": {"count": 0, "latest": None},
         }
+    viewer = headers.get("Tailscale-User-Login")
+    if viewer is not None and viewer not in ALLOWED_USERS:
+        # Read-only tailnet viewer (not in ALLOWED_USERS): serve operational
+        # vitals but withhold owner-private data — open PR titles, the Linear
+        # backlog, agent spend, repo names/commit subjects, CI detail, and journal
+        # error lines are not "status". The file manager and actions are already
+        # gated by _forbidden; this closes the same gap on /api/state (and / boot).
+        return {
+            "host": HOST, "now": time.strftime("%H:%M:%S"), "viewer": viewer,
+            "mode": mode, "boot_mode": boot_mode(), "gamewatch": gamewatch_state(),
+            "apps": list(APPS), "settings": load_settings(),
+            "github": {"login": None, "prs": [], "error": "restricted"},
+            "linear": {"configured": False, "issues": [], "error": None},
+            "ci": {"rows": []}, "usage": None,
+            "services": collect_services(), "docker": collect_docker(),
+            "tmux": tmux, "torpor": len(tmux) if frozen else 0,
+            "repos": [], "journal": [], "system": collect_system(),
+            "backups": collect_backups(),
+        }
     gh = collect_github()
     apps = list(APPS)
     if gh["login"]:
@@ -1076,6 +1120,8 @@ class Handler(BaseHTTPRequestHandler):
         elif p == "/api/state":
             self._send(200, json.dumps(state(self.headers)))
         elif p == "/api/admin/releases":
+            if self._forbidden():
+                return
             rc, out, err = sh([GRAVE, "releases", "--json"], timeout=30)
             if rc:
                 self._send(502, json.dumps({"ok": False, "output": ANSI.sub("", out + err)}))
