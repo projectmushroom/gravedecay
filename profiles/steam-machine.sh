@@ -18,7 +18,16 @@
 #
 # STATUS: stock-SteamOS support. Refine on real hardware (sensor names for the
 # dashboard, controller-wake behavior, HDMI-CEC, VRAM pressure in game mode).
-conf_set() { sudo sed -i "s|^$1=.*|$1=$2|" /etc/gravedecay/grave.conf; }
+conf_set() {
+  # Rewrite the key if present, else append it. A plain `sed s|^K=.*|` silently
+  # no-ops when the key is missing (an older grave.conf preserved across upgrade),
+  # so a CHECK_* invariant the profile sets would never reach `grave doctor`.
+  if sudo grep -q "^$1=" /etc/gravedecay/grave.conf; then
+    sudo sed -i "s|^$1=.*|$1=$2|" /etc/gravedecay/grave.conf
+  else
+    printf '%s=%s\n' "$1" "$2" | sudo tee -a /etc/gravedecay/grave.conf >/dev/null
+  fi
+}
 
 profile_apply() {
   # the appliance never sleeps; Steam's own suspend UI is bypassed by this

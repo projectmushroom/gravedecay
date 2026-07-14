@@ -256,12 +256,24 @@ if ls /etc/sudoers.d/ 2>/dev/null | grep -qxE 'wheel|wheel-.*'; then
   SUDOERS_FILE=/etc/sudoers.d/zz-gravedecay
   sudo rm -f /etc/sudoers.d/50-gravedecay
 fi
-sudo tee "$SUDOERS_FILE" >/dev/null <<EOF
+# Validate on a temp file BEFORE installing into /etc/sudoers.d — a syntactically
+# invalid drop-in (exotic $RUN_USER, metachars in $GRAVE_BIN) makes sudo refuse to
+# run at all, and validating after install can't protect anything: the next sudo
+# in this very script would already be broken with no rollback but a recovery boot.
+sudoers_tmp=$(mktemp)
+sudo tee "$sudoers_tmp" >/dev/null <<EOF
 # gravedecay: let $RUN_USER (and gravedecay action buttons) drive the platform
 $RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker, $GRAVE_BIN, /usr/bin/journalctl, /usr/bin/ufw, /usr/bin/snapper, /usr/sbin/sshd -T, /usr/bin/sshd -T, /usr/bin/tee /etc/systemd/system/*, /usr/bin/tee /sys/fs/cgroup/grave-torpor/*, /usr/bin/mkdir -p /sys/fs/cgroup/grave-torpor, /usr/bin/npm update -g *
 EOF
-sudo chmod 440 "$SUDOERS_FILE"
-sudo visudo -c -f "$SUDOERS_FILE" >/dev/null && ok "sudoers valid ($SUDOERS_FILE)"
+sudo chown root:root "$sudoers_tmp"; sudo chmod 440 "$sudoers_tmp"
+if sudo visudo -c -f "$sudoers_tmp" >/dev/null; then
+  sudo install -m 440 -o root -g root "$sudoers_tmp" "$SUDOERS_FILE"
+  ok "sudoers valid ($SUDOERS_FILE)"
+else
+  sudo rm -f "$sudoers_tmp"
+  echo "refusing to install an invalid sudoers file ($SUDOERS_FILE) — aborting"; exit 1
+fi
+sudo rm -f "$sudoers_tmp"
 
 # ----------------------------------------------------------- 5. gravedecay ----
 step "gravedecay"
