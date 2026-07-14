@@ -16,7 +16,7 @@ The appliance-owned registry stores records with this shape:
   "role": "developer",
   "enabled": true,
   "projects": [],
-  "ports": {"t3": 4810, "term": 4910},
+  "ports": {"t3": 4810, "term": 4910, "dash": 5010},
   "provider": {"llm": true}
 }
 ```
@@ -90,8 +90,8 @@ a directly delivered shared provider credential are outside its hard boundary.
 ## Audit contract
 
 Append JSON Lines under `$GRAVE_ROOT/logs/audit.jsonl`, mode 600. Events include
-timestamp, event name, actor stable ID/workspace, target workspace/project,
-result, and request correlation ID. Required events are provisioning/removal,
+timestamp, event name, actor stable ID/workspace, target workspace/project, and
+result. Required events are provisioning/removal,
 enable/disable and role/grant/provider-policy changes, integration
 login/logout/failure, session creation, denied access, and every appliance
 administrative action. Tokens, authorization headers, cookies, pairing URLs,

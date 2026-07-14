@@ -806,7 +806,7 @@ cmd_restore() {
     hdr "Available backups"
     ls -1 "$BACKUP_DIR" 2>/dev/null || say "(none)"
     say ""
-    say "usage: grave restore <backup> [volume <name> | repo <name>]"
+    say "usage: grave restore <backup> [volume <name> | repo <name> | workspaces]"
     say "Full procedures: $GRAVE_ROOT/docs/RECOVERY.md"
     return
   fi
@@ -901,7 +901,7 @@ grave — gravedecay appliance control 🪦
 
   grave status               overview: services, containers, agents, system
   grave doctor               verify every platform invariant
-  grave users [list|add|inspect|disable|remove]
+  grave users [status|list|add|inspect|disable|remove]
   grave projects [list|grant|revoke|git-config]
   grave integrations [status|github-login|github-logout|linear-set|linear-logout]
   grave provider [set|grant|revoke|status]
