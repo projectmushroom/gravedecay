@@ -4,6 +4,8 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 RAISE = (ROOT / "raise.sh").read_text()
+GRAVE = (ROOT / "bin/grave").read_text()
+T2 = (ROOT / "profiles/t2-macbook.sh").read_text()
 PROFILES = [ROOT / "profiles" / f"{n}.sh" for n in ("generic", "t2-macbook", "steam-machine")]
 
 
@@ -27,6 +29,24 @@ class ProvisioningSafetyTests(unittest.TestCase):
             self.assertNotIn(
                 'conf_set() { sudo sed -i "s|^$1=.*|$1=$2|" /etc/gravedecay/grave.conf; }',
                 text, f"{profile.name}: still uses the no-op-on-missing conf_set")
+
+
+    def test_raise_is_idempotent_on_rerun(self):
+        # Regression #61: a dangling canonical-repo symlink made `ln -s` abort;
+        # `umask 077` leaked past the token write; and the t2 profile grew
+        # ALWAYS_ON on every rerun.
+        self.assertIn('ln -sfn "$REPO_DIR" "$CANON_REPO"', RAISE)
+        self.assertNotIn('  ln -s "$REPO_DIR" "$CANON_REPO"', RAISE)
+        self.assertIn("(umask 077;", RAISE)
+        self.assertIn("grep -q 'amdgpu-pstate-pin' /etc/gravedecay/grave.conf", T2)
+
+    def test_debian_ssh_and_ufw_paths_are_handled(self):
+        # Regression #61: OpenSSH is `ssh` on Debian (not `sshd`), and ufw lives
+        # in /usr/sbin there (not /usr/bin), so a healthy Debian box reported ssh
+        # missing and prompted for a password on `sudo ufw`.
+        self.assertIn("SSHD_UNIT=ssh", RAISE)
+        self.assertIn("/usr/bin/ufw, /usr/sbin/ufw", RAISE)
+        self.assertIn("is-active --quiet sshd || systemctl is-active --quiet ssh", GRAVE)
 
 
 if __name__ == "__main__":

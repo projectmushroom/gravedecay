@@ -635,7 +635,8 @@ cmd_doctor() {
   hdr "grave doctor"
   check "tailscaled running"            systemctl is-active --quiet tailscaled
   check "tailscale logged in"           tailscale status --peers=false
-  check "sshd running"                  systemctl is-active --quiet sshd
+  # OpenSSH server unit is `sshd` on Arch/Fedora, `ssh` on Debian/Ubuntu.
+  check "ssh server running"            bash -c "systemctl is-active --quiet sshd || systemctl is-active --quiet ssh"
   if [[ "${CHECK_FIREWALL:-1}" == 1 ]]; then
     check "firewall active"             firewall_active
   else
