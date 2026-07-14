@@ -15,7 +15,10 @@ RestartSec=2
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ReadOnlyPaths=@GRAVE_ROOT@/config/workspaces.json @GRAVE_ROOT@/config/secrets/gateway-token
+# '-' prefix: tolerate a not-yet-created path instead of failing namespace setup
+# (status=226/NAMESPACE crash-loop). workspaces.json is written by `grave __users
+# reapply`, which may run after the gateway on a first multi-user raise.
+ReadOnlyPaths=-@GRAVE_ROOT@/config/workspaces.json -@GRAVE_ROOT@/config/secrets/gateway-token
 ReadWritePaths=@GRAVE_ROOT@/logs
 
 [Install]
