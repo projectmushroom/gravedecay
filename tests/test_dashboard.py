@@ -170,6 +170,66 @@ class DashboardContractTests(unittest.TestCase):
         # A private /tmp would hide the terminal's socket from the dashboard.
         self.assertNotIn("PrivateTmp=yes", dash)
 
+    def test_custom_tile_urls_reject_dangerous_schemes(self):
+        # Regression #60: tiles render as <a href> and iframe src, so a
+        # javascript:/data: URL would be stored XSS in the dashboard origin.
+        self.assertEqual(DASHBOARD._safe_tile_url("javascript:fetch('/x')"), "")
+        self.assertEqual(DASHBOARD._safe_tile_url("data:text/html,x"), "")
+        self.assertEqual(DASHBOARD._safe_tile_url("https://ok.test/a"), "https://ok.test/a")
+        self.assertEqual(DASHBOARD._safe_tile_url("/term"), "/term")
+        kept = DASHBOARD._sanitize_custom_apps([
+            {"name": "evil", "url": "javascript:alert(1)"},
+            {"name": "ok", "url": "https://ok.test"},
+            {"name": "internal", "url": "/grave/"},
+        ])
+        self.assertEqual([a["url"] for a in kept], ["https://ok.test", "/grave/"])
+
+    def test_admin_releases_requires_authorization(self):
+        # Regression #47: a read-only tailnet viewer (login not in ALLOWED_USERS)
+        # must not be able to run `grave releases` via this endpoint.
+        request = urllib.request.Request(
+            self.origin + "/api/admin/releases",
+            headers={"Tailscale-User-Login": "eve@example.com"})
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(request, timeout=2)
+        self.assertEqual(error.exception.code, 403)
+
+    def test_state_withholds_owner_private_data_from_read_only_viewers(self):
+        # Regression #47: /api/state leaked open PRs, Linear backlog, agent spend,
+        # repo commit subjects, and journal errors to any tailnet viewer. Force
+        # developer mode (t3code inactive in CI would take the gaming branch) and
+        # stub the collectors so the assertion is deterministic.
+        names = ("unit_state", "collect_github", "collect_ci", "collect_linear",
+                 "collect_agent_usage", "collect_repos", "collect_journal",
+                 "collect_services", "collect_docker", "collect_system",
+                 "collect_backups", "collect_tmux")
+        saved = {n: getattr(DASHBOARD, n) for n in names}
+        DASHBOARD.unit_state = lambda u: {"active": "active"}
+        DASHBOARD.collect_github = lambda: {"login": "owner", "prs": [{"title": "secret"}], "error": None}
+        DASHBOARD.collect_ci = lambda: {"rows": [{"repo": "x"}]}
+        DASHBOARD.collect_linear = lambda: {"configured": True, "issues": [{"title": "secret"}], "error": None}
+        DASHBOARD.collect_agent_usage = lambda: {"cost": 42}
+        DASHBOARD.collect_repos = lambda: [{"name": "secret-repo"}]
+        DASHBOARD.collect_journal = lambda: ["secret error line"]
+        DASHBOARD.collect_services = lambda: []
+        DASHBOARD.collect_docker = lambda: {"containers": []}
+        DASHBOARD.collect_system = lambda: {}
+        DASHBOARD.collect_backups = lambda: {"count": 0, "latest": None}
+        DASHBOARD.collect_tmux = lambda: []
+        try:
+            owner = DASHBOARD.state({})  # localhost / no header → trusted
+            viewer = DASHBOARD.state({"Tailscale-User-Login": "eve@example.com"})
+        finally:
+            for name, fn in saved.items():
+                setattr(DASHBOARD, name, fn)
+        self.assertEqual(owner["github"]["prs"], [{"title": "secret"}])
+        self.assertEqual(owner["repos"], [{"name": "secret-repo"}])
+        self.assertEqual(viewer["github"]["error"], "restricted")
+        self.assertEqual(viewer["repos"], [])
+        self.assertEqual(viewer["journal"], [])
+        self.assertEqual(viewer["linear"]["issues"], [])
+        self.assertIsNone(viewer["usage"])
+
     def test_offline_shell_contains_no_machine_state(self):
         with self.get("/offline.html") as response:
             page = response.read().decode()
