@@ -211,6 +211,18 @@ else
   skip "/etc/gravedecay/grave.conf exists — not overwritten"
 fi
 
+# The multi-user front door below is gated on MULTI_USER, which lives ONLY in
+# grave.conf (`grave multiuser enable` sets it there, then re-runs this script).
+# raise.sh never receives it as an env var — sudo scrubs the environment — so we
+# must read it back from the installed conf, or the multi-user branch is dead and
+# the migration silently leaves the box on single-user ports. Read in a subshell
+# so the conf can't clobber the GRAVE_ROOT/ports raise.sh has already computed
+# (e.g. a relocated GRAVE_ROOT on immutable hosts).
+if [[ -f /etc/gravedecay/grave.conf ]]; then
+  MULTI_USER=$(. /etc/gravedecay/grave.conf >/dev/null 2>&1; printf '%s' "${MULTI_USER:-0}")
+  GATEWAY_PORT=$(. /etc/gravedecay/grave.conf >/dev/null 2>&1; printf '%s' "${GATEWAY_PORT:-4710}")
+fi
+
 # ------------------------------------------------------------- 4. sudoers ----
 step "Scoped passwordless sudo (see docs/SECURITY.md)"
 # sudo is last-match-wins across /etc/sudoers.d in lexicographic order. SteamOS
