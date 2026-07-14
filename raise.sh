@@ -344,9 +344,15 @@ if [[ "$IMMUTABLE" == 1 ]]; then
   sudo systemctl daemon-reload
   sudo systemctl enable gravedecay-selfheal >/dev/null 2>&1 || true
   ok "self-heal enabled (runs each boot)"
+fi
 
-  # Game-mode auto-throttle watcher (idle unless the flag file is on — the
-  # steam-machine profile turns it on; toggle with `grave gamewatch`).
+# Game-mode auto-throttle watcher (idle unless `grave gamewatch on`). Installed on
+# any gaming-capable box — immutable hosts AND the steam-machine profile — not
+# just immutable ones: otherwise a mutable Steam Machine sets the gamewatch flag
+# with no unit behind it, and doctor fails forever (the profile's own hint and
+# STEAMOS.md both promise this install).
+if [[ "$IMMUTABLE" == 1 || "$PROFILE" == steam-machine ]]; then
+  step "Game-mode auto-throttle watcher"
   install -m 755 "$REPO_DIR/bin/gravedecay-gamewatch" "$GRAVE_ROOT/scripts/gravedecay-gamewatch"
   sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
       -e "s|@HOME@|$HOME_DIR|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
