@@ -7,7 +7,16 @@
 #    to a fixed DPM performance level keeps it stable. The pin must run as a
 #    systemd service ordered after amdgpu init (a udev rule races it and
 #    silently never applies).
-conf_set() { sudo sed -i "s|^$1=.*|$1=$2|" /etc/gravedecay/grave.conf; }
+conf_set() {
+  # Rewrite the key if present, else append it. A plain `sed s|^K=.*|` silently
+  # no-ops when the key is missing (an older grave.conf preserved across upgrade),
+  # so a CHECK_* invariant the profile sets would never reach `grave doctor`.
+  if sudo grep -q "^$1=" /etc/gravedecay/grave.conf; then
+    sudo sed -i "s|^$1=.*|$1=$2|" /etc/gravedecay/grave.conf
+  else
+    printf '%s=%s\n' "$1" "$2" | sudo tee -a /etc/gravedecay/grave.conf >/dev/null
+  fi
+}
 
 profile_apply() {
   # never sleep
