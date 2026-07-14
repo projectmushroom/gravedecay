@@ -14,10 +14,17 @@ Environment=GRAVE_ROOT=@GRAVE_ROOT@/workspaces/%i
 Environment=GRAVEDECAY_BASE=/grave
 Environment=GRAVEDECAY_ALLOWED_USERS=
 Environment=GRAVEDECAY_UNITS=
+# Match the workspace terminal's tmux socket and the workspace T3's pairing-state
+# dir, so the sessions panel/kill and the "New T3 pairing token" button act on
+# this workspace's own runtime rather than the (nonexistent) owner paths.
+Environment=TMUX_SOCKET=grave-%i
+Environment=GRAVEDECAY_T3_BASE_DIR=@GRAVE_ROOT@/workspaces/%i/state/t3
 Restart=always
 RestartSec=3
 NoNewPrivileges=yes
-PrivateTmp=yes
+# NO PrivateTmp: tmux sockets live in /tmp/tmux-<uid>/ and a private /tmp would
+# hide the workspace terminal's sessions from this dashboard (same as the
+# single-user unit). Isolation still holds — /tmp/tmux-<uid> is per-uid, 0700.
 UMask=0077
 TasksMax=128
 MemoryHigh=1G

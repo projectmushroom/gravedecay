@@ -1,6 +1,7 @@
 import importlib.util
 import hashlib
 import json
+import os
 import pathlib
 import threading
 import unittest
@@ -12,6 +13,25 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("gravedecay_dashboard", ROOT / "dashboard/gravedecay.py")
 DASHBOARD = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(DASHBOARD)
+
+
+def load_dashboard(env):
+    """Load a fresh gravedecay module instance under a patched environment.
+
+    Module-level config (GRAVE_ROOT, TMUX_SOCKET, T3_BASE_DIR, …) is read from
+    os.environ at import, so a workspace instance is simulated by loading with
+    that workspace's env. Importing is side-effect-free (the server starts only
+    under __main__)."""
+    old = dict(os.environ)
+    os.environ.update(env)
+    try:
+        spec = importlib.util.spec_from_file_location("gravedecay_probe", ROOT / "dashboard/gravedecay.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        os.environ.clear()
+        os.environ.update(old)
 
 
 class DashboardContractTests(unittest.TestCase):
@@ -117,6 +137,38 @@ class DashboardContractTests(unittest.TestCase):
         # …and tolerate the registry not existing yet ('-' prefix).
         unit = (ROOT / "systemd/gravedecay-gateway.service.tmpl").read_text()
         self.assertIn("-@GRAVE_ROOT@/config/workspaces.json", unit)
+
+    def test_workspace_dashboard_targets_its_own_socket_and_pairing_dir(self):
+        # Regression #43/#44: a workspace dashboard hardcoded the owner's tmux
+        # socket ("agents") and t3 base-dir (agents/t3code), so the sessions
+        # panel/kill and the pairing-token button acted on paths the workspace's
+        # own T3/terminal never use. Both must come from the environment.
+        saved = {k: os.environ.pop(k, None) for k in ("TMUX_SOCKET", "GRAVEDECAY_T3_BASE_DIR")}
+        try:
+            single = load_dashboard({"GRAVE_ROOT": "/srv/dev"})
+        finally:
+            for key, value in saved.items():
+                if value is not None:
+                    os.environ[key] = value
+        self.assertEqual(single.TMUX_SOCKET, "agents")
+        self.assertIn("/srv/dev/agents/t3code", single.ACTIONS["t3-pair"])
+
+        ws = load_dashboard({"GRAVE_ROOT": "/srv/dev/workspaces/alice",
+                             "TMUX_SOCKET": "grave-alice",
+                             "GRAVEDECAY_T3_BASE_DIR": "/srv/dev/workspaces/alice/state/t3"})
+        self.assertEqual(ws.TMUX_SOCKET, "grave-alice")
+        self.assertIn("/srv/dev/workspaces/alice/state/t3", ws.ACTIONS["t3-pair"])
+        self.assertNotIn("/srv/dev/workspaces/alice/agents/t3code", ws.ACTIONS["t3-pair"])
+
+    def test_workspace_dashboard_unit_wires_socket_dir_and_shares_tmp(self):
+        dash = (ROOT / "systemd/gravedecay-dashboard@.service.tmpl").read_text()
+        term = (ROOT / "systemd/gravedecay-term@.service.tmpl").read_text()
+        # The dashboard's socket must equal the terminal's, and both are grave-%i.
+        self.assertIn("Environment=TMUX_SOCKET=grave-%i", dash)
+        self.assertIn("Environment=TMUX_SOCKET=grave-%i", term)
+        self.assertIn("Environment=GRAVEDECAY_T3_BASE_DIR=@GRAVE_ROOT@/workspaces/%i/state/t3", dash)
+        # A private /tmp would hide the terminal's socket from the dashboard.
+        self.assertNotIn("PrivateTmp=yes", dash)
 
     def test_offline_shell_contains_no_machine_state(self):
         with self.get("/offline.html") as response:
