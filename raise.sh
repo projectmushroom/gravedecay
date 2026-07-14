@@ -37,6 +37,18 @@ enable_restart() {
   sudo systemctl enable "$@" >/dev/null
   sudo systemctl restart "$@"
 }
+wait_http() {
+  # wait_http <url> <label> — poll a freshly (re)started service for readiness,
+  # then report ok/skip. NEVER aborts: `systemctl restart` on a Type=simple unit
+  # returns before the socket is bound, so a bare `curl && ok` races the bind and
+  # (with `set -e`) a failed top-level AND-list would kill the whole ritual.
+  local url="$1" label="$2" i
+  for i in 1 2 3 4 5; do
+    curl -sf -o /dev/null "$url" && { ok "$label"; return 0; }
+    sleep 1
+  done
+  skip "$label — not answering yet (check: grave logs)"
+}
 
 [[ $EUID -eq 0 ]] && { echo "Run as your normal user, not root (sudo is used internally)."; exit 1; }
 sudo -n systemctl --version >/dev/null 2>&1 || sudo -v || { echo "sudo access required"; exit 1; }
@@ -166,7 +178,16 @@ fi
 # -------------------------------------------------------------- 2. layout ----
 step "Layout at $GRAVE_ROOT"
 sudo mkdir -p "$GRAVE_ROOT"/{repos,agents,docker,config/secrets,logs,scripts,backups,docs}
-sudo chown -R "$RUN_USER:$RUN_USER" "$GRAVE_ROOT"
+# Claim the owner-managed tree, but NEVER recurse into the multi-user subtrees:
+# workspaces/<slug> is owned by grave-<slug> (collaborators' creds live there) and
+# config/workspace-services/*.env must stay root-owned (grave-workspaces refuses a
+# non-root env, and the @-units run as grave-%i). A blanket `chown -R $GRAVE_ROOT`
+# on re-raise stole both and crash-looped every workspace. On a fresh/single-user
+# box these paths don't exist yet, so the prune is a no-op.
+sudo chown "$RUN_USER:$RUN_USER" "$GRAVE_ROOT"
+sudo find "$GRAVE_ROOT" -mindepth 1 \
+  \( -path "$GRAVE_ROOT/workspaces" -o -path "$GRAVE_ROOT/config/workspace-services" \) -prune \
+  -o -exec chown "$RUN_USER:$RUN_USER" {} +
 chmod 700 "$GRAVE_ROOT/config/secrets"
 if [[ ! -e "$HOME_DIR/Projects" ]]; then
   ln -s "$GRAVE_ROOT/repos" "$HOME_DIR/Projects"
@@ -268,7 +289,7 @@ sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
 sudo sed -i '/^Environment=DOCKER_HOST=$/d' /etc/systemd/system/gravedecay.service
 sudo systemctl daemon-reload
 enable_restart gravedecay
-curl -sf -o /dev/null "http://127.0.0.1:$DASH_PORT/healthz" && ok "gravedecay answering on :$DASH_PORT"
+wait_http "http://127.0.0.1:$DASH_PORT/healthz" "gravedecay answering on :$DASH_PORT"
 
 # Multi-user front door is installed only when explicitly enabled in grave.conf.
 if [[ "${MULTI_USER:-0}" == 1 ]]; then
@@ -283,13 +304,18 @@ if [[ "${MULTI_USER:-0}" == 1 ]]; then
       | sudo tee "/etc/systemd/system/$template.service" >/dev/null
   done
   sudo systemctl daemon-reload
-  enable_restart gravedecay-gateway
+  # Provision the workspace units + registry BEFORE starting the gateway. The
+  # gateway reads config/workspaces.json, which `__users reapply` creates; if it
+  # started first it would either fail namespace setup on the missing file (now
+  # also guarded by the '-' prefix on ReadOnlyPaths in the unit) or capture an
+  # empty registry it can never see updated inside its ProtectSystem=strict mount.
   sudo -n "$GRAVE_BIN" __users reapply --t3-bin "$T3_BIN" --ttyd-bin "$TTYD_BIN" \
     --tool-path "$TOOLPATH" --grave-bin "$GRAVE_BIN"
+  enable_restart gravedecay-gateway
   while IFS= read -r slug; do
     enable_restart "gravedecay-t3@$slug" "gravedecay-term@$slug" "gravedecay-dashboard@$slug"
   done < <(jq -r '.workspaces[] | select(.enabled) | .slug' "$GRAVE_ROOT/config/workspaces.json" 2>/dev/null)
-  curl -sf -o /dev/null "http://127.0.0.1:${GATEWAY_PORT:-4710}/healthz" && ok "identity gateway answering"
+  wait_http "http://127.0.0.1:${GATEWAY_PORT:-4710}/healthz" "identity gateway answering"
 fi
 
 # --------------------------------------------------------- 5b. web terminal ----
@@ -304,7 +330,7 @@ if command -v ttyd >/dev/null; then
   sudo sed -i '/^Environment=DOCKER_HOST=$/d' /etc/systemd/system/gravedecay-term.service
   sudo systemctl daemon-reload
   enable_restart gravedecay-term
-  curl -sf -o /dev/null "http://127.0.0.1:$TERM_PORT/" && ok "web terminal answering on :$TERM_PORT"
+  wait_http "http://127.0.0.1:$TERM_PORT/" "web terminal answering on :$TERM_PORT"
 else
   skip "ttyd missing — web terminal not installed"
 fi
@@ -326,9 +352,7 @@ sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
     "$REPO_DIR/systemd/t3code.service.tmpl" | sudo tee /etc/systemd/system/t3code.service >/dev/null
 sudo systemctl daemon-reload
 enable_restart t3code
-sleep 2
-curl -sf -o /dev/null "http://127.0.0.1:$T3_PORT/" && ok "t3code answering on :$T3_PORT" \
-  || skip "t3code not answering yet — check: grave logs t3"
+wait_http "http://127.0.0.1:$T3_PORT/" "t3code answering on :$T3_PORT"
 
 # ---------------------------------------------- 6b. self-heal (immutable) ----
 # On an image-based rootfs, a boot-time unit checks that /etc survived the last
@@ -452,6 +476,13 @@ EOF
   sudo chmod 0660 /run/tailscale/tailscaled.sock
   sudo systemctl daemon-reload
   if [[ "${MULTI_USER:-0}" == 1 ]]; then
+    # Serve config is persistent and per-path. A box migrated single-user→multi-user
+    # still has /grave→owner-dashboard and /term→owner-ttyd mounts from the earlier
+    # raise; remove them so the identity gateway (root mount below) is the ONLY
+    # origin — otherwise workspace users reach owner-level backends unproxied. Only
+    # touches :443 paths, so `grave preview` tunnels on their own ports survive.
+    tailscale serve --https=443 --set-path=/grave off >/dev/null 2>&1 || true
+    tailscale serve --https=443 --set-path=/term off  >/dev/null 2>&1 || true
     gateway_token=$(<"$GRAVE_ROOT/config/secrets/gateway-token")
     tailscale serve --bg --https=443 "http://127.0.0.1:${GATEWAY_PORT:-4710}/_grave_proxy/$gateway_token" >/dev/null \
       && ok "identity gateway → HTTPS origin on tailnet"

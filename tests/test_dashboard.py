@@ -80,6 +80,44 @@ class DashboardContractTests(unittest.TestCase):
         self.assertNotEqual(gate, -1)
         self.assertLess(read, gate, "MULTI_USER must be read from the conf before it gates the install")
 
+    def test_raise_does_not_blanket_chown_multi_user_subtrees(self):
+        # Regression #41: a recursive chown of the whole GRAVE_ROOT steals the
+        # ownership of workspaces/<slug> (grave-<slug>) and the root-owned
+        # config/workspace-services/*.env on every re-raise, crash-looping the
+        # @-units. The claim must prune those subtrees.
+        ritual = (ROOT / "raise.sh").read_text()
+        self.assertNotIn('chown -R "$RUN_USER:$RUN_USER" "$GRAVE_ROOT"', ritual)
+        self.assertIn('-path "$GRAVE_ROOT/workspaces"', ritual)
+        self.assertIn('-path "$GRAVE_ROOT/config/workspace-services"', ritual)
+
+    def test_raise_health_probes_cannot_abort_the_ritual(self):
+        # Regression #51: bare `curl … && ok` probes race the socket bind and,
+        # under `set -e`, abort the whole ritual. All probes go through wait_http.
+        ritual = (ROOT / "raise.sh").read_text()
+        self.assertIn("wait_http()", ritual)
+        for url in ("http://127.0.0.1:$DASH_PORT/healthz",
+                    "http://127.0.0.1:$TERM_PORT/",
+                    "http://127.0.0.1:$T3_PORT/",
+                    "http://127.0.0.1:${GATEWAY_PORT:-4710}/healthz"):
+            self.assertNotIn(f'curl -sf -o /dev/null "{url}" && ok', ritual)
+
+    def test_multi_user_serve_and_gateway_ordering(self):
+        ritual = (ROOT / "raise.sh").read_text()
+        # Regression #42: stale single-user /grave and /term mounts bypass the
+        # identity gateway; the multi-user branch must remove them.
+        self.assertIn("--set-path=/grave off", ritual)
+        self.assertIn("--set-path=/term off", ritual)
+        # Regression #51: the gateway reads workspaces.json, created by
+        # `__users reapply`, so it must start AFTER reapply.
+        reapply = ritual.find("__users reapply")
+        gateway_start = ritual.find("enable_restart gravedecay-gateway")
+        self.assertNotEqual(reapply, -1)
+        self.assertNotEqual(gateway_start, -1)
+        self.assertLess(reapply, gateway_start)
+        # …and tolerate the registry not existing yet ('-' prefix).
+        unit = (ROOT / "systemd/gravedecay-gateway.service.tmpl").read_text()
+        self.assertIn("-@GRAVE_ROOT@/config/workspaces.json", unit)
+
     def test_offline_shell_contains_no_machine_state(self):
         with self.get("/offline.html") as response:
             page = response.read().decode()
