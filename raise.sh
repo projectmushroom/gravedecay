@@ -132,12 +132,18 @@ if docker context inspect rootless >/dev/null 2>&1 || [[ -S "/run/user/$(id -u)/
   export DOCKER_HOST="$DOCKER_HOSTV"
 fi
 
+# The OpenSSH server unit is `sshd` on Arch/Fedora but `ssh` on Debian/Ubuntu.
+# Detect it so the dashboard's unit list and doctor don't report a healthy box's
+# ssh as missing.
+SSHD_UNIT=sshd
+systemctl list-unit-files ssh.service >/dev/null 2>&1 \
+  && ! systemctl list-unit-files sshd.service >/dev/null 2>&1 && SSHD_UNIT=ssh
 # System units the dashboard reports. Rootless docker is a --user unit, so it's
 # dropped from the system list (the Docker panel still shows it via `docker ps`).
 if [[ "$DOCKER_ROOTLESS" == 1 ]]; then
-  UNITS="t3code,gravedecay,gravedecay-term,tailscaled,sshd"
+  UNITS="t3code,gravedecay,gravedecay-term,tailscaled,$SSHD_UNIT"
 else
-  UNITS="t3code,gravedecay,gravedecay-term,tailscaled,sshd,docker"
+  UNITS="t3code,gravedecay,gravedecay-term,tailscaled,$SSHD_UNIT,docker"
 fi
 
 # ------------------------------------------------------------ 1. packages ----
@@ -202,7 +208,7 @@ fi
 # survives a SteamOS OS update that wipes /etc.
 CANON_REPO="$GRAVE_ROOT/repos/gravedecay"
 if [[ "$REPO_DIR" != "$CANON_REPO" && ! -e "$CANON_REPO" ]]; then
-  ln -s "$REPO_DIR" "$CANON_REPO"
+  ln -sfn "$REPO_DIR" "$CANON_REPO"
   ok "canonical repo path $CANON_REPO → $REPO_DIR"
 fi
 cp -n "$REPO_DIR/config/tmux.conf" "$GRAVE_ROOT/config/tmux.conf" 2>/dev/null || true
@@ -263,7 +269,7 @@ fi
 sudoers_tmp=$(mktemp)
 sudo tee "$sudoers_tmp" >/dev/null <<EOF
 # gravedecay: let $RUN_USER (and gravedecay action buttons) drive the platform
-$RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker, $GRAVE_BIN, /usr/bin/journalctl, /usr/bin/ufw, /usr/bin/snapper, /usr/sbin/sshd -T, /usr/bin/sshd -T, /usr/bin/tee /etc/systemd/system/*, /usr/bin/tee /sys/fs/cgroup/grave-torpor/*, /usr/bin/mkdir -p /sys/fs/cgroup/grave-torpor, /usr/bin/npm update -g *
+$RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker, $GRAVE_BIN, /usr/bin/journalctl, /usr/bin/ufw, /usr/sbin/ufw, /usr/bin/snapper, /usr/sbin/sshd -T, /usr/bin/sshd -T, /usr/bin/tee /etc/systemd/system/*, /usr/bin/tee /sys/fs/cgroup/grave-torpor/*, /usr/bin/mkdir -p /sys/fs/cgroup/grave-torpor, /usr/bin/npm update -g *
 EOF
 sudo chown root:root "$sudoers_tmp"; sudo chmod 440 "$sudoers_tmp"
 if sudo visudo -c -f "$sudoers_tmp" >/dev/null; then
@@ -306,7 +312,7 @@ wait_http "http://127.0.0.1:$DASH_PORT/healthz" "gravedecay answering on :$DASH_
 # Multi-user front door is installed only when explicitly enabled in grave.conf.
 if [[ "${MULTI_USER:-0}" == 1 ]]; then
   if [[ ! -s "$GRAVE_ROOT/config/secrets/gateway-token" ]]; then
-    umask 077; python3 -c 'import secrets; print(secrets.token_hex(32))' >"$GRAVE_ROOT/config/secrets/gateway-token"
+    (umask 077; python3 -c 'import secrets; print(secrets.token_hex(32))' >"$GRAVE_ROOT/config/secrets/gateway-token")
   fi
   chmod 600 "$GRAVE_ROOT/config/secrets/gateway-token"
   sed -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" "$REPO_DIR/systemd/gravedecay-gateway.service.tmpl" \

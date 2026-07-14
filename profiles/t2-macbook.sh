@@ -56,5 +56,8 @@ EOF
   sudo systemctl enable --now amdgpu-pstate-pin
 
   # doctor should watch the pin service too
-  sudo sed -i 's|^ALWAYS_ON=(\(.*\))|ALWAYS_ON=(\1 amdgpu-pstate-pin)|' /etc/gravedecay/grave.conf
+  # append only once — the sed matches its own output, so an unguarded rerun
+  # keeps growing ALWAYS_ON=(… amdgpu-pstate-pin amdgpu-pstate-pin …).
+  grep -q 'amdgpu-pstate-pin' /etc/gravedecay/grave.conf \
+    || sudo sed -i 's|^ALWAYS_ON=(\(.*\))|ALWAYS_ON=(\1 amdgpu-pstate-pin)|' /etc/gravedecay/grave.conf
 }
