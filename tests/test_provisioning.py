@@ -5,6 +5,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 RAISE = (ROOT / "raise.sh").read_text()
 GRAVE = (ROOT / "bin/grave").read_text()
+INSTALL = (ROOT / "install.sh").read_text()
 T2 = (ROOT / "profiles/t2-macbook.sh").read_text()
 PROFILES = [ROOT / "profiles" / f"{n}.sh" for n in ("generic", "t2-macbook", "steam-machine")]
 
@@ -39,6 +40,16 @@ class ProvisioningSafetyTests(unittest.TestCase):
         self.assertNotIn('  ln -s "$REPO_DIR" "$CANON_REPO"', RAISE)
         self.assertIn("(umask 077;", RAISE)
         self.assertIn("grep -q 'amdgpu-pstate-pin' /etc/gravedecay/grave.conf", T2)
+
+    def test_install_relocates_off_the_immutable_root(self):
+        # Regression #54: install.sh mkdir'd /srv/dev before any immutability
+        # check — it fails on a read-only SteamOS root, and even when it works the
+        # checkout rides the root image and is wiped by the next OS update. It must
+        # detect immutability and install under $HOME (no sudo for that path).
+        self.assertIn("steamos-readonly status", INSTALL)
+        self.assertIn('GRAVE_ROOT="$HOME/gravedecay"', INSTALL)
+        self.assertIn('if [[ "$GRAVE_ROOT" == "$HOME"/* ]]; then', INSTALL)
+        self.assertNotIn('DEST="$GRAVE_ROOT/repos/gravedecay"\n\n[[ $EUID', INSTALL)
 
     def test_debian_ssh_and_ufw_paths_are_handled(self):
         # Regression #61: OpenSSH is `ssh` on Debian (not `sshd`), and ufw lives
