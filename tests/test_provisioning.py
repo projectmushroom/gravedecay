@@ -43,7 +43,12 @@ class ProvisioningSafetyTests(unittest.TestCase):
         self.assertIn("layout_ok", RAISE)
         self.assertIn('stat -c %U "$GRAVE_ROOT"', RAISE)
         self.assertIn(".sudoers.sha256", RAISE)
-        self.assertIn("sudo -n -l /usr/bin/visudo", RAISE)
+        # The headless fallback must key on "is there a terminal to prompt on",
+        # NOT on `sudo -l` — which answers allowed-at-all (true via a
+        # password-requiring wheel rule) rather than allowed-passwordless, and
+        # sent the first field test straight into the fatal privileged branch.
+        self.assertIn('elif [[ ! -t 0 && -e "$SUDOERS_FILE" ]]', RAISE)
+        self.assertNotIn("sudo -n -l", RAISE)
         self.assertIn("tailscale serve status >/dev/null 2>&1 || sudo tailscale set", RAISE)
         self.assertIn("stat -c '%G %a' /run/tailscale/tailscaled.sock", RAISE)
         # the classic offenders must be gone from raise.sh entirely
