@@ -274,7 +274,10 @@ fi
 # invalid drop-in (exotic $RUN_USER, metachars in $GRAVE_BIN) makes sudo refuse to
 # run at all, and validating after install can't protect anything: the next sudo
 # in this very script would already be broken with no rollback but a recovery boot.
-sudoers_tmp=$(mktemp)
+# root must own the temp file: with fs.protected_regular (SteamOS/Arch
+# hardening) the kernel refuses root's O_CREAT open of ANOTHER user's file in
+# sticky /tmp, so a user-created mktemp makes the sudo tee below EACCES.
+sudoers_tmp=$(sudo mktemp)
 sudo tee "$sudoers_tmp" >/dev/null <<EOF
 # gravedecay: let $RUN_USER (and gravedecay action buttons) drive the platform
 $RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker, $GRAVE_BIN, /usr/bin/journalctl, /usr/bin/ufw, /usr/sbin/ufw, /usr/bin/snapper, /usr/sbin/sshd -T, /usr/bin/sshd -T, /usr/bin/tee /etc/systemd/system/*, /usr/bin/tee /sys/fs/cgroup/grave-torpor/*, /usr/bin/mkdir -p /sys/fs/cgroup/grave-torpor, /usr/bin/npm update -g *

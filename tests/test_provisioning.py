@@ -20,6 +20,14 @@ class ProvisioningSafetyTests(unittest.TestCase):
         self.assertIn('sudo install -m 440 -o root -g root "$sudoers_tmp" "$SUDOERS_FILE"', RAISE)
         self.assertNotIn('sudo tee "$SUDOERS_FILE"', RAISE)
 
+    def test_sudoers_temp_file_is_created_by_root(self):
+        # Regression #90: fs.protected_regular (SteamOS/Arch hardening) makes the
+        # kernel refuse root's O_CREAT open of another user's file in sticky /tmp,
+        # so `sudo tee` into a user-created mktemp dies with EACCES and aborts the
+        # whole ritual at the sudoers step. root must create the temp file itself.
+        self.assertIn('sudoers_tmp=$(sudo mktemp)', RAISE)
+        self.assertNotIn('sudoers_tmp=$(mktemp)', RAISE)
+
     def test_conf_set_appends_a_missing_key(self):
         # Regression #52: a plain `sed s|^K=.*|` no-ops when the key is absent, so
         # a CHECK_* invariant never reaches doctor on an upgraded box with an older
