@@ -108,6 +108,20 @@ class NotifyContractTests(unittest.TestCase):
         # the gamewatch flag); grave must prefer it over grave.conf.
         self.assertIn('[[ -r "$GRAVE_ROOT/config/notify-events" ]] && NOTIFY_EVENTS="$(<"$GRAVE_ROOT/config/notify-events")"', GRAVE)
 
+    def test_units_run_the_same_python_that_gets_the_crypto(self):
+        # Regression #92: units hardcoded /usr/bin/python3 while raise's
+        # cryptography probe used the PATH python (brew on SteamOS) — the module
+        # landed in an interpreter the dashboard never runs and the 🔔 enable
+        # button stayed dead. One PYTHON_BIN resolution must feed both sides.
+        self.assertIn('PYTHON_BIN="$(command -v python3 2>/dev/null || echo /usr/bin/python3)"', RAISE)
+        self.assertIn('"$PYTHON_BIN" -c \'import cryptography\'', RAISE)
+        self.assertIn('"$PYTHON_BIN" -m pip install', RAISE)
+        self.assertIn('s|@PYTHON@|$PYTHON_BIN|g', RAISE)
+        for tmpl in ("gravedecay", "gravedecay-gateway", "gravedecay-dashboard@"):
+            text = (ROOT / f"systemd/{tmpl}.service.tmpl").read_text()
+            self.assertIn("ExecStart=@PYTHON@", text, tmpl)
+            self.assertNotIn("/usr/bin/python3", text, tmpl)
+
     def test_raise_installs_python_cryptography_everywhere(self):
         # Web Push needs the cryptography module on every distro path; the
         # managed-toolchain fallback must stay best-effort (never blocks raise).
