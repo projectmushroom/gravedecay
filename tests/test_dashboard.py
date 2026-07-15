@@ -230,6 +230,15 @@ class DashboardContractTests(unittest.TestCase):
         self.assertEqual(viewer["linear"]["issues"], [])
         self.assertIsNone(viewer["usage"])
 
+    def test_collect_repos_is_ttl_cached(self):
+        # Regression #48: collect_repos forks 3 git procs per repo on every
+        # /api/state poll; it must go through the same TTL cache as the other
+        # collectors. A cache hit returns the same object it stored.
+        DASHBOARD._ttl_cache.pop("repos", None)
+        first = DASHBOARD.collect_repos()
+        self.assertIn("repos", DASHBOARD._ttl_cache)
+        self.assertIs(DASHBOARD.collect_repos(), first)
+
     def test_offline_shell_contains_no_machine_state(self):
         with self.get("/offline.html") as response:
             page = response.read().decode()

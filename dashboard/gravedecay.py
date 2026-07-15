@@ -323,24 +323,29 @@ def collect_tmux():
 
 
 def collect_repos():
-    repos = []
-    base = f"{GRAVE_ROOT}/repos"
-    try:
-        entries = sorted(os.listdir(base))
-    except OSError:
+    # /api/state polls as fast as every 2 s and this forks 3 git processes PER
+    # repo; without a TTL cache a few read-only viewers (or a many-repo box)
+    # saturate CPU/PIDs. Cache like the github/ci/linear collectors do.
+    def fetch():
+        repos = []
+        base = f"{GRAVE_ROOT}/repos"
+        try:
+            entries = sorted(os.listdir(base))
+        except OSError:
+            return repos
+        for name in entries:
+            path = f"{base}/{name}"
+            if not os.path.isdir(f"{path}/.git"):
+                continue
+            _, branch, _ = sh(["git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD"])
+            _, porcelain, _ = sh(["git", "-C", path, "status", "--porcelain"])
+            _, last, _ = sh(["git", "-C", path, "log", "-1", "--format=%cr\t%s"])
+            when, _, subject = last.strip().partition("\t")
+            repos.append({"name": name, "branch": branch.strip(),
+                          "dirty": len(porcelain.splitlines()),
+                          "last_when": when, "last_subject": subject[:60]})
         return repos
-    for name in entries:
-        path = f"{base}/{name}"
-        if not os.path.isdir(f"{path}/.git"):
-            continue
-        _, branch, _ = sh(["git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD"])
-        _, porcelain, _ = sh(["git", "-C", path, "status", "--porcelain"])
-        _, last, _ = sh(["git", "-C", path, "log", "-1", "--format=%cr\t%s"])
-        when, _, subject = last.strip().partition("\t")
-        repos.append({"name": name, "branch": branch.strip(),
-                      "dirty": len(porcelain.splitlines()),
-                      "last_when": when, "last_subject": subject[:60]})
-    return repos
+    return cached("repos", 15, fetch)
 
 
 def collect_journal():
