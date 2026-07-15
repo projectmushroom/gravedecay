@@ -10,6 +10,10 @@ ADMIN_DASH_PORT=int(os.environ.get("GRAVE_ADMIN_DASH_PORT","4712"))
 TOKEN_FILE=Path(os.environ.get("GRAVE_GATEWAY_TOKEN_FILE",ROOT/"config/secrets/gateway-token"))
 AUDIT=Path(os.environ.get("GRAVE_AUDIT_LOG",ROOT/"logs/audit.jsonl"))
 MAX_HEADER=65536
+# Only the start of a body is buffered — enough to read the action out of a small
+# action POST; larger bodies (uploads) stream straight to the backend (see below).
+MAX_PEEK=65536
+MAX_BODY=2*1024*1024*1024   # match the dashboard's MAX_UPLOAD
 ADMIN_PREFIXES=("/grave/api/admin/",)
 ADMIN_ACTIONS={"gaming","gaming-kill","developer","restart-t3","update-t3","update-grave","reboot","bootmode-developer","bootmode-gaming","gamewatch-on","gamewatch-off","doctor"}
 
@@ -69,17 +73,23 @@ def read_head(sock):
         headers[name.strip().lower()]=value.strip()
     return method,path,version,headers,lines[1:],rest
 
+def action_of(path,rest):
+    """The action name for /api/action (POST body) or /api/action-stream (GET
+    query), or "" for any other request. Used for both admin gating and the
+    pairing audit, so both must recognise the GET the dashboard actually uses."""
+    clean=path.split("?",1)[0]
+    if clean not in ("/grave/api/action","/grave/api/action-stream"): return ""
+    query=path.partition("?")[2]
+    action=next((kv.partition("=")[2] for kv in query.split("&") if kv.startswith("action=")),"")
+    if rest and b'"action"' in rest:
+        try: action=json.loads(rest)["action"]
+        except Exception: pass
+    return action
+
 def admin_request(method,path,rest):
     clean=path.split("?",1)[0]
     if any(clean.startswith(p) for p in ADMIN_PREFIXES): return True
-    if clean in ("/grave/api/action","/grave/api/action-stream"):
-        query=path.partition("?")[2]
-        action=next((v for kv in query.split("&") if kv.startswith("action=") for v in [kv.partition("=")[2]]),"")
-        if rest and b'"action"' in rest:
-            try: action=json.loads(rest)["action"]
-            except Exception: pass
-        return action in ADMIN_ACTIONS
-    return False
+    return action_of(path,rest) in ADMIN_ACTIONS
 
 def relay(a,b):
     sel=selectors.DefaultSelector(); sel.register(a,selectors.EVENT_READ,b); sel.register(b,selectors.EVENT_READ,a)
@@ -107,12 +117,15 @@ class Handler(socketserver.BaseRequestHandler):
         path=path[len(prefix):]
         try: length=int(headers.get("content-length","0"))
         except ValueError: self.request.sendall(response(400,"bad content length")); return
-        if length > 1024*1024*1024: self.request.sendall(response(400,"request too large")); return
-        while len(rest)<length:
-            chunk=self.request.recv(min(65536,length-len(rest)))
+        if length > MAX_BODY: self.request.sendall(response(400,"request too large")); return
+        # Buffer only enough of the body to inspect the action; the remainder is
+        # streamed to the backend by relay() below, so a ~GiB upload is never held
+        # in the gateway's RAM (ThreadingTCPServer would OOM under a few at once).
+        peek=min(length,MAX_PEEK)
+        while len(rest)<peek:
+            chunk=self.request.recv(min(65536,peek-len(rest)))
             if not chunk: break
             rest+=chunk
-        if len(rest)<length: self.request.sendall(response(400,"incomplete request body")); return
         w,state=resolve(headers)
         if state != "ok":
             code=401 if state in ("unknown","malformed") else 403
@@ -120,7 +133,7 @@ class Handler(socketserver.BaseRequestHandler):
         if admin_request(method,path,rest) and w["role"] != "admin":
             audit("admin_denied",w["id"],w["slug"],"forbidden"); self.request.sendall(response(403,"administrator access required")); return
         if admin_request(method,path,rest): audit("administrative_action",w["id"],w["slug"])
-        if path.split("?",1)[0]=="/grave/api/action" and b't3-pair' in rest: audit("pairing_created",w["id"],w["slug"])
+        if action_of(path,rest)=="t3-pair": audit("pairing_created",w["id"],w["slug"])
         clean=path
         if path == "/grave": clean="/grave/"
         if clean.startswith("/grave/"): kind="dash"; upstream_path=clean[len("/grave"):]

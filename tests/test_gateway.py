@@ -9,7 +9,15 @@ class Echo(socketserver.BaseRequestHandler):
         if b"Upgrade: websocket" in data:
             self.request.sendall(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
             payload=self.request.recv(1024); self.request.sendall(payload); return
-        body=(self.server.label+"\n").encode()
+        # Read the full declared body (it may exceed the first recv when the
+        # gateway streams a large body through), so tests can verify delivery.
+        head,_,rest=data.partition(b"\r\n\r\n")
+        length=next((int(l.split(b":")[1]) for l in head.split(b"\r\n") if l.lower().startswith(b"content-length:")),0)
+        while len(rest)<length:
+            chunk=self.request.recv(65536)
+            if not chunk: break
+            rest+=chunk
+        body=(f"{self.server.label} body={len(rest)}\n").encode()
         self.request.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: "+str(len(body)).encode()+b"\r\nConnection: close\r\n\r\n"+body)
 
 class GatewayTests(unittest.TestCase):
@@ -79,6 +87,27 @@ class GatewayTests(unittest.TestCase):
     def test_admin_action_routes_to_privileged_owner_dashboard(self):
         out=self.request("/grave/api/action-stream?action=reboot","a@example.com")
         self.assertIn(b"alice-dash",out)
+    def test_pairing_token_creation_is_audited_on_the_action_stream_get(self):
+        # #50: the dashboard mints pairing tokens via GET action-stream (a
+        # developer-allowed action), which the old POST-body check never saw.
+        self.request("/grave/api/action-stream?action=t3-pair","b@example.com")
+        self.assertIn("pairing_created",(self.root/"logs/audit.jsonl").read_text())
+
+    def test_large_body_streams_through_without_being_buffered(self):
+        # #49: a body larger than the gateway's inspection peek (64 KiB) must
+        # still reach the backend in full via relay(), not be buffered/truncated.
+        payload=b"x"*200000
+        s=socket.create_connection(("127.0.0.1",self.port))
+        s.sendall(f"POST {self.prefix}/grave/api/state HTTP/1.1\r\nHost: box\r\nTailscale-User-Login: a@example.com\r\nContent-Length: {len(payload)}\r\nConnection: close\r\n\r\n".encode()+payload)
+        out=b""
+        while True:
+            chunk=s.recv(65536)
+            if not chunk: break
+            out+=chunk
+        s.close()
+        self.assertIn(b"alice-dash",out)
+        self.assertIn(b"body=200000",out)
+
     def test_websocket_upgrade_is_bidirectional(self):
         s=socket.create_connection(("127.0.0.1",self.port))
         s.sendall(f"GET {self.prefix}/socket HTTP/1.1\r\nHost: box\r\nTailscale-User-Login: a@example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n".encode())
