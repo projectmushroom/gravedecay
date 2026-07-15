@@ -253,6 +253,16 @@ vitals view, stops calling remote APIs, and slows its polling — the resource
 diet is enforced, not implied. Tailscale, SSH, dashboard, and terminal stay
 up; you can always get back in.
 
+## Notifications — the box wakes you
+
+Point `config/secrets/notify.env` at an [ntfy](https://ntfy.sh) topic and the
+box starts paging your phone: agent sessions ending, agents ringing the bell
+(waiting on a prompt), a platform unit failing, a failing `grave doctor`. Each
+event class is muteable via `NOTIFY_EVENTS` in grave.conf, everything ships
+wired but silent until you opt in, and `grave notify "msg"` is yours for
+scripting (`long-build; grave notify "build done"`). Doctor verifies the
+channel once configured. See [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md).
+
 ## Previewing a dev server
 
 Start a project's dev server on the box (keep it bound to `127.0.0.1`), then:
@@ -285,6 +295,7 @@ grave preview 3000               # expose a dev server at https://<box>.ts.net:3
 grave logs t3|dash|term|<unit>   # follow logs
 grave update                     # snapshot (if snapper), update pkgs/npm/images
 grave backup / restore           # git bundles + configs + docker volumes
+grave notify "title" ["body"]    # push a message to your phone (ntfy)
 ```
 
 ## What raise.sh does
@@ -331,6 +342,7 @@ is in `docs/SECRETS.md`.
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Why native-first, layout, mode model |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, tailnet-only, sudoers scope, terminal trust |
 | [docs/SECRETS.md](docs/SECRETS.md) | Secrets + MCP wiring for agent CLIs |
+| [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md) | Push notifications: agents, failing units, and doctor page your phone |
 | [docs/PORTS.md](docs/PORTS.md) | Every port, documented or it doesn't exist |
 | [docs/RECOVERY.md](docs/RECOVERY.md) | Backup/restore procedures |
 

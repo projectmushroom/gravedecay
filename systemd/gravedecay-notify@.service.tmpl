@@ -1,0 +1,15 @@
+[Unit]
+Description=gravedecay failure notifier for %i
+# Fired via OnFailure= from the platform units (one instance per failed unit).
+# `grave notify --event` exits 0 without sending unless a channel is configured
+# in config/secrets/notify.env AND 'unit-failure' is enabled in NOTIFY_EVENTS,
+# so referencing this on every box is safe — see docs/NOTIFICATIONS.md.
+
+[Service]
+Type=oneshot
+User=@USER@
+Environment=HOME=@HOME@
+# Reach the durable toolchain (curl on Homebrew hosts) — @TOOLPATH@ is empty on
+# package-manager hosts.
+Environment=PATH=@TOOLPATH@@HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=@GRAVE_BIN@ notify --event unit-failure --priority high "unit failed: %i" "on %H — check: grave logs %i"

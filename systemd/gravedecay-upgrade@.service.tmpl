@@ -3,6 +3,9 @@ Description=gravedecay - install release %i and re-raise
 Documentation=https://github.com/projectmushroom/gravedecay
 After=network-online.target
 Wants=network-online.target
+# Page the human if this unit lands in failed state (silent no-op unless
+# notifications are configured -- see docs/NOTIFICATIONS.md).
+OnFailure=gravedecay-notify@%n.service
 
 [Service]
 Type=oneshot

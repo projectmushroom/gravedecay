@@ -22,7 +22,13 @@ source "$CONF"
 : "${PREVIEW_RESERVED:=3050}"
 : "${MULTI_USER:=0}"
 
+# Event classes allowed to page the human via `grave notify --event` (#78).
+# Default here so installs whose grave.conf predates the feature still work;
+# documented in docs/NOTIFICATIONS.md and grave.conf.example.
+: "${NOTIFY_EVENTS:=session-exit bell unit-failure doctor}"
+
 LOG_FILE="$GRAVE_ROOT/logs/grave.log"
+NOTIFY_ENV="$GRAVE_ROOT/config/secrets/notify.env"
 RED=$'\e[31m'; GRN=$'\e[32m'; YLW=$'\e[33m'; BLD=$'\e[1m'; RST=$'\e[0m'
 
 log() { { printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG_FILE"; } 2>/dev/null || true; }
@@ -508,6 +514,88 @@ cmd_gamewatch() {
   esac
 }
 
+# ---------------------------------------------------------------- notify ----
+# Push a message to the human (docs/NOTIFICATIONS.md). The channel lives in
+# $GRAVE_ROOT/config/secrets/notify.env (600, git-ignored like every secret):
+#   NTFY_URL=https://ntfy.sh/<random-topic>   # or a self-hosted ntfy server
+#   NTFY_TOKEN=tk_...                         # optional bearer token
+# Event sources (tmux hooks, OnFailure= units, doctor) call
+# `grave notify --event <name>`, which is a silent no-op unless the channel is
+# configured AND the event class is listed in NOTIFY_EVENTS — so the hooks ship
+# enabled everywhere without spamming an unconfigured box.
+notify_configured() {
+  [[ -r "$NOTIFY_ENV" ]] || return 1
+  # shellcheck disable=SC1090
+  ( source "$NOTIFY_ENV"; [[ "${NTFY_URL:-}" =~ ^https?:// ]] )
+}
+
+notify_send() { # notify_send <title> <body> <priority>
+  local title="$1" body="$2" priority="$3"
+  # shellcheck disable=SC1090
+  source "$NOTIFY_ENV"
+  [[ "${NTFY_URL:-}" =~ ^https?:// ]] || return 1
+  # Headers are a protocol boundary: a newline in an interpolated value (a tmux
+  # session name reaches here) becomes header injection. Strip CR/LF and pin
+  # the priority to ntfy's vocabulary. The body travels as --data-raw, never
+  # -d/--data-binary, whose @ prefix would read local files into the request.
+  title=${title//[$'\r\n']/ }
+  [[ "$priority" =~ ^[a-z1-5]+$ ]] || priority=default
+  local args=(-sf -m 10 -o /dev/null -H "Title: $title" -H "Priority: $priority")
+  [[ -n "${NTFY_TOKEN:-}" ]] && args+=(-H "Authorization: Bearer ${NTFY_TOKEN//[$'\r\n']/}")
+  curl "${args[@]}" --data-raw "$body" "$NTFY_URL"
+}
+
+notify_reachable() {
+  # Doctor probe without publishing: ntfy's poll endpoint returns the topic's
+  # cached messages and exercises auth, so a doctor run never pages the phone.
+  # shellcheck disable=SC1090
+  source "$NOTIFY_ENV"
+  [[ "${NTFY_URL:-}" =~ ^https?:// ]] || return 1
+  local args=(-sf -m 10 -o /dev/null)
+  [[ -n "${NTFY_TOKEN:-}" ]] && args+=(-H "Authorization: Bearer ${NTFY_TOKEN//[$'\r\n']/}")
+  curl "${args[@]}" "$NTFY_URL/json?poll=1"
+}
+
+cmd_notify() { # grave notify [--event <name>] [--priority <p>] <title> [body...]
+  local event="" priority=default
+  while (($#)); do
+    case "$1" in
+      --event)    event="${2:?event name}"; shift 2 ;;
+      --priority) priority="${2:?priority}"; shift 2 ;;
+      --) shift; break ;;
+      -*) say "usage: grave notify [--event <name>] [--priority min|low|default|high|urgent] <title> [body]"; exit 1 ;;
+      *) break ;;
+    esac
+  done
+  local title="${1:-}"; shift || true
+  local body="$*"
+  if [[ -n "$event" ]]; then
+    # Hook-driven path: tmux hooks and OnFailure units fire on EVERY box,
+    # configured or not, and must never fail their caller — drop quietly when
+    # the channel is missing or the event class is muted in NOTIFY_EVENTS.
+    notify_configured || exit 0
+    local e enabled=0
+    for e in $NOTIFY_EVENTS; do [[ "$e" == "$event" ]] && enabled=1; done
+    (( enabled )) || exit 0
+    [[ -n "$title" ]] || exit 0
+    notify_send "$title" "${body:-$event}" "$priority" || { log "notify: $event delivery failed"; exit 0; }
+    log "notify: $event — $title"
+    exit 0
+  fi
+  [[ -n "$title" ]] || { say "usage: grave notify <title> [body]"; exit 1; }
+  notify_configured || {
+    bad "notifications are not configured"
+    say "  create $NOTIFY_ENV (chmod 600) with:"
+    say "    NTFY_URL=https://ntfy.sh/<your-random-topic>"
+    say "    NTFY_TOKEN=tk_...        # optional (authed/self-hosted servers)"
+    say "  then test: grave notify \"hello\" — full guide: docs/NOTIFICATIONS.md"
+    exit 1
+  }
+  notify_send "$title" "$body" "$priority" || { bad "delivery failed (check NTFY_URL / NTFY_TOKEN)"; exit 1; }
+  ok "notification sent"
+  log "notify: manual — $title"
+}
+
 # --------------------------------------------------------------- upgrade ----
 upgrade_repo() {
   local repo="${REPO_DIR:-$GRAVE_ROOT/repos/gravedecay}"
@@ -732,6 +820,13 @@ cmd_doctor() {
     say "  ${YLW}– web terminal stopped${RST}"
   fi
   check "backups dir writable"          test -w "$BACKUP_DIR"
+  if [[ -e "$NOTIFY_ENV" ]]; then
+    # Only when the human opted in: a dead channel silently eats every page,
+    # so reachability is an invariant, not a nicety (see docs/NOTIFICATIONS.md).
+    check "notify channel reachable"    notify_reachable
+    check "notify secret is private"    bash -c "[[ \$(stat -c %a '$NOTIFY_ENV') == 600 ]]"
+    check "failure notifier installed"  systemctl cat 'gravedecay-notify@.service'
+  fi
   if [[ -e "$GRAVE_ROOT/config/workspaces.json" ]]; then
     # Route through the root helper: the workspace doctor stats root-owned 0700
     # service-env files and grave-<slug>-owned homes, which the invoking owner
@@ -746,6 +841,12 @@ cmd_doctor() {
     check "Tailscale LocalAPI hidden from workspaces" bash -c "[[ \$(stat -c %a /run/tailscale/tailscaled.sock) == 660 ]]"
   fi
   echo
+  if (( FAILURES > 0 )); then
+    # Page the human about a failing contract (muteable via NOTIFY_EVENTS,
+    # silent no-op when unconfigured). Subshell: cmd_notify exits, doctor must
+    # still print its own verdict below.
+    ( cmd_notify --event doctor --priority high "doctor: $FAILURES check(s) failed" "on $(hostname) — run: grave doctor" ) || true
+  fi
   if (( FAILURES == 0 )); then say "${GRN}${BLD}All checks passed.${RST}"; else say "${RED}${BLD}$FAILURES check(s) failed.${RST}"; exit 1; fi
 }
 
@@ -939,6 +1040,9 @@ grave — gravedecay appliance control 🪦
                              up (default) or gaming (ALWAYS_ON only)
   grave gamewatch [on|off]   auto gaming/developer flip when a game launches
                              (Steam Machine); 'status' to check
+  grave notify <t> [body]    push a message to your phone (ntfy). Agents,
+                             failing units, and doctor page you through the
+                             same channel — see docs/NOTIFICATIONS.md
   grave backup               bundle repos, configs, docker volumes
   grave restore [backup]     list / restore backups
 
@@ -964,6 +1068,7 @@ case "${1:-help}" in
   bootmode)   shift || true; cmd_bootmode "$@" ;;
   gamewatch)  shift || true; cmd_gamewatch "$@" ;;
   logs)       shift; cmd_logs "$@" ;;
+  notify)     shift || true; cmd_notify "$@" ;;
   doctor)     cmd_doctor ;;
   users)      shift || true; exec sudo -n "$0" __users "$@" ;;
   projects)
