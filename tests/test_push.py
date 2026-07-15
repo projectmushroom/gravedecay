@@ -247,6 +247,16 @@ class PushEndpointTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 400)
 
 
+class SettingsPanelContractTests(unittest.TestCase):
+    def test_ntfy_is_tucked_behind_an_advanced_disclosure(self):
+        # Product decision (#88 follow-up): Web Push is the default path. The
+        # ntfy fields at eye level read as a required account signup — they are
+        # neither required nor an account. Keep them, collapsed.
+        src = (ROOT / "dashboard/gravedecay.py").read_text()
+        self.assertIn('data-sec="ntfy-adv"', src)
+        self.assertIn('<div id="ntfy-adv" style="display:none">', src)
+
+
 class ServiceWorkerContractTests(unittest.TestCase):
     def test_both_worker_copies_handle_push_and_click(self):
         # static/sw.js is the served asset; the SERVICE_WORKER constant is the

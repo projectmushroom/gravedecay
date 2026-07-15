@@ -2016,17 +2016,23 @@ body.gaming #foot{display:none}
       <button class="mini" id="push-enable">enable</button>
     </div>
     <div id="push-devices"></div>
-    <div class="setrow"><span class="setlabel">ntfy URL <span id="ntfy-state"></span></span>
-      <input id="set-ntfy-url" placeholder="https://ntfy.sh/&lt;topic&gt; (empty to keep)" size="22">
-      <button class="mini" id="ntfy-clear" title="remove the ntfy channel">✕</button>
-    </div>
-    <div class="setrow"><span class="setlabel">ntfy token</span>
-      <input type="password" id="set-ntfy-token" placeholder="tk_… (optional, empty to keep)" size="22">
-    </div>
     <div class="setrow dim2">events that page you:</div>
     <div class="setrow" id="notify-events" style="flex-wrap:wrap"></div>
     <div class="setrow"><button class="mini" id="notify-test">📣 send test</button>
       <span class="setlabel dim2" id="notify-msg"></span></div>
+    <!-- ntfy is the optional second channel (no-PWA devices, scripts, watch
+         mirroring). At eye level it read as a required account signup — it is
+         neither. Collapsed by default; push alone is a complete setup. -->
+    <div class="setrow dim2 sec-toggle" data-sec="ntfy-adv" style="cursor:pointer">▸ advanced: ntfy relay (optional — you do NOT need this for push)</div>
+    <div id="ntfy-adv" style="display:none">
+      <div class="setrow"><span class="setlabel">ntfy URL <span id="ntfy-state"></span></span>
+        <input id="set-ntfy-url" placeholder="https://ntfy.sh/&lt;topic&gt; (empty to keep)" size="22">
+        <button class="mini" id="ntfy-clear" title="remove the ntfy channel">✕</button>
+      </div>
+      <div class="setrow"><span class="setlabel">ntfy token</span>
+        <input type="password" id="set-ntfy-token" placeholder="tk_… (optional, empty to keep)" size="22">
+      </div>
+    </div>
   </div>
 
   <div class="sethead">Refresh</div>
