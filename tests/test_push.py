@@ -104,6 +104,14 @@ class PushModuleTests(unittest.TestCase):
         claims = json.loads(b64u(body))
         self.assertEqual(claims["aud"], "https://push.example.net")
         self.assertEqual(json.loads(b64u(head))["alg"], "ES256")
+        # Regression #97: Apple validates the RFC 8292 contact and answers 403
+        # BadJwtToken for a hostname-derived mailto (no TLD) — every iOS device
+        # silently went dark. The sub must be a real https contact, never
+        # derived from the box's hostname.
+        self.assertEqual(claims["sub"], self.dash.VAPID_SUB)
+        self.assertRegex(claims["sub"], r"^https://")
+        src = (ROOT / "dashboard/gravedecay.py").read_text()
+        self.assertNotIn("mailto:gravedecay@", src)
         raw = b64u(sig)
         der = encode_dss_signature(
             int.from_bytes(raw[:32], "big"), int.from_bytes(raw[32:], "big"))
@@ -145,6 +153,17 @@ class PushModuleTests(unittest.TestCase):
     def test_push_send_without_devices_reports_failure(self):
         res = self.dash.push_send({"title": "t"})
         self.assertFalse(res["ok"])
+
+    def test_push_errors_keep_the_service_reason_body(self):
+        # Regression #97: a bare "HTTP 403" cost a live debugging round-trip;
+        # the push service's reason body (e.g. Apple's {"reason":"BadJwtToken"})
+        # must reach errors[] and the output summary.
+        src = (ROOT / "dashboard/gravedecay.py").read_text()
+        self.assertIn("e.read(200)", src)
+        self.assertIn('summary += " — " + "; ".join(errors[:2])', src)
+        grave = (ROOT / "bin/grave").read_text()
+        self.assertIn("PUSH_ERROR=$(jq -r '.output // \"push failed\"'", grave)
+        self.assertIn('${PUSH_ERROR:+ — $PUSH_ERROR}', grave)
 
     def test_notify_events_precedence(self):
         # default: all classes
