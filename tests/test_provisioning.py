@@ -6,6 +6,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 RAISE = (ROOT / "raise.sh").read_text()
 GRAVE = (ROOT / "bin/grave").read_text()
 INSTALL = (ROOT / "install.sh").read_text()
+TOOLCHAIN = (ROOT / "steamos-toolchain.sh").read_text()
 T2 = (ROOT / "profiles/t2-macbook.sh").read_text()
 PROFILES = [ROOT / "profiles" / f"{n}.sh" for n in ("generic", "t2-macbook", "steam-machine")]
 
@@ -58,6 +59,17 @@ class ProvisioningSafetyTests(unittest.TestCase):
         self.assertIn("SSHD_UNIT=ssh", RAISE)
         self.assertIn("/usr/bin/ufw, /usr/sbin/ufw", RAISE)
         self.assertIn("is-active --quiet sshd || systemctl is-active --quiet ssh", GRAVE)
+
+    def test_toolchain_bootstraps_are_pinned_and_verified(self):
+        # Regression #62: the SteamOS toolchain `curl | sh`'d Homebrew and Docker
+        # installers from a moving HEAD with no verification, and reinstalled t3
+        # every run because the presence check omitted ~/.local/bin.
+        self.assertNotIn("install/HEAD/install.sh", TOOLCHAIN)
+        self.assertNotIn("get.docker.com/rootless | sh", TOOLCHAIN)
+        self.assertIn("fetch_verified", TOOLCHAIN)
+        self.assertIn("sha256sum", TOOLCHAIN)
+        self.assertIn("checksum mismatch", TOOLCHAIN)
+        self.assertIn('PATH="$HOME/.local/bin:$W:', TOOLCHAIN)
 
 
 if __name__ == "__main__":
