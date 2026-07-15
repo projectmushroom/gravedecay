@@ -81,7 +81,7 @@ class NotifyContractTests(unittest.TestCase):
         # Every platform unit references gravedecay-notify@ via OnFailure=, so
         # raise.sh must render it on every host, not behind a profile gate.
         self.assertIn("gravedecay-notify@.service.tmpl", RAISE)
-        self.assertIn("/etc/systemd/system/gravedecay-notify@.service", RAISE)
+        self.assertIn("install_unit gravedecay-notify@.service", RAISE)
 
     def test_doctor_checks_gate_on_each_channel_existing(self):
         # No notify.env / no enrolled devices → no checks (opt-in); with them,

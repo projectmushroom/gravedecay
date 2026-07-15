@@ -28,6 +28,37 @@ class ProvisioningSafetyTests(unittest.TestCase):
         self.assertIn('sudoers_tmp=$(sudo mktemp)', RAISE)
         self.assertNotIn('sudoers_tmp=$(mktemp)', RAISE)
 
+    def test_headless_reraise_needs_no_out_of_scope_sudo(self):
+        # Regression #89: gravedecay-upgrade.service runs raise.sh with no TTY,
+        # where any sudo outside the scoped NOPASSWD set dies at a password
+        # prompt. Steady state must therefore skip every privileged write:
+        # unit installs compare-then-tee (tee IS in the scope), the layout
+        # claim checks existence+ownership, the CLI install cmp-skips, the
+        # sudoers rewrite is stamp-guarded with a headless fallback, and the
+        # tailscale operator/socket ops probe current state first.
+        self.assertIn("install_unit() {", RAISE)
+        self.assertGreaterEqual(RAISE.count("| install_unit "), 9)
+        self.assertIn("install_cli() {", RAISE)
+        self.assertIn('install_cli "$REPO_DIR/bin/grave" "$GRAVE_BIN"', RAISE)
+        self.assertIn("layout_ok", RAISE)
+        self.assertIn('stat -c %U "$GRAVE_ROOT"', RAISE)
+        self.assertIn(".sudoers.sha256", RAISE)
+        self.assertIn("sudo -n -l /usr/bin/visudo", RAISE)
+        self.assertIn("tailscale serve status >/dev/null 2>&1 || sudo tailscale set", RAISE)
+        self.assertIn("stat -c '%G %a' /run/tailscale/tailscaled.sock", RAISE)
+        # the classic offenders must be gone from raise.sh entirely
+        self.assertNotIn("sudo sed -i", RAISE)
+        self.assertNotIn("sudo tee /etc/systemd/system/gravedecay", RAISE)
+
+    def test_profile_conf_set_skips_when_value_already_set(self):
+        # Regression #89: profiles run on every raise; conf_set must be a
+        # sudo-free no-op when the key already holds the exact value.
+        for profile in PROFILES:
+            text = profile.read_text()
+            self.assertIn(
+                'grep -qxF "$1=$2" /etc/gravedecay/grave.conf 2>/dev/null && return 0',
+                text, f"{profile.name}: conf_set rewrites (and sudos) unconditionally")
+
     def test_conf_set_appends_a_missing_key(self):
         # Regression #52: a plain `sed s|^K=.*|` no-ops when the key is absent, so
         # a CHECK_* invariant never reaches doctor on an upgraded box with an older

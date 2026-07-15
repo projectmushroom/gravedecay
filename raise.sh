@@ -49,6 +49,31 @@ wait_http() {
   done
   skip "$label — not answering yet (check: grave logs)"
 }
+# A steady-state re-raise IS the upgrade path: gravedecay-upgrade.service runs
+# this script headless, where any sudo outside the scoped NOPASSWD set dies at
+# a password prompt it can't answer (#89). Every privileged write therefore
+# goes through a compare-first guard — when nothing changed, no sudo happens,
+# and the only privileges an upgrade needs are the already-granted systemctl /
+# docker / tee-into-/etc/systemd/system set. First raise (fresh box) still
+# prompts interactively; that is the one run a human is present for.
+install_unit() { # install_unit <path under /etc/systemd/system>  (rendered file on stdin)
+  local dest="/etc/systemd/system/$1" tmp
+  tmp=$(mktemp)
+  cat >"$tmp"
+  if cmp -s "$tmp" "$dest" 2>/dev/null; then
+    rm -f "$tmp"; return 0        # unchanged — no privileged write
+  fi
+  sudo tee "$dest" <"$tmp" >/dev/null
+  rm -f "$tmp"
+}
+install_cli() { # install_cli <src> <dest> — sudo only when content differs
+  cmp -s "$1" "$2" 2>/dev/null && return 0
+  if [[ "$IMMUTABLE" == 1 ]]; then
+    install -m 755 "$1" "$2"      # ~/.local/bin — user-owned, no sudo
+  else
+    sudo install -m 755 "$1" "$2"
+  fi
+}
 
 [[ $EUID -eq 0 ]] && { echo "Run as your normal user, not root (sudo is used internally)."; exit 1; }
 sudo -n systemctl --version >/dev/null 2>&1 || sudo -v || { echo "sudo access required"; exit 1; }
@@ -199,17 +224,29 @@ fi
 
 # -------------------------------------------------------------- 2. layout ----
 step "Layout at $GRAVE_ROOT"
-sudo mkdir -p "$GRAVE_ROOT"/{repos,agents,docker,config/secrets,logs,scripts,backups,docs}
-# Claim the owner-managed tree, but NEVER recurse into the multi-user subtrees:
-# workspaces/<slug> is owned by grave-<slug> (collaborators' creds live there) and
-# config/workspace-services/*.env must stay root-owned (grave-workspaces refuses a
-# non-root env, and the @-units run as grave-%i). A blanket `chown -R $GRAVE_ROOT`
-# on re-raise stole both and crash-looped every workspace. On a fresh/single-user
-# box these paths don't exist yet, so the prune is a no-op.
-sudo chown "$RUN_USER:$RUN_USER" "$GRAVE_ROOT"
-sudo find "$GRAVE_ROOT" -mindepth 1 \
-  \( -path "$GRAVE_ROOT/workspaces" -o -path "$GRAVE_ROOT/config/workspace-services" \) -prune \
-  -o -exec chown "$RUN_USER:$RUN_USER" {} +
+# mkdir/chown/find are NOT in the scoped sudoers — skip the privileged claim
+# entirely when the tree already exists and is owned (#89: the headless
+# upgrade died right here on its first out-of-scope sudo).
+layout_ok=1
+for d in repos agents docker config/secrets logs scripts backups docs; do
+  [[ -d "$GRAVE_ROOT/$d" ]] || layout_ok=0
+done
+[[ "$(stat -c %U "$GRAVE_ROOT" 2>/dev/null)" == "$RUN_USER" ]] || layout_ok=0
+if [[ "$layout_ok" == 1 ]]; then
+  skip "tree present and owned by $RUN_USER — no privileged changes"
+else
+  sudo mkdir -p "$GRAVE_ROOT"/{repos,agents,docker,config/secrets,logs,scripts,backups,docs}
+  # Claim the owner-managed tree, but NEVER recurse into the multi-user subtrees:
+  # workspaces/<slug> is owned by grave-<slug> (collaborators' creds live there) and
+  # config/workspace-services/*.env must stay root-owned (grave-workspaces refuses a
+  # non-root env, and the @-units run as grave-%i). A blanket `chown -R $GRAVE_ROOT`
+  # on re-raise stole both and crash-looped every workspace. On a fresh/single-user
+  # box these paths don't exist yet, so the prune is a no-op.
+  sudo chown "$RUN_USER:$RUN_USER" "$GRAVE_ROOT"
+  sudo find "$GRAVE_ROOT" -mindepth 1 \
+    \( -path "$GRAVE_ROOT/workspaces" -o -path "$GRAVE_ROOT/config/workspace-services" \) -prune \
+    -o -exec chown "$RUN_USER:$RUN_USER" {} +
+fi
 chmod 700 "$GRAVE_ROOT/config/secrets"
 if [[ ! -e "$HOME_DIR/Projects" ]]; then
   ln -s "$GRAVE_ROOT/repos" "$HOME_DIR/Projects"
@@ -233,15 +270,10 @@ ok "layout ready"
 
 # ------------------------------------------------------- 3. grave CLI+conf ----
 step "grave CLI"
-if [[ "$IMMUTABLE" == 1 ]]; then
-  mkdir -p "$(dirname "$GRAVE_BIN")"
-  install -m 755 "$REPO_DIR/bin/grave" "$GRAVE_BIN"   # /usr/local is read-only here
-  install -m 755 "$REPO_DIR/bin/grave-workspaces" "$(dirname "$GRAVE_BIN")/grave-workspaces"
-else
-  sudo install -m 755 "$REPO_DIR/bin/grave" "$GRAVE_BIN"
-  sudo install -m 755 "$REPO_DIR/bin/grave-workspaces" "$(dirname "$GRAVE_BIN")/grave-workspaces"
-fi
-sudo mkdir -p /etc/gravedecay
+[[ "$IMMUTABLE" == 1 ]] && mkdir -p "$(dirname "$GRAVE_BIN")"   # /usr/local is read-only here
+install_cli "$REPO_DIR/bin/grave" "$GRAVE_BIN"
+install_cli "$REPO_DIR/bin/grave-workspaces" "$(dirname "$GRAVE_BIN")/grave-workspaces"
+[[ -d /etc/gravedecay ]] || sudo mkdir -p /etc/gravedecay
 if [[ ! -f /etc/gravedecay/grave.conf ]]; then
   sed -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
       -e "s|@DOCKER_ROOTLESS@|$DOCKER_ROOTLESS|g" \
@@ -276,29 +308,46 @@ step "Scoped passwordless sudo (see docs/SECURITY.md)"
 SUDOERS_FILE=/etc/sudoers.d/50-gravedecay
 if ls /etc/sudoers.d/ 2>/dev/null | grep -qxE 'wheel|wheel-.*'; then
   SUDOERS_FILE=/etc/sudoers.d/zz-gravedecay
-  sudo rm -f /etc/sudoers.d/50-gravedecay
 fi
-# Validate on a temp file BEFORE installing into /etc/sudoers.d — a syntactically
-# invalid drop-in (exotic $RUN_USER, metachars in $GRAVE_BIN) makes sudo refuse to
-# run at all, and validating after install can't protect anything: the next sudo
-# in this very script would already be broken with no rollback but a recovery boot.
-# root must own the temp file: with fs.protected_regular (SteamOS/Arch
-# hardening) the kernel refuses root's O_CREAT open of ANOTHER user's file in
-# sticky /tmp, so a user-created mktemp makes the sudo tee below EACCES.
-sudoers_tmp=$(sudo mktemp)
-sudo tee "$sudoers_tmp" >/dev/null <<EOF
-# gravedecay: let $RUN_USER (and gravedecay action buttons) drive the platform
-$RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker, $GRAVE_BIN, /usr/bin/journalctl, /usr/bin/ufw, /usr/sbin/ufw, /usr/bin/snapper, /usr/sbin/sshd -T, /usr/bin/sshd -T, /usr/bin/tee /etc/systemd/system/*, /usr/bin/tee /sys/fs/cgroup/grave-torpor/*, /usr/bin/mkdir -p /sys/fs/cgroup/grave-torpor, /usr/bin/npm update -g *
-EOF
-sudo chown root:root "$sudoers_tmp"; sudo chmod 440 "$sudoers_tmp"
-if sudo visudo -c -f "$sudoers_tmp" >/dev/null; then
-  sudo install -m 440 -o root -g root "$sudoers_tmp" "$SUDOERS_FILE"
-  ok "sudoers valid ($SUDOERS_FILE)"
+sudoers_content="# gravedecay: let $RUN_USER (and gravedecay action buttons) drive the platform
+$RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker, $GRAVE_BIN, /usr/bin/journalctl, /usr/bin/ufw, /usr/sbin/ufw, /usr/bin/snapper, /usr/sbin/sshd -T, /usr/bin/sshd -T, /usr/bin/tee /etc/systemd/system/*, /usr/bin/tee /sys/fs/cgroup/grave-torpor/*, /usr/bin/mkdir -p /sys/fs/cgroup/grave-torpor, /usr/bin/npm update -g *"
+# /etc/sudoers.d entries are 440 — unreadable to us — so the unchanged-skip
+# (#89: headless upgrades must not need out-of-scope sudo) compares against a
+# user-side stamp of what the last successful install wrote instead.
+sudoers_stamp="$GRAVE_ROOT/config/.sudoers.sha256"
+sudoers_hash=$(printf '%s\n%s\n' "$SUDOERS_FILE" "$sudoers_content" | sha256sum | cut -d' ' -f1)
+if [[ -r "$sudoers_stamp" && "$(cat "$sudoers_stamp")" == "$sudoers_hash" ]]; then
+  skip "sudoers unchanged ($SUDOERS_FILE)"
+elif ! sudo -n -l /usr/bin/visudo >/dev/null 2>&1 \
+     && [[ -e "$SUDOERS_FILE" ]] && sudo -n systemctl --version >/dev/null 2>&1; then
+  # Headless (no password available: visudo isn't in the NOPASSWD scope) with a
+  # working scoped grant already installed but no/stale stamp — boxes raised
+  # before the stamp existed land here on their first button-upgrade. Refusing
+  # to die: the installed grant demonstrably works (the scoped systemctl probe
+  # just used it); content refresh waits for the next interactive raise.
+  skip "sudoers present but unverifiable without a password — run ./raise.sh from a terminal once to refresh it"
 else
+  [[ "$SUDOERS_FILE" == /etc/sudoers.d/zz-gravedecay ]] && sudo rm -f /etc/sudoers.d/50-gravedecay
+  # Validate on a temp file BEFORE installing into /etc/sudoers.d — a syntactically
+  # invalid drop-in (exotic $RUN_USER, metachars in $GRAVE_BIN) makes sudo refuse to
+  # run at all, and validating after install can't protect anything: the next sudo
+  # in this very script would already be broken with no rollback but a recovery boot.
+  # root must own the temp file: with fs.protected_regular (SteamOS/Arch
+  # hardening) the kernel refuses root's O_CREAT open of ANOTHER user's file in
+  # sticky /tmp, so a user-created mktemp makes the sudo tee below EACCES.
+  sudoers_tmp=$(sudo mktemp)
+  printf '%s\n' "$sudoers_content" | sudo tee "$sudoers_tmp" >/dev/null
+  sudo chown root:root "$sudoers_tmp"; sudo chmod 440 "$sudoers_tmp"
+  if sudo visudo -c -f "$sudoers_tmp" >/dev/null; then
+    sudo install -m 440 -o root -g root "$sudoers_tmp" "$SUDOERS_FILE"
+    printf '%s\n' "$sudoers_hash" >"$sudoers_stamp"
+    ok "sudoers valid ($SUDOERS_FILE)"
+  else
+    sudo rm -f "$sudoers_tmp"
+    echo "refusing to install an invalid sudoers file ($SUDOERS_FILE) — aborting"; exit 1
+  fi
   sudo rm -f "$sudoers_tmp"
-  echo "refusing to install an invalid sudoers file ($SUDOERS_FILE) — aborting"; exit 1
 fi
-sudo rm -f "$sudoers_tmp"
 
 # ----------------------------------------------------------- 5. gravedecay ----
 step "gravedecay"
@@ -312,26 +361,25 @@ sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
     -e "s|@TOOLPATH@|$TOOLPATH|g" -e "s|@DOCKER_HOST@|$DOCKER_HOSTV|g" \
     -e "s|@UNITS@|$UNITS|g" -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" \
     -e "s|@PYTHON@|$PYTHON_BIN|g" \
-    "$REPO_DIR/systemd/gravedecay.service.tmpl" | sudo tee /etc/systemd/system/gravedecay.service >/dev/null
+    "$REPO_DIR/systemd/gravedecay.service.tmpl" \
+  | grep -v '^Environment=DOCKER_HOST=$' | install_unit gravedecay.service
 sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
     -e "s|@TOOLPATH@|$TOOLPATH|g" -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" \
     "$REPO_DIR/systemd/gravedecay-upgrade.service.tmpl" \
-    | sudo tee /etc/systemd/system/gravedecay-upgrade.service >/dev/null
+    | install_unit gravedecay-upgrade.service
 sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
     -e "s|@TOOLPATH@|$TOOLPATH|g" -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" \
     "$REPO_DIR/systemd/gravedecay-upgrade@.service.tmpl" \
-    | sudo tee /etc/systemd/system/gravedecay-upgrade@.service >/dev/null
+    | install_unit gravedecay-upgrade@.service
 # Failure notifier: every platform unit references it via OnFailure=, so it
 # must exist on every box (it sends nothing until notify.env is configured —
 # see docs/NOTIFICATIONS.md).
 sed -e "s|@USER@|$RUN_USER|g" -e "s|@HOME@|$HOME_DIR|g" \
     -e "s|@TOOLPATH@|$TOOLPATH|g" -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" \
     "$REPO_DIR/systemd/gravedecay-notify@.service.tmpl" \
-    | sudo tee /etc/systemd/system/gravedecay-notify@.service >/dev/null
+    | install_unit gravedecay-notify@.service
 [[ -n "$ALLOWED_USERS" ]] && ok "dashboard actions allowed for: $ALLOWED_USERS" \
   || skip "dashboard is read-only until GRAVEDECAY_ALLOWED_USERS is set (auto-fills after tailscale login on re-raise)"
-# drop an empty DOCKER_HOST= line on system-docker hosts (empty would confuse the CLI)
-sudo sed -i '/^Environment=DOCKER_HOST=$/d' /etc/systemd/system/gravedecay.service
 sudo systemctl daemon-reload
 enable_restart gravedecay
 wait_http "http://127.0.0.1:$DASH_PORT/healthz" "gravedecay answering on :$DASH_PORT"
@@ -344,11 +392,11 @@ if [[ "${MULTI_USER:-0}" == 1 ]]; then
   chmod 600 "$GRAVE_ROOT/config/secrets/gateway-token"
   sed -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" -e "s|@PYTHON@|$PYTHON_BIN|g" \
       "$REPO_DIR/systemd/gravedecay-gateway.service.tmpl" \
-    | sudo tee /etc/systemd/system/gravedecay-gateway.service >/dev/null
+    | install_unit gravedecay-gateway.service
   for template in gravedecay-t3@ gravedecay-term@ gravedecay-dashboard@; do
     sed -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" -e "s|@PYTHON@|$PYTHON_BIN|g" \
         "$REPO_DIR/systemd/$template.service.tmpl" \
-      | sudo tee "/etc/systemd/system/$template.service" >/dev/null
+      | install_unit "$template.service"
   done
   sudo systemctl daemon-reload
   # Provision the workspace units + registry BEFORE starting the gateway. The
@@ -373,8 +421,8 @@ if command -v ttyd >/dev/null; then
       -e "s|@TERM_PORT@|$TERM_PORT|g" -e "s|@HOME@|$HOME_DIR|g" \
       -e "s|@TTYD@|$TTYD_BIN|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
       -e "s|@DOCKER_HOST@|$DOCKER_HOSTV|g" \
-      "$REPO_DIR/systemd/gravedecay-term.service.tmpl" | sudo tee /etc/systemd/system/gravedecay-term.service >/dev/null
-  sudo sed -i '/^Environment=DOCKER_HOST=$/d' /etc/systemd/system/gravedecay-term.service
+      "$REPO_DIR/systemd/gravedecay-term.service.tmpl" \
+    | grep -v '^Environment=DOCKER_HOST=$' | install_unit gravedecay-term.service
   sudo systemctl daemon-reload
   enable_restart gravedecay-term
   wait_http "http://127.0.0.1:$TERM_PORT/" "web terminal answering on :$TERM_PORT"
@@ -396,7 +444,7 @@ fi
 sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
     -e "s|@T3_PORT@|$T3_PORT|g" -e "s|@HOME@|$HOME_DIR|g" \
     -e "s|@T3@|$T3_BIN|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
-    "$REPO_DIR/systemd/t3code.service.tmpl" | sudo tee /etc/systemd/system/t3code.service >/dev/null
+    "$REPO_DIR/systemd/t3code.service.tmpl" | install_unit t3code.service
 sudo systemctl daemon-reload
 enable_restart t3code
 wait_http "http://127.0.0.1:$T3_PORT/" "t3code answering on :$T3_PORT"
@@ -410,8 +458,8 @@ if [[ "$IMMUTABLE" == 1 ]]; then
   sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
       -e "s|@HOME@|$HOME_DIR|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
       -e "s|@DOCKER_HOST@|$DOCKER_HOSTV|g" \
-      "$REPO_DIR/systemd/gravedecay-selfheal.service.tmpl" | sudo tee /etc/systemd/system/gravedecay-selfheal.service >/dev/null
-  sudo sed -i '/^Environment=DOCKER_HOST=$/d' /etc/systemd/system/gravedecay-selfheal.service
+      "$REPO_DIR/systemd/gravedecay-selfheal.service.tmpl" \
+    | grep -v '^Environment=DOCKER_HOST=$' | install_unit gravedecay-selfheal.service
   sudo systemctl daemon-reload
   sudo systemctl enable gravedecay-selfheal >/dev/null 2>&1 || true
   ok "self-heal enabled (runs each boot)"
@@ -427,7 +475,7 @@ if [[ "$IMMUTABLE" == 1 || "$PROFILE" == steam-machine ]]; then
   install -m 755 "$REPO_DIR/bin/gravedecay-gamewatch" "$GRAVE_ROOT/scripts/gravedecay-gamewatch"
   sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
       -e "s|@HOME@|$HOME_DIR|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
-      "$REPO_DIR/systemd/gravedecay-gamewatch.service.tmpl" | sudo tee /etc/systemd/system/gravedecay-gamewatch.service >/dev/null
+      "$REPO_DIR/systemd/gravedecay-gamewatch.service.tmpl" | install_unit gravedecay-gamewatch.service
   sudo systemctl daemon-reload
   enable_restart gravedecay-gamewatch >/dev/null 2>&1 || true
   ok "game-mode watcher installed (flip on with: grave gamewatch on)"
@@ -514,19 +562,23 @@ if ! command -v tailscale >/dev/null; then
 elif ! tailscale status --peers=false >/dev/null 2>&1; then
   skip "tailscale not logged in — run 'sudo tailscale up --ssh', rerun raise.sh"
 else
-  sudo tailscale set --operator="$RUN_USER" 2>/dev/null || true
+  # Operator already effective ⇔ serve status works unprivileged — skip the
+  # out-of-scope `sudo tailscale set` on a steady-state (headless, #89) run.
+  tailscale serve status >/dev/null 2>&1 || sudo tailscale set --operator="$RUN_USER" 2>/dev/null || true
   # The gateway's random Serve backend path is a local trust capability.
   # Hide Serve configuration from workspace users by restricting LocalAPI to
   # root and the appliance owner's existing primary group, including restarts.
   RUN_GROUP=$(id -gn "$RUN_USER")
-  sudo mkdir -p /etc/systemd/system/tailscaled.service.d
-  sudo tee /etc/systemd/system/tailscaled.service.d/gravedecay-localapi.conf >/dev/null <<EOF
+  [[ -d /etc/systemd/system/tailscaled.service.d ]] || sudo mkdir -p /etc/systemd/system/tailscaled.service.d
+  install_unit tailscaled.service.d/gravedecay-localapi.conf <<EOF
 [Service]
 ExecStartPost=+/usr/bin/chgrp $RUN_GROUP /run/tailscale/tailscaled.sock
 ExecStartPost=+/usr/bin/chmod 0660 /run/tailscale/tailscaled.sock
 EOF
-  sudo chgrp "$RUN_GROUP" /run/tailscale/tailscaled.sock
-  sudo chmod 0660 /run/tailscale/tailscaled.sock
+  if [[ "$(stat -c '%G %a' /run/tailscale/tailscaled.sock 2>/dev/null)" != "$RUN_GROUP 660" ]]; then
+    sudo chgrp "$RUN_GROUP" /run/tailscale/tailscaled.sock
+    sudo chmod 0660 /run/tailscale/tailscaled.sock
+  fi
   sudo systemctl daemon-reload
   if [[ "${MULTI_USER:-0}" == 1 ]]; then
     # Serve config is persistent and per-path. A box migrated single-user→multi-user
