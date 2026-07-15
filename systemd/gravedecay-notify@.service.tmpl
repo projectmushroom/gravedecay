@@ -12,4 +12,4 @@ Environment=HOME=@HOME@
 # Reach the durable toolchain (curl on Homebrew hosts) — @TOOLPATH@ is empty on
 # package-manager hosts.
 Environment=PATH=@TOOLPATH@@HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=@GRAVE_BIN@ notify --event unit-failure --priority high "unit failed: %i" "on %H — check: grave logs %i"
+ExecStart=@GRAVE_BIN@ notify --event unit-failure --priority high --link /grave/?tab=system "unit failed: %i" "on %H — check: grave logs %i"

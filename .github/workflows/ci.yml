@@ -20,6 +20,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
+      # Web Push crypto (VAPID + RFC 8291) — the vector tests must RUN in CI,
+      # not skip: a silent skip here would let the encryption drift unnoticed.
+      - run: python -m pip install cryptography
       - run: python -m unittest discover -s tests -v
       - run: python -m py_compile dashboard/gravedecay.py dashboard/gateway.py bin/grave-workspaces
       - run: bash -n raise.sh

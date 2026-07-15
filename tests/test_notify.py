@@ -83,14 +83,37 @@ class NotifyContractTests(unittest.TestCase):
         self.assertIn("gravedecay-notify@.service.tmpl", RAISE)
         self.assertIn("/etc/systemd/system/gravedecay-notify@.service", RAISE)
 
-    def test_doctor_checks_gate_on_the_channel_existing(self):
-        # No notify.env → no checks (the feature is opt-in); with it, doctor
-        # must verify reachability without publishing (?poll=1), the secret's
-        # mode, and the installed notifier unit.
+    def test_doctor_checks_gate_on_each_channel_existing(self):
+        # No notify.env / no enrolled devices → no checks (opt-in); with them,
+        # doctor must verify ntfy reachability without publishing (?poll=1),
+        # secret modes, the dashboard's push crypto, and the notifier unit.
         self.assertIn('if [[ -e "$NOTIFY_ENV" ]]; then', GRAVE)
-        self.assertIn('check "notify channel reachable"    notify_reachable', GRAVE)
+        self.assertIn('check "ntfy channel reachable"      notify_reachable', GRAVE)
         self.assertIn('"$NTFY_URL/json?poll=1"', GRAVE)
+        self.assertIn("if push_ready; then", GRAVE)
+        self.assertIn('check "web push sender ready"', GRAVE)
+        self.assertIn("/api/push-key' | jq -e .ok", GRAVE)
         self.assertIn("systemctl cat 'gravedecay-notify@.service'", GRAVE)
+
+    def test_push_leg_builds_json_with_jq_and_respects_delivery_status(self):
+        # A hostile session name must not break out of the push payload (jq
+        # builds it), and zero-device delivery must read as failure (the
+        # dashboard answers non-2xx, surfaced by curl -f).
+        self.assertIn('jq -n --arg t "$1" --arg b "$2" --arg p "$3" --arg u "$4" --arg e "$5"', GRAVE)
+        self.assertIn('/api/push-send', GRAVE)
+        self.assertIn("jq -e '.subscriptions | length > 0'", GRAVE)
+
+    def test_dashboard_event_override_wins_over_conf(self):
+        # The ⚙️ checkboxes write config/notify-events (no sudo needed, like
+        # the gamewatch flag); grave must prefer it over grave.conf.
+        self.assertIn('[[ -r "$GRAVE_ROOT/config/notify-events" ]] && NOTIFY_EVENTS="$(<"$GRAVE_ROOT/config/notify-events")"', GRAVE)
+
+    def test_raise_installs_python_cryptography_everywhere(self):
+        # Web Push needs the cryptography module on every distro path; the
+        # managed-toolchain fallback must stay best-effort (never blocks raise).
+        self.assertIn("python-cryptography", RAISE)          # pacman
+        self.assertEqual(RAISE.count("python3-cryptography"), 2)  # apt + dnf
+        self.assertIn("--user --break-system-packages cryptography", RAISE)
 
     def test_doctor_failure_pages_without_breaking_doctor(self):
         # The page runs in a subshell (cmd_notify exits) and never changes
