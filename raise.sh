@@ -102,6 +102,14 @@ export PATH="$HOME_DIR/.local/bin:$TOOLPATH$PATH"
 
 TTYD_BIN="$(command -v ttyd 2>/dev/null || echo /usr/bin/ttyd)"
 T3_BIN="$(command -v t3 2>/dev/null || echo /usr/bin/t3)"
+# The interpreter that runs the dashboard/gateway units AND receives the Web
+# Push crypto dependency — one resolution for both, or they drift (#92: probe
+# said cryptography present in brew python while the unit ran /usr/bin/python3,
+# leaving the 🔔 enable button dead). Resolved through TOOLPATH, so managed-
+# toolchain hosts get the DURABLE brew python: /usr/bin/python3 rides the
+# immutable image (no pip, no ensurepip) and its user site is version-bumped
+# away by every OS update.
+PYTHON_BIN="$(command -v python3 2>/dev/null || echo /usr/bin/python3)"
 
 # The grave CLI normally installs to /usr/local/bin, but on an immutable rootfs
 # that is read-only — install into the user's ~/.local/bin (durable, on PATH)
@@ -166,9 +174,9 @@ if [[ "$MANAGED_TOOLCHAIN" == 1 ]]; then
   # Web Push needs python 'cryptography' (VAPID/RFC 8291 — see
   # docs/NOTIFICATIONS.md). Best-effort here: without it the dashboard still
   # runs and ntfy notifications are unaffected, so this never blocks a raise.
-  if ! python3 -c 'import cryptography' 2>/dev/null; then
-    python3 -m pip install --quiet --user cryptography 2>/dev/null \
-      || python3 -m pip install --quiet --user --break-system-packages cryptography 2>/dev/null \
+  if ! "$PYTHON_BIN" -c 'import cryptography' 2>/dev/null; then
+    "$PYTHON_BIN" -m pip install --quiet --user cryptography 2>/dev/null \
+      || "$PYTHON_BIN" -m pip install --quiet --user --break-system-packages cryptography 2>/dev/null \
       || skip "python 'cryptography' unavailable — Web Push disabled (ntfy unaffected)"
   fi
 elif command -v pacman >/dev/null; then
@@ -303,6 +311,7 @@ sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
     -e "s|@DASH_PORT@|$DASH_PORT|g" -e "s|@ALLOWED_USERS@|$ALLOWED_USERS|g" \
     -e "s|@TOOLPATH@|$TOOLPATH|g" -e "s|@DOCKER_HOST@|$DOCKER_HOSTV|g" \
     -e "s|@UNITS@|$UNITS|g" -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" \
+    -e "s|@PYTHON@|$PYTHON_BIN|g" \
     "$REPO_DIR/systemd/gravedecay.service.tmpl" | sudo tee /etc/systemd/system/gravedecay.service >/dev/null
 sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
     -e "s|@TOOLPATH@|$TOOLPATH|g" -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" \
@@ -333,10 +342,12 @@ if [[ "${MULTI_USER:-0}" == 1 ]]; then
     (umask 077; python3 -c 'import secrets; print(secrets.token_hex(32))' >"$GRAVE_ROOT/config/secrets/gateway-token")
   fi
   chmod 600 "$GRAVE_ROOT/config/secrets/gateway-token"
-  sed -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" "$REPO_DIR/systemd/gravedecay-gateway.service.tmpl" \
+  sed -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" -e "s|@PYTHON@|$PYTHON_BIN|g" \
+      "$REPO_DIR/systemd/gravedecay-gateway.service.tmpl" \
     | sudo tee /etc/systemd/system/gravedecay-gateway.service >/dev/null
   for template in gravedecay-t3@ gravedecay-term@ gravedecay-dashboard@; do
-    sed -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" "$REPO_DIR/systemd/$template.service.tmpl" \
+    sed -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" -e "s|@PYTHON@|$PYTHON_BIN|g" \
+        "$REPO_DIR/systemd/$template.service.tmpl" \
       | sudo tee "/etc/systemd/system/$template.service" >/dev/null
   done
   sudo systemctl daemon-reload

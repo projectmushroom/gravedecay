@@ -10,7 +10,7 @@ OnFailure=gravedecay-notify@%n.service
 Type=simple
 User=root
 Group=root
-ExecStart=/usr/bin/python3 @GRAVE_ROOT@/scripts/gateway.py
+ExecStart=@PYTHON@ @GRAVE_ROOT@/scripts/gateway.py
 Environment=GRAVE_ROOT=@GRAVE_ROOT@
 Environment=GRAVE_GATEWAY_PORT=4710
 Restart=always
