@@ -205,11 +205,21 @@ if [[ "$MANAGED_TOOLCHAIN" == 1 ]]; then
       || skip "python 'cryptography' unavailable — Web Push disabled (ntfy unaffected)"
   fi
 elif command -v pacman >/dev/null; then
-  sudo pacman -S --needed --noconfirm git tmux curl jq python docker docker-compose \
-    nodejs npm ufw lm_sensors python-pillow python-cryptography ttyd
+  # Probe first (pacman -T is an unprivileged query): a steady-state re-raise
+  # — the headless upgrade path (#89) — must not run sudo pacman, which is
+  # outside the scoped NOPASSWD grant and dies at a password prompt there.
+  PACMAN_PKGS=(git tmux curl jq python docker docker-compose nodejs npm ufw
+    lm_sensors python-pillow python-cryptography ttyd)
+  if pacman -T "${PACMAN_PKGS[@]}" >/dev/null; then
+    skip "packages already installed — no privileged install"
+  else
+    sudo pacman -S --needed --noconfirm "${PACMAN_PKGS[@]}"
+  fi
   ok "packages present"
 elif command -v apt-get >/dev/null; then
-  sudo apt-get update -qq
+  # non-fatal: headless re-raise (#89) has no password for out-of-scope sudo,
+  # and the install below already tolerates failure the same way
+  sudo apt-get update -qq || skip "apt-get update failed (headless re-raise?) — continuing"
   sudo apt-get install -y git tmux curl jq python3 docker.io docker-compose-v2 \
     nodejs npm ufw lm-sensors python3-pil python3-cryptography ttyd || skip "some packages failed — fix names for your distro and rerun"
   ok "packages present"

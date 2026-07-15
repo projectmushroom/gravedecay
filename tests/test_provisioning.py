@@ -54,6 +54,11 @@ class ProvisioningSafetyTests(unittest.TestCase):
         # the classic offenders must be gone from raise.sh entirely
         self.assertNotIn("sudo sed -i", RAISE)
         self.assertNotIn("sudo tee /etc/systemd/system/gravedecay", RAISE)
+        # package steps: pacman probes before any privileged install (found by
+        # the #85 smoke harness — every Arch re-raise ran sudo pacman), and
+        # apt-get update is non-fatal like the install below it already was
+        self.assertIn('if pacman -T "${PACMAN_PKGS[@]}"', RAISE)
+        self.assertNotIn("sudo apt-get update -qq\n", RAISE)
 
     def test_profile_conf_set_skips_when_value_already_set(self):
         # Regression #89: profiles run on every raise; conf_set must be a
