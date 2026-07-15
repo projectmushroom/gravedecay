@@ -779,6 +779,13 @@ def _webpush_encrypt(p256dh, auth, payload, _salt=None, _eph=None):
     return header + body
 
 
+# RFC 8292 contact claim. MUST be a real-shaped contact: Apple validates it
+# and answers 403 BadJwtToken for e.g. a hostname-derived mailto with no TLD
+# (#97) — Chrome/Firefox don't care, so only iOS devices went dark. Both this
+# URL and a syntactically valid mailto are verified accepted by Apple.
+VAPID_SUB = "https://github.com/projectmushroom/gravedecay"
+
+
 def _vapid_auth(endpoint):
     """RFC 8292 Authorization header: ES256 JWT audienced to the push service."""
     c = _webpush_crypto()
@@ -786,7 +793,7 @@ def _vapid_auth(endpoint):
     origin = urllib.parse.urlparse(endpoint)
     claims = {"aud": f"{origin.scheme}://{origin.netloc}",
               "exp": int(time.time()) + 12 * 3600,
-              "sub": f"mailto:gravedecay@{HOST}"}
+              "sub": VAPID_SUB}
     head = _b64u(json.dumps({"typ": "JWT", "alg": "ES256"}).encode())
     body = _b64u(json.dumps(claims).encode())
     der = key.sign(f"{head}.{body}".encode(), c["ec"].ECDSA(c["hashes"].SHA256()))
@@ -835,14 +842,23 @@ def push_send(data):
             if e.code in (404, 410):
                 gone.append(sub["endpoint"])
             else:
-                errors.append(f"{sub['label']}: HTTP {e.code}")
+                # Keep the service's reason body: a bare "HTTP 403" hides the
+                # difference between BadJwtToken, VapidPkHashMismatch, … (#97)
+                try:
+                    detail = " " + e.read(200).decode("utf-8", "replace").strip()
+                except Exception:
+                    detail = ""
+                errors.append(f"{sub['label']}: HTTP {e.code}{detail}")
         except Exception as e:
             errors.append(f"{sub['label']}: {e}")
     if gone:
         with _PUSH_LOCK:
             _save_push_subs([s for s in _load_push_subs() if s["endpoint"] not in gone])
+    summary = f"pushed to {sent}/{len(subs)} device(s)"
+    if errors:
+        summary += " — " + "; ".join(errors[:2])
     return {"ok": sent > 0, "sent": sent, "pruned": len(gone), "errors": errors[:5],
-            "output": f"pushed to {sent}/{len(subs)} device(s)"}
+            "output": summary}
 
 
 def _read_env_file(path):
@@ -2723,7 +2739,11 @@ $('push-enable').onclick=async()=>{
     if(!j.ok){notifyMsg(j.output||'enroll failed');return;}
     localStorage.setItem('grave-push-id',j.id);
     notifyMsg('🔔 this device is enrolled — try 📣 send test');
-    poll();setTimeout(()=>{if(notifyInfo)buildNotify();},800);
+    // render() deliberately won't adopt state while the modal is open, so pull
+    // the fresh device list directly — otherwise "no devices enrolled" lingers
+    // right after a successful enroll (#97).
+    try{const s=await(await fetch('api/state')).json();
+      if(s.notify){notifyInfo=s.notify;buildNotify();}}catch(e){}
   }catch(e){notifyMsg('enable failed: '+e);}
 };
 $('ntfy-clear').onclick=async()=>{

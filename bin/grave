@@ -559,14 +559,20 @@ ntfy_send() { # ntfy_send <title> <body> <priority>
   curl "${args[@]}" --data-raw "$body" "$NTFY_URL"
 }
 
+PUSH_ERROR=""
 push_send() { # push_send <title> <body> <priority> <link> <event>
   # jq builds the JSON so a hostile session name can't break out of the
-  # payload; the dashboard validates the link (on-origin paths only) and
-  # answers non-2xx when it delivered to zero devices, which -f surfaces.
-  jq -n --arg t "$1" --arg b "$2" --arg p "$3" --arg u "$4" --arg e "$5" \
+  # payload; the dashboard validates the link (on-origin paths only). Keep the
+  # response: its output carries the push service's rejection reason (#97 —
+  # discarding it turned Apple's 'BadJwtToken' into a bare 'delivery failed').
+  local resp
+  resp=$(jq -n --arg t "$1" --arg b "$2" --arg p "$3" --arg u "$4" --arg e "$5" \
       '{title:$t, body:$b, priority:$p, url:$u, tag:(if $e=="" then "manual" else $e end)}' \
-    | curl -sf -m 15 -o /dev/null -X POST -H 'Content-Type: application/json' \
-        --data-binary @- "http://127.0.0.1:${DASH_PORT:-4712}/api/push-send"
+    | curl -s -m 15 -X POST -H 'Content-Type: application/json' \
+        --data-binary @- "http://127.0.0.1:${DASH_PORT:-4712}/api/push-send") || { PUSH_ERROR="dashboard unreachable"; return 1; }
+  jq -e .ok <<<"$resp" >/dev/null 2>&1 && return 0
+  PUSH_ERROR=$(jq -r '.output // "push failed"' <<<"$resp" 2>/dev/null)
+  return 1
 }
 
 notify_send() { # notify_send <title> <body> <priority> <link> <event> — ok if ANY channel delivered
@@ -610,7 +616,7 @@ cmd_notify() { # grave notify [--event <name>] [--priority <p>] [--link </path>]
     for e in $NOTIFY_EVENTS; do [[ "$e" == "$event" ]] && enabled=1; done
     (( enabled )) || exit 0
     [[ -n "$title" ]] || exit 0
-    notify_send "$title" "${body:-$event}" "$priority" "$link" "$event" || { log "notify: $event delivery failed"; exit 0; }
+    notify_send "$title" "${body:-$event}" "$priority" "$link" "$event" || { log "notify: $event delivery failed${PUSH_ERROR:+ — $PUSH_ERROR}"; exit 0; }
     log "notify: $event — $title"
     exit 0
   fi
@@ -624,7 +630,7 @@ cmd_notify() { # grave notify [--event <name>] [--priority <p>] [--link </path>]
     say "  Full guide: docs/NOTIFICATIONS.md"
     exit 1
   }
-  notify_send "$title" "$body" "$priority" "$link" "" || { bad "delivery failed on every channel (ntfy config / enrolled devices?)"; exit 1; }
+  notify_send "$title" "$body" "$priority" "$link" "" || { bad "delivery failed on every channel${PUSH_ERROR:+ — $PUSH_ERROR}"; exit 1; }
   ok "notification sent"
   log "notify: manual — $title"
 }
