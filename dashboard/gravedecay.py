@@ -925,6 +925,29 @@ class Handler(BaseHTTPRequestHandler):
             return True
         return False
 
+    def _cross_site(self):
+        """True (and a 403 already sent) if this state-changing request looks
+        cross-site. Auth here is ambient — tailscale serve stamps the requesting
+        node's login on EVERY browser request, including one forged by a
+        malicious page — so without this a cross-site <img>/form/fetch to a GET
+        action or a text/plain POST runs with the victim's identity (CSRF).
+
+        Modern browsers stamp Sec-Fetch-Site and a cross-origin page cannot forge
+        it; note another *.ts.net box is 'same-site', so only 'same-origin' (the
+        dashboard's own fetch) and 'none' (a user typing the URL) are accepted.
+        Requests without the header are non-browser clients (curl, local tooling)
+        — allowed, but an Origin whose host mismatches is refused as an
+        older-browser fallback."""
+        site = self.headers.get("Sec-Fetch-Site")
+        if site is not None:
+            ok = site in ("same-origin", "none")
+        else:
+            origin = self.headers.get("Origin")
+            ok = (not origin) or urllib.parse.urlparse(origin).netloc == self.headers.get("Host", "")
+        if not ok:
+            self._send(403, json.dumps({"ok": False, "output": "cross-site request refused"}))
+        return not ok
+
     def _query(self, key, default=""):
         qs = self.path.split("?", 1)[1] if "?" in self.path else ""
         return urllib.parse.parse_qs(qs).get(key, [default])[0]
@@ -1043,6 +1066,8 @@ class Handler(BaseHTTPRequestHandler):
         viewer = self.headers.get("Tailscale-User-Login")
         if viewer is not None and viewer not in ALLOWED_USERS:
             self._send(403, json.dumps({"ok": False, "output": f"forbidden for {viewer}"}))
+            return
+        if self._cross_site():   # actions run on a GET, so <img src=…?action=reboot> is CSRF
             return
         qs = self.path.split("?", 1)[1] if "?" in self.path else ""
         action = dict(kv.split("=", 1) for kv in qs.split("&") if "=" in kv).get("action", "")
@@ -1170,6 +1195,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(403, json.dumps({
                 "ok": False,
                 "output": f"forbidden for {viewer} — add to GRAVEDECAY_ALLOWED_USERS"}))
+            return
+        if self._cross_site():
             return
         # Upload is a raw-body PUT-style POST — handle it BEFORE the JSON parse
         # below would try to json.loads() a multi-gigabyte file body.

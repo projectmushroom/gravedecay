@@ -239,6 +239,41 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("repos", DASHBOARD._ttl_cache)
         self.assertIs(DASHBOARD.collect_repos(), first)
 
+    def _send_with_site(self, path, method, site, data=None):
+        body = json.dumps(data).encode() if data is not None else None
+        headers = {"Sec-Fetch-Site": site}
+        if data is not None:
+            headers["Content-Type"] = "application/json"
+        request = urllib.request.Request(self.origin + path, data=body,
+                                         method=method, headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=2) as response:
+                return response.status, response.read().decode()
+        except urllib.error.HTTPError as error:
+            return error.code, error.read().decode()
+
+    def test_state_changing_routes_reject_cross_site_requests(self):
+        # Regression #46 (CSRF): the GET action runner and the POSTs must refuse
+        # cross-site requests, even though the ambient Tailscale identity is valid.
+        code, body = self._send_with_site("/api/action-stream?action=reboot", "GET", "cross-site")
+        self.assertEqual(code, 403)
+        self.assertIn("cross-site", body)
+        code, _ = self._send_with_site("/api/session-kill", "POST", "cross-site", {"name": "x"})
+        self.assertEqual(code, 403)
+        # another *.ts.net box is same-site, not same-origin — also refused
+        code, _ = self._send_with_site("/api/session-kill", "POST", "same-site", {"name": "x"})
+        self.assertEqual(code, 403)
+
+    def test_same_origin_requests_pass_the_csrf_gate(self):
+        # same-origin (the dashboard's own fetch) reaches the handler's own
+        # validation rather than being refused as cross-site.
+        code, body = self._send_with_site("/api/action-stream?action=__nope__", "GET", "same-origin")
+        self.assertEqual(code, 400)
+        self.assertIn("unknown action", body)
+        code, body = self._send_with_site("/api/session-kill", "POST", "same-origin", {"name": "!!bad!!"})
+        self.assertEqual(code, 400)
+        self.assertIn("bad session name", body)
+
     def test_offline_shell_contains_no_machine_state(self):
         with self.get("/offline.html") as response:
             page = response.read().decode()
