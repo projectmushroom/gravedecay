@@ -11,7 +11,10 @@ conf_set() {
   # Rewrite the key if present, else append it. A plain `sed s|^K=.*|` silently
   # no-ops when the key is missing (an older grave.conf preserved across upgrade),
   # so a CHECK_* invariant the profile sets would never reach `grave doctor`.
-  if sudo grep -q "^$1=" /etc/gravedecay/grave.conf; then
+  # Exact value already present -> skip entirely: keeps a steady-state re-raise
+  # sudo-free (#89); grave.conf is world-readable so neither check needs sudo.
+  grep -qxF "$1=$2" /etc/gravedecay/grave.conf 2>/dev/null && return 0
+  if grep -q "^$1=" /etc/gravedecay/grave.conf; then
     sudo sed -i "s|^$1=.*|$1=$2|" /etc/gravedecay/grave.conf
   else
     printf '%s=%s\n' "$1" "$2" | sudo tee -a /etc/gravedecay/grave.conf >/dev/null
@@ -23,15 +26,17 @@ profile_apply() {
   sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
   conf_set CHECK_SLEEP_MASKED 1
 
-  # ignore the lid at logind level (box lives closed in a corner)
-  sudo mkdir -p /etc/systemd/logind.conf.d
-  sudo tee /etc/systemd/logind.conf.d/50-gravedecay-lid.conf >/dev/null <<'EOF'
-[Login]
-HandleLidSwitch=ignore
-HandleLidSwitchExternalPower=ignore
-HandleLidSwitchDocked=ignore
-EOF
-  sudo systemctl restart systemd-logind
+  # ignore the lid at logind level (box lives closed in a corner). Compare
+  # first: logind.conf.d is outside the scoped sudoers, so a steady-state
+  # re-raise (#89) must not rewrite it — and skipping also spares an
+  # unnecessary logind restart on every raise.
+  lid_conf=/etc/systemd/logind.conf.d/50-gravedecay-lid.conf
+  lid_want=$'[Login]\nHandleLidSwitch=ignore\nHandleLidSwitchExternalPower=ignore\nHandleLidSwitchDocked=ignore'
+  if [[ "$(cat "$lid_conf" 2>/dev/null)" != "$lid_want" ]]; then
+    [[ -d /etc/systemd/logind.conf.d ]] || sudo mkdir -p /etc/systemd/logind.conf.d
+    printf '%s\n' "$lid_want" | sudo tee "$lid_conf" >/dev/null
+    sudo systemctl restart systemd-logind
+  fi
   conf_set CHECK_LID_IGNORED 1
 
   # pin amdgpu to a fixed DPM state (level 3 ≈ mid clock; adjust per card)
