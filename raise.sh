@@ -318,14 +318,17 @@ sudoers_stamp="$GRAVE_ROOT/config/.sudoers.sha256"
 sudoers_hash=$(printf '%s\n%s\n' "$SUDOERS_FILE" "$sudoers_content" | sha256sum | cut -d' ' -f1)
 if [[ -r "$sudoers_stamp" && "$(cat "$sudoers_stamp")" == "$sudoers_hash" ]]; then
   skip "sudoers unchanged ($SUDOERS_FILE)"
-elif ! sudo -n -l /usr/bin/visudo >/dev/null 2>&1 \
-     && [[ -e "$SUDOERS_FILE" ]] && sudo -n systemctl --version >/dev/null 2>&1; then
-  # Headless (no password available: visudo isn't in the NOPASSWD scope) with a
-  # working scoped grant already installed but no/stale stamp — boxes raised
-  # before the stamp existed land here on their first button-upgrade. Refusing
-  # to die: the installed grant demonstrably works (the scoped systemctl probe
-  # just used it); content refresh waits for the next interactive raise.
-  skip "sudoers present but unverifiable without a password — run ./raise.sh from a terminal once to refresh it"
+elif [[ ! -t 0 && -e "$SUDOERS_FILE" ]] && sudo -n systemctl --version >/dev/null 2>&1; then
+  # Headless (no TTY — the self-upgrade unit) with a working scoped grant
+  # already installed but no/stale stamp: boxes raised before the stamp
+  # existed land here on their first button-upgrade. The rewrite below needs
+  # sudo outside the NOPASSWD scope (mktemp/visudo/install) and would die at
+  # a password prompt no one can answer, while the installed grant
+  # demonstrably works (the scoped systemctl probe just used it) — so defer
+  # the refresh to the next interactive raise. NOTE `sudo -l <cmd>` cannot
+  # make this call: it answers "allowed at all" (yes, via a password-requiring
+  # wheel rule), not "allowed without a password".
+  skip "sudoers present but not refreshable without a terminal — run ./raise.sh interactively to update it"
 else
   [[ "$SUDOERS_FILE" == /etc/sudoers.d/zz-gravedecay ]] && sudo rm -f /etc/sudoers.d/50-gravedecay
   # Validate on a temp file BEFORE installing into /etc/sudoers.d — a syntactically
