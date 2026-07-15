@@ -54,6 +54,11 @@ are expected to solve yourself: package name differences (`docker` vs
 
 ## 4. Secrets & MCP (optional, per integration)
 
+Optional but high-value: notifications — an ntfy topic in
+`$GRAVE_ROOT/config/secrets/notify.env` makes agents, failing units, and
+doctor page the human's phone (`docs/NOTIFICATIONS.md`; doctor verifies the
+channel once configured).
+
 Follow `docs/SECRETS.md`. Pattern: key in
 `$GRAVE_ROOT/config/secrets/<name>.env` (600), systemd drop-in
 `EnvironmentFile` on t3code.service, register the MCP server in **both**

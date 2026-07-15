@@ -217,7 +217,8 @@ permission/approval gates off; power-tool for this single-human box, see
 `docs/SECURITY.md`), refresh rate, **one-tap T3 pairing tokens** (mints a
 15-minute token + ready `/pair` link for enrolling a new phone/laptop),
 re-auth Claude/Codex/GitHub (opens the terminal running the real login flow),
-Linear API key.
+Linear API key, and **🔔 notifications** — enroll this device for Web Push,
+set the ntfy channel, choose which events page you, send a test.
 
 Mode flips and doctor runs stream their real output live into a
 terminal-styled **boot console** — burial and startup sequences, line by line.
@@ -253,6 +254,20 @@ vitals view, stops calling remote APIs, and slows its polling — the resource
 diet is enforced, not implied. Tailscale, SSH, dashboard, and terminal stay
 up; you can always get back in.
 
+## Notifications — the box wakes you
+
+Two channels, use either or both: **Web Push to the installed PWA** (⚙️
+settings → Notifications → 🔔 enable — native notifications on
+iPhone/iPad/Android/desktop, end-to-end encrypted, a tap deep-links back into
+the app) and/or an **[ntfy](https://ntfy.sh)** topic in
+`config/secrets/notify.env`. The box then pages you: agent sessions ending,
+agents ringing the bell (waiting on a prompt), a platform unit failing, a
+failing `grave doctor`. Event classes are muteable from the same settings
+panel, everything ships wired but silent until you opt in, and
+`grave notify "msg"` is yours for scripting
+(`long-build; grave notify "build done"`). Doctor verifies whatever channels
+you configure. See [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md).
+
 ## Previewing a dev server
 
 Start a project's dev server on the box (keep it bound to `127.0.0.1`), then:
@@ -285,6 +300,7 @@ grave preview 3000               # expose a dev server at https://<box>.ts.net:3
 grave logs t3|dash|term|<unit>   # follow logs
 grave update                     # snapshot (if snapper), update pkgs/npm/images
 grave backup / restore           # git bundles + configs + docker volumes
+grave notify "title" ["body"]    # page your devices (PWA push + ntfy)
 ```
 
 ## What raise.sh does
@@ -331,6 +347,7 @@ is in `docs/SECRETS.md`.
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Why native-first, layout, mode model |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, tailnet-only, sudoers scope, terminal trust |
 | [docs/SECRETS.md](docs/SECRETS.md) | Secrets + MCP wiring for agent CLIs |
+| [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md) | Notifications: Web Push to the PWA + ntfy — agents, failing units, and doctor page your phone |
 | [docs/PORTS.md](docs/PORTS.md) | Every port, documented or it doesn't exist |
 | [docs/RECOVERY.md](docs/RECOVERY.md) | Backup/restore procedures |
 

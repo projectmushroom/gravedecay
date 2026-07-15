@@ -4,6 +4,9 @@ Description=gravedecay self-heal (post-boot drift check + stack recovery)
 # sure the dev stacks came back. See docs/STEAMOS.md.
 After=multi-user.target network-online.target
 Wants=network-online.target
+# Page the human if this unit lands in failed state (silent no-op unless
+# notifications are configured -- see docs/NOTIFICATIONS.md).
+OnFailure=gravedecay-notify@%n.service
 
 [Service]
 Type=oneshot

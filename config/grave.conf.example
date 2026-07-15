@@ -48,6 +48,17 @@ NPM_GLOBAL_TOOLS=(t3)
 BACKUP_DIR="$GRAVE_ROOT/backups"
 BACKUP_KEEP=7
 
+# Notifications (`grave notify`, docs/NOTIFICATIONS.md). The channels live
+# elsewhere — ntfy in $GRAVE_ROOT/config/secrets/notify.env (NTFY_URL +
+# optional NTFY_TOKEN, 600), Web Push devices enrolled from ⚙️ settings —
+# this only picks which event classes may page the human. The dashboard's
+# ⚙️ checkboxes write $GRAVE_ROOT/config/notify-events, which overrides this
+# value when present. Remove a word to mute that class:
+#   session-exit / bell  agent tmux sessions ending / ringing the bell
+#   unit-failure         a platform systemd unit entered failed state
+#   doctor               a doctor run found failing checks
+NOTIFY_EVENTS="session-exit bell unit-failure doctor"
+
 # `grave upgrade` — where the gravedecay checkout lives, and which channel:
 # release = latest v* tag (recommended), edge = main branch (for developers)
 REPO_DIR="$GRAVE_ROOT/repos/gravedecay"

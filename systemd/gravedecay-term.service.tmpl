@@ -2,6 +2,9 @@
 Description=gravedecay web terminal (ttyd -> tmux agents socket)
 After=network-online.target
 Wants=network-online.target
+# Page the human if this unit lands in failed state (silent no-op unless
+# notifications are configured -- see docs/NOTIFICATIONS.md).
+OnFailure=gravedecay-notify@%n.service
 
 [Service]
 Type=simple

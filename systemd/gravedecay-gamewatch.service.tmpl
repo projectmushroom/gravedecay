@@ -4,6 +4,9 @@ Description=gravedecay game-mode auto-throttle (freeze agents while gaming)
 # flag file $GRAVE_ROOT/config/gamewatch.on — see docs/STEAMOS.md.
 After=multi-user.target
 Wants=network-online.target
+# Page the human if this unit lands in failed state (silent no-op unless
+# notifications are configured -- see docs/NOTIFICATIONS.md).
+OnFailure=gravedecay-notify@%n.service
 
 [Service]
 Type=simple

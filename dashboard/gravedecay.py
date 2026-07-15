@@ -16,6 +16,8 @@
 #                             gravedecay is the appliance's single entry point:
 #                             every app you mount (T3, future ones) gets a tile.
 
+import base64
+import binascii
 import functools
 import glob
 import hashlib
@@ -28,6 +30,7 @@ import socket
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -244,6 +247,22 @@ self.addEventListener('activate',event=>{
 self.addEventListener('fetch',event=>{
   if(event.request.mode!=='navigate')return;
   event.respondWith(fetch(event.request).catch(()=>caches.match(OFFLINE)));
+});
+self.addEventListener('push',event=>{
+  let d={};
+  try{d=event.data?event.data.json():{};}
+  catch(e){d={body:event.data&&event.data.text()};}
+  event.waitUntil(self.registration.showNotification(d.title||'gravedecay',{
+    body:d.body||'',icon:'icon-192.png',badge:'icon-192.png',
+    tag:d.tag||'gravedecay',data:{url:d.url||'./'}}));
+});
+self.addEventListener('notificationclick',event=>{
+  event.notification.close();
+  const url=new URL((event.notification.data&&event.notification.data.url)||'./',self.location.href).href;
+  event.waitUntil(clients.matchAll({type:'window',includeUncontrolled:true}).then(list=>{
+    for(const c of list){if(c.url===url&&'focus'in c)return c.focus();}
+    return clients.openWindow(url);
+  }));
 });
 """
 
@@ -605,6 +624,318 @@ def save_linear_key(key):
     _ttl_cache.pop("linear", None)
 
 
+# ---------- notifications: ntfy channel + Web Push (docs/NOTIFICATIONS.md) ----------
+# grave notify owns delivery to ntfy; the dashboard owns Web Push to enrolled
+# PWA devices (it holds the VAPID key and the subscription store) and exposes
+# /api/push-send on loopback so grave's push leg is one curl away.
+NOTIFY_ENV = os.path.join(GRAVE_ROOT, "config", "secrets", "notify.env")
+# Event-class override written by the ⚙️ checkboxes. grave prefers this file
+# over grave.conf's NOTIFY_EVENTS because the dashboard runs unprivileged and
+# must not need sudo to flip a notification preference (same reasoning as the
+# gamewatch flag file).
+NOTIFY_EVENTS_PATH = os.path.join(GRAVE_ROOT, "config", "notify-events")
+NOTIFY_CLASSES = ["session-exit", "bell", "unit-failure", "doctor"]
+GRAVE_CONF = os.environ.get("GRAVE_CONF", "/etc/gravedecay/grave.conf")
+VAPID_PEM = os.path.join(GRAVE_ROOT, "config", "secrets", "vapid.pem")
+PUSH_SUBS_PATH = os.path.join(GRAVE_ROOT, "config", "push-subscriptions.json")
+PUSH_SUBS_MAX = 10
+_PUSH_LOCK = threading.Lock()
+
+
+@functools.cache
+def _webpush_crypto():
+    """cryptography primitives for Web Push (VAPID ES256 + RFC 8291 aes128gcm).
+    Optional exactly like PIL: without python3-cryptography the dashboard runs
+    fine and Web Push reports itself unsupported (ntfy is unaffected).
+    Hand-rolling EC/AES-GCM in stdlib is the one thing we refuse to do here."""
+    try:
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+        return {"hashes": hashes, "serialization": serialization, "ec": ec,
+                "decode_dss": decode_dss_signature, "AESGCM": AESGCM, "HKDF": HKDF}
+    except Exception:
+        return None
+
+
+def _b64u(data):
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def _b64u_dec(s):
+    s = str(s).strip()
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def vapid_private_key():
+    """Load-or-create the appliance's VAPID signing key (P-256, PEM, 600 in the
+    secret store). One key per box: rotating it orphans every subscription."""
+    c = _webpush_crypto()
+    if not c:
+        return None
+    ser, ec = c["serialization"], c["ec"]
+    try:
+        with open(VAPID_PEM, "rb") as f:
+            return ser.load_pem_private_key(f.read(), password=None)
+    except (OSError, ValueError):
+        pass
+    key = ec.generate_private_key(ec.SECP256R1())
+    pem = key.private_bytes(ser.Encoding.PEM, ser.PrivateFormat.PKCS8, ser.NoEncryption())
+    os.makedirs(os.path.dirname(VAPID_PEM), mode=0o700, exist_ok=True)
+    fd = os.open(VAPID_PEM, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(pem)
+    return key
+
+
+def vapid_public_b64():
+    key = vapid_private_key()
+    if not key:
+        return None
+    ser = _webpush_crypto()["serialization"]
+    raw = key.public_key().public_bytes(ser.Encoding.X962, ser.PublicFormat.UncompressedPoint)
+    return _b64u(raw)
+
+
+def _load_push_subs():
+    try:
+        with open(PUSH_SUBS_PATH) as f:
+            subs = json.load(f).get("subscriptions", [])
+        return [s for s in subs if isinstance(s, dict) and s.get("endpoint")]
+    except (OSError, ValueError):
+        return []
+
+
+def _save_push_subs(subs):
+    tmp = PUSH_SUBS_PATH + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump({"subscriptions": subs}, f, indent=2)
+    os.replace(tmp, PUSH_SUBS_PATH)
+
+
+def _sub_id(endpoint):
+    """Stable opaque device id. The endpoint itself is a push-service
+    capability URL — it never leaves the box (the UI sees only this hash)."""
+    return hashlib.sha256(endpoint.encode()).hexdigest()[:12]
+
+
+def push_subscribe(data):
+    sub = data.get("subscription") or {}
+    endpoint = str(sub.get("endpoint", ""))
+    keys = sub.get("keys") or {}
+    if not endpoint.startswith("https://") or len(endpoint) > 1024:
+        return {"ok": False, "output": "bad endpoint"}
+    try:
+        p256dh = _b64u_dec(keys.get("p256dh", ""))
+        auth = _b64u_dec(keys.get("auth", ""))
+    except (ValueError, binascii.Error):
+        return {"ok": False, "output": "bad subscription keys"}
+    if len(p256dh) != 65 or p256dh[:1] != b"\x04" or len(auth) != 16:
+        return {"ok": False, "output": "bad subscription keys"}
+    label = re.sub(r"[^\w .,/()\-]", "", str(data.get("label", "")))[:40] or "device"
+    entry = {"endpoint": endpoint, "p256dh": _b64u(p256dh), "auth": _b64u(auth),
+             "label": label, "added": time.strftime("%Y-%m-%d %H:%M")}
+    with _PUSH_LOCK:
+        subs = [s for s in _load_push_subs() if s["endpoint"] != endpoint]
+        subs.append(entry)
+        subs = subs[-PUSH_SUBS_MAX:]
+        _save_push_subs(subs)
+    return {"ok": True, "id": _sub_id(endpoint), "devices": len(subs)}
+
+
+def push_unsubscribe(data):
+    endpoint, sid = str(data.get("endpoint", "")), str(data.get("id", ""))
+    with _PUSH_LOCK:
+        subs = _load_push_subs()
+        kept = [s for s in subs
+                if s["endpoint"] != endpoint and _sub_id(s["endpoint"]) != sid]
+        _save_push_subs(kept)
+    return {"ok": True, "removed": len(subs) - len(kept)}
+
+
+def _webpush_encrypt(p256dh, auth, payload, _salt=None, _eph=None):
+    """RFC 8291 aes128gcm message encryption (single record, minimal padding).
+    _salt/_eph exist ONLY so the test suite can pin the RFC's Appendix A
+    vector; production callers never pass them."""
+    c = _webpush_crypto()
+    ec, hashes, HKDF, AESGCM = c["ec"], c["hashes"], c["HKDF"], c["AESGCM"]
+    ser = c["serialization"]
+    ua_pub = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), p256dh)
+    eph = _eph or ec.generate_private_key(ec.SECP256R1())
+    as_pub = eph.public_key().public_bytes(ser.Encoding.X962, ser.PublicFormat.UncompressedPoint)
+    shared = eph.exchange(ec.ECDH(), ua_pub)
+    prk = HKDF(algorithm=hashes.SHA256(), length=32, salt=auth,
+               info=b"WebPush: info\x00" + p256dh + as_pub).derive(shared)
+    salt = _salt or os.urandom(16)
+    cek = HKDF(algorithm=hashes.SHA256(), length=16, salt=salt,
+               info=b"Content-Encoding: aes128gcm\x00").derive(prk)
+    nonce = HKDF(algorithm=hashes.SHA256(), length=12, salt=salt,
+                 info=b"Content-Encoding: nonce\x00").derive(prk)
+    body = AESGCM(cek).encrypt(nonce, payload + b"\x02", None)
+    header = salt + (4096).to_bytes(4, "big") + bytes([len(as_pub)]) + as_pub
+    return header + body
+
+
+def _vapid_auth(endpoint):
+    """RFC 8292 Authorization header: ES256 JWT audienced to the push service."""
+    c = _webpush_crypto()
+    key = vapid_private_key()
+    origin = urllib.parse.urlparse(endpoint)
+    claims = {"aud": f"{origin.scheme}://{origin.netloc}",
+              "exp": int(time.time()) + 12 * 3600,
+              "sub": f"mailto:gravedecay@{HOST}"}
+    head = _b64u(json.dumps({"typ": "JWT", "alg": "ES256"}).encode())
+    body = _b64u(json.dumps(claims).encode())
+    der = key.sign(f"{head}.{body}".encode(), c["ec"].ECDSA(c["hashes"].SHA256()))
+    r, s = c["decode_dss"](der)
+    sig = _b64u(r.to_bytes(32, "big") + s.to_bytes(32, "big"))
+    return f"vapid t={head}.{body}.{sig}, k={vapid_public_b64()}"
+
+
+PUSH_URGENCY = {"min": "very-low", "low": "low", "default": "normal",
+                "high": "high", "urgent": "high"}
+
+
+def push_send(data):
+    """Deliver one notification to every enrolled device. Callers: grave
+    notify's push leg (loopback curl) and the ⚙️ test button. 404/410 from the
+    push service means the subscription is dead — prune it so the store
+    self-heals when a device revokes permission or reinstalls the PWA."""
+    if not _webpush_crypto():
+        return {"ok": False, "output": "python3-cryptography missing — Web Push unavailable"}
+    with _PUSH_LOCK:
+        subs = _load_push_subs()
+    if not subs:
+        return {"ok": False, "output": "no devices enrolled"}
+    title = str(data.get("title", ""))[:120] or "gravedecay"
+    body = str(data.get("body", ""))[:500]
+    url = str(data.get("url", ""))
+    if not url.startswith("/") or url.startswith("//"):
+        url = ""   # deep links must stay on this origin; anything else is dropped
+    tag = re.sub(r"[^\w-]", "", str(data.get("tag", "")))[:40] or "gravedecay"
+    payload = json.dumps({"title": title, "body": body,
+                          "url": url or None, "tag": tag}).encode()
+    urgency = PUSH_URGENCY.get(str(data.get("priority", "default")), "normal")
+    sent, gone, errors = 0, [], []
+    for sub in subs:
+        try:
+            message = _webpush_encrypt(_b64u_dec(sub["p256dh"]), _b64u_dec(sub["auth"]), payload)
+            req = urllib.request.Request(sub["endpoint"], data=message, method="POST", headers={
+                "TTL": "86400", "Urgency": urgency,
+                "Content-Encoding": "aes128gcm",
+                "Content-Type": "application/octet-stream",
+                "Authorization": _vapid_auth(sub["endpoint"]),
+            })
+            with urllib.request.urlopen(req, timeout=10):
+                sent += 1
+        except urllib.error.HTTPError as e:
+            if e.code in (404, 410):
+                gone.append(sub["endpoint"])
+            else:
+                errors.append(f"{sub['label']}: HTTP {e.code}")
+        except Exception as e:
+            errors.append(f"{sub['label']}: {e}")
+    if gone:
+        with _PUSH_LOCK:
+            _save_push_subs([s for s in _load_push_subs() if s["endpoint"] not in gone])
+    return {"ok": sent > 0, "sent": sent, "pruned": len(gone), "errors": errors[:5],
+            "output": f"pushed to {sent}/{len(subs)} device(s)"}
+
+
+def _read_env_file(path):
+    vals = {}
+    try:
+        with open(path) as f:
+            for line in f:
+                k, _, v = line.strip().partition("=")
+                if k and v:
+                    vals[k] = v
+    except OSError:
+        pass
+    return vals
+
+
+def ntfy_configured():
+    return _read_env_file(NOTIFY_ENV).get("NTFY_URL", "").startswith("http")
+
+
+def save_ntfy(url=None, token=None, clear=False):
+    """Write the ntfy channel into the secret store. Empty fields keep the
+    existing value (matching the UI's 'leave empty to keep' contract)."""
+    if clear:
+        try:
+            os.remove(NOTIFY_ENV)
+        except OSError:
+            pass
+        return
+    vals = _read_env_file(NOTIFY_ENV)
+    if url:
+        if not re.fullmatch(r"https?://[^\s\"'`\\]+", url):
+            raise ValueError("bad ntfy url")
+        vals["NTFY_URL"] = url
+    if token:
+        if not re.fullmatch(r"[\w.\-]{1,200}", token):
+            raise ValueError("bad ntfy token")
+        vals["NTFY_TOKEN"] = token
+    if not vals.get("NTFY_URL"):
+        raise ValueError("ntfy url required")
+    os.makedirs(os.path.dirname(NOTIFY_ENV), mode=0o700, exist_ok=True)
+    fd = os.open(NOTIFY_ENV, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        for k in ("NTFY_URL", "NTFY_TOKEN"):
+            if vals.get(k):
+                f.write(f"{k}={vals[k]}\n")
+
+
+def notify_events():
+    """Enabled event classes: the ⚙️ override file wins, else grave.conf's
+    NOTIFY_EVENTS, else all classes (grave defaults the same way)."""
+    try:
+        with open(NOTIFY_EVENTS_PATH) as f:
+            return [w for w in f.read().split() if w in NOTIFY_CLASSES]
+    except OSError:
+        pass
+    try:
+        with open(GRAVE_CONF) as f:
+            for line in f:
+                m = re.match(r'NOTIFY_EVENTS="([^"]*)"', line.strip())
+                if m:
+                    return [w for w in m.group(1).split() if w in NOTIFY_CLASSES]
+    except OSError:
+        pass
+    return list(NOTIFY_CLASSES)
+
+
+def save_notify_events(words):
+    if not isinstance(words, list):
+        raise ValueError("bad events")
+    words = [w for w in words if w in NOTIFY_CLASSES]
+    tmp = NOTIFY_EVENTS_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(" ".join(words) + "\n")
+    os.replace(tmp, NOTIFY_EVENTS_PATH)
+
+
+def notify_state():
+    """Settings-panel view of the notification stack (owner-only in state())."""
+    crypto = _webpush_crypto() is not None
+    subs = _load_push_subs()
+    return {
+        "ntfy": ntfy_configured(),
+        "events": notify_events(),
+        "classes": NOTIFY_CLASSES,
+        "push": {
+            "supported": crypto,
+            "reason": None if crypto else "python3-cryptography not installed on the box",
+            "devices": [{"id": _sub_id(s["endpoint"]), "label": s["label"],
+                         "added": s.get("added", "")} for s in subs],
+        },
+    }
+
+
 HOME = os.path.expanduser("~")
 # $/MTok (input, output) by model-id substring, first match wins. Cache read
 # bills 0.1x input; cache write 1.25x (5m TTL) / 2x (1h TTL).
@@ -762,6 +1093,7 @@ def state(headers):
             "viewer": headers.get("Tailscale-User-Login", "local"),
             "mode": mode, "apps": list(APPS), "settings": load_settings(),
             "boot_mode": boot_mode(), "gamewatch": gamewatch_state(),
+            "notify": notify_state(),
             "tmux": tmux, "torpor": len(tmux) if frozen else 0,
             "system": collect_system(),
             "github": {"login": None, "prs": [], "error": "paused in game mode"},
@@ -807,6 +1139,7 @@ def state(headers):
         "linear": collect_linear(),
         "usage": collect_agent_usage(),
         "settings": load_settings(),
+        "notify": notify_state(),
         "services": collect_services(),
         "docker": collect_docker(),
         "tmux": tmux,
@@ -1157,6 +1490,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(502, json.dumps({"ok": False, "output": ANSI.sub("", out + err)}))
             else:
                 self._send(200, out)
+        elif p == "/api/push-key":
+            # The VAPID public key a device needs to subscribe. Gated like the
+            # file manager: only allowed viewers (and localhost) may enroll.
+            if self._forbidden():
+                return
+            key = vapid_public_b64()
+            if key:
+                self._send(200, json.dumps({"ok": True, "key": key}))
+            else:
+                self._send(501, json.dumps({
+                    "ok": False,
+                    "output": "python3-cryptography not installed — Web Push unavailable"}))
         elif p == "/api/files":
             if self._forbidden():
                 return
@@ -1217,18 +1562,48 @@ class Handler(BaseHTTPRequestHandler):
                 key = data.pop("linear_key", "")
                 if isinstance(key, str) and key.strip():
                     save_linear_key(key)
+                # Notification prefs ride the same save: ntfy channel into the
+                # secret store, event classes into the grave-readable override.
+                if data.pop("ntfy_clear", False):
+                    save_ntfy(clear=True)
+                else:
+                    ntfy_url = str(data.pop("ntfy_url", "") or "").strip()
+                    ntfy_token = str(data.pop("ntfy_token", "") or "").strip()
+                    if ntfy_url or ntfy_token:
+                        save_ntfy(ntfy_url or None, ntfy_token or None)
+                events = data.pop("notify_events", None)
+                if events is not None:
+                    save_notify_events(events)
                 merged = save_settings(data)
             except (ValueError, TypeError, OSError):
                 self._send(400, json.dumps({"ok": False, "output": "bad settings payload"}))
                 return
             self._send(200, json.dumps({"ok": True, "settings": merged,
-                                        "linear_configured": bool(linear_key())}))
+                                        "linear_configured": bool(linear_key()),
+                                        "notify": notify_state()}))
         elif p == "/api/linear-issue":
             title = str(data.get("title", "")).strip()
             if not title:
                 self._send(400, json.dumps({"ok": False, "output": "title required"}))
                 return
             self._send(200, json.dumps(linear_create(title)))
+        elif p == "/api/push-subscribe":
+            self._send(200, json.dumps(push_subscribe(data)))
+        elif p == "/api/push-unsubscribe":
+            self._send(200, json.dumps(push_unsubscribe(data)))
+        elif p == "/api/push-send":
+            # grave notify's push leg (loopback) and the ⚙️ test path. 502 on
+            # zero deliveries so grave's `curl -f` sees the truth.
+            result = push_send(data)
+            self._send(200 if result["ok"] else 502, json.dumps(result))
+        elif p == "/api/notify-test":
+            # Exercise THE production path end-to-end: grave notify fans out to
+            # ntfy and (via loopback push-send) back through this dashboard.
+            rc, out, err = sh([GRAVE, "notify", "--priority", "default",
+                               "📣 test: the box can reach you",
+                               f"sent from ⚙️ settings on {HOST}"], timeout=30)
+            self._send(200, json.dumps({"ok": rc == 0,
+                                        "output": ANSI.sub("", (out + err)).strip()}))
         elif p == "/api/session-kill":
             name = str(data.get("name", ""))
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,50}", name):
@@ -1635,6 +2010,25 @@ body.gaming #foot{display:none}
     <input type="password" id="set-linear" placeholder="lin_api_… (leave empty to keep)" size="24">
   </div>
 
+  <div class="sethead sec-toggle" id="notify-head" data-sec="sec-notify">▸ Notifications — 🔔 push &amp; ntfy</div>
+  <div id="sec-notify" style="display:none">
+    <div class="setrow"><span class="setlabel">🔔 push to this device <span class="dim2" id="push-support"></span></span>
+      <button class="mini" id="push-enable">enable</button>
+    </div>
+    <div id="push-devices"></div>
+    <div class="setrow"><span class="setlabel">ntfy URL <span id="ntfy-state"></span></span>
+      <input id="set-ntfy-url" placeholder="https://ntfy.sh/&lt;topic&gt; (empty to keep)" size="22">
+      <button class="mini" id="ntfy-clear" title="remove the ntfy channel">✕</button>
+    </div>
+    <div class="setrow"><span class="setlabel">ntfy token</span>
+      <input type="password" id="set-ntfy-token" placeholder="tk_… (optional, empty to keep)" size="22">
+    </div>
+    <div class="setrow dim2">events that page you:</div>
+    <div class="setrow" id="notify-events" style="flex-wrap:wrap"></div>
+    <div class="setrow"><button class="mini" id="notify-test">📣 send test</button>
+      <span class="setlabel dim2" id="notify-msg"></span></div>
+  </div>
+
   <div class="sethead">Refresh</div>
   <div class="setrow"><span class="setlabel">poll interval</span>
     <select id="set-poll">
@@ -1894,6 +2288,8 @@ function render(s){
   lastTmux=s.tmux||[];
   if(s.boot_mode){bootMode=s.boot_mode;paintBoot();}
   if(s.gamewatch){applyGamewatch(s.gamewatch);}
+  // notify prefs are owner-only state; keep them out of a mid-edit modal
+  if(s.notify&&$('settings-panel').style.display!=='block')notifyInfo=s.notify;
   // adopt settings saved elsewhere (another device/tab) — but never while
   // this device is mid-edit in the settings modal
   const sj=JSON.stringify(s.settings);
@@ -2250,7 +2646,98 @@ function buildSettings(existing){
   $('linear-state').textContent=linearConfigured?'✓ configured':'(not set)';
   document.querySelectorAll('[data-auth]').forEach(a=>
     a.href=appUrl(`/term/?arg=${a.dataset.auth}`));
+  buildNotify();
 }
+// ---------- notifications (ntfy + web push) ----------
+let notifyInfo=null;
+const EVENT_LABEL={'session-exit':'session ends','bell':'agent bell',
+  'unit-failure':'unit fails','doctor':'doctor fails'};
+const b64ToU8=s=>{const b=atob(s.replace(/-/g,'+').replace(/_/g,'/')
+  .padEnd(s.length+(4-s.length%4)%4,'='));return Uint8Array.from(b,c=>c.charCodeAt(0));};
+const notifyMsg=t=>{$('notify-msg').textContent=t;};
+function canBrowserPush(){
+  return 'serviceWorker'in navigator&&'PushManager'in window&&'Notification'in window;
+}
+function buildNotify(){
+  const n=notifyInfo,head=$('notify-head');
+  head.style.display=n?'':'none';
+  if(!n){$('sec-notify').style.display='none';return;}
+  $('ntfy-state').textContent=n.ntfy?'✓ configured':'(not set)';
+  const sup=$('push-support');
+  if(!n.push.supported)sup.textContent='· '+(n.push.reason||'unavailable on the box');
+  else if(!canBrowserPush())
+    sup.textContent='· this browser can’t receive push (iOS: install the PWA, then enable here)';
+  else sup.textContent='';
+  $('push-enable').disabled=!n.push.supported||!canBrowserPush();
+  const localId=localStorage.getItem('grave-push-id');
+  $('push-devices').innerHTML=(n.push.devices||[]).map(d=>`<div class="setrow">
+    <span class="setlabel">📱 ${esc(d.label)} <span class="dim2">· ${esc(d.added)}${d.id===localId?' · this device':''}</span></span>
+    <button class="mini" data-push-del="${esc(d.id)}">✕</button>
+  </div>`).join('')||'<div class="setrow dim2">no devices enrolled</div>';
+  $('push-devices').querySelectorAll('[data-push-del]').forEach(b=>b.onclick=async()=>{
+    b.disabled=true;
+    try{
+      if(b.dataset.pushDel===localStorage.getItem('grave-push-id')){
+        // removing this very device: also drop the browser-side subscription
+        try{const reg=await navigator.serviceWorker.ready;
+          const sub=await reg.pushManager.getSubscription();
+          if(sub)await sub.unsubscribe();}catch(e){}
+        localStorage.removeItem('grave-push-id');
+      }
+      const r=await fetch('api/push-unsubscribe',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({id:b.dataset.pushDel})});
+      if((await r.json()).ok){
+        notifyInfo.push.devices=notifyInfo.push.devices.filter(d=>d.id!==b.dataset.pushDel);
+        buildNotify();notifyMsg('device removed');
+      }
+    }catch(e){notifyMsg('remove failed: '+e);}
+  });
+  $('notify-events').innerHTML=(n.classes||[]).map(c=>`<label style="margin-right:10px">
+    <input type="checkbox" data-notify-ev="${esc(c)}" ${n.events.includes(c)?'checked':''}>
+    ${esc(EVENT_LABEL[c]||c)}</label>`).join('');
+}
+$('push-enable').onclick=async()=>{
+  notifyMsg('');
+  try{
+    // Order matters on iOS: requestPermission must run inside this tap.
+    const perm=await Notification.requestPermission();
+    if(perm!=='granted'){notifyMsg('notification permission denied');return;}
+    const kj=await(await fetch('api/push-key')).json();
+    if(!kj.ok){notifyMsg(kj.output||'no server key');return;}
+    const reg=await navigator.serviceWorker.ready;
+    let sub=await reg.pushManager.getSubscription();
+    if(!sub)sub=await reg.pushManager.subscribe(
+      {userVisibleOnly:true,applicationServerKey:b64ToU8(kj.key)});
+    const label=((navigator.userAgentData&&navigator.userAgentData.platform)
+      ||navigator.platform||'device')+(navigator.maxTouchPoints>1?' (touch)':'');
+    const j=await(await fetch('api/push-subscribe',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({subscription:sub.toJSON(),label})})).json();
+    if(!j.ok){notifyMsg(j.output||'enroll failed');return;}
+    localStorage.setItem('grave-push-id',j.id);
+    notifyMsg('🔔 this device is enrolled — try 📣 send test');
+    poll();setTimeout(()=>{if(notifyInfo)buildNotify();},800);
+  }catch(e){notifyMsg('enable failed: '+e);}
+};
+$('ntfy-clear').onclick=async()=>{
+  if(!confirm('Remove the ntfy channel from the box?'))return;
+  try{
+    const j=await(await fetch('api/settings',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ntfy_clear:true})})).json();
+    if(j.ok){if(j.notify)notifyInfo=j.notify;buildNotify();notifyMsg('ntfy channel removed');}
+    else notifyMsg(j.output||'clear failed');
+  }catch(e){notifyMsg('clear failed: '+e);}
+};
+$('notify-test').onclick=async()=>{
+  notifyMsg('sending…');
+  try{
+    const j=await(await fetch('api/notify-test',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:'{}'})).json();
+    notifyMsg(j.ok?'📣 sent — check your devices':(j.output||'send failed'));
+  }catch(e){notifyMsg('send failed: '+e);}
+};
 function syncVis(){
   draft.hidden_panels=[...document.querySelectorAll('[data-panel-vis]')]
     .filter(c=>!c.checked).map(c=>c.dataset.panelVis);
@@ -2390,6 +2877,13 @@ $('save-set').onclick=async()=>{
   const payload={...draft};
   const lk=$('set-linear').value.trim();
   if(lk)payload.linear_key=lk;
+  if(notifyInfo){   // section rendered → carry notification prefs on the same save
+    const nu=$('set-ntfy-url').value.trim(),nt=$('set-ntfy-token').value.trim();
+    if(nu)payload.ntfy_url=nu;
+    if(nt)payload.ntfy_token=nt;
+    payload.notify_events=[...document.querySelectorAll('[data-notify-ev]')]
+      .filter(c=>c.checked).map(c=>c.dataset.notifyEv);
+  }
   $('set-msg').textContent='saving…';
   try{
     const r=await fetch('api/settings',{method:'POST',
@@ -2399,6 +2893,7 @@ $('save-set').onclick=async()=>{
       linearConfigured=!!j.linear_configured;
       $('set-linear').value='';
       $('linear-state').textContent=linearConfigured?'✓ configured':'(not set)';
+      if(j.notify){notifyInfo=j.notify;$('set-ntfy-url').value='';$('set-ntfy-token').value='';buildNotify();}
       $('set-msg').textContent='saved ✓';poll();}
     else $('set-msg').textContent=j.output||'save failed';
   }catch(e){$('set-msg').textContent='save failed: '+e;}

@@ -163,18 +163,26 @@ if [[ "$MANAGED_TOOLCHAIN" == 1 ]]; then
     exit 1
   fi
   ok "durable toolchain present (Homebrew + rootless Docker, under \$HOME)"
+  # Web Push needs python 'cryptography' (VAPID/RFC 8291 — see
+  # docs/NOTIFICATIONS.md). Best-effort here: without it the dashboard still
+  # runs and ntfy notifications are unaffected, so this never blocks a raise.
+  if ! python3 -c 'import cryptography' 2>/dev/null; then
+    python3 -m pip install --quiet --user cryptography 2>/dev/null \
+      || python3 -m pip install --quiet --user --break-system-packages cryptography 2>/dev/null \
+      || skip "python 'cryptography' unavailable — Web Push disabled (ntfy unaffected)"
+  fi
 elif command -v pacman >/dev/null; then
   sudo pacman -S --needed --noconfirm git tmux curl jq python docker docker-compose \
-    nodejs npm ufw lm_sensors python-pillow ttyd
+    nodejs npm ufw lm_sensors python-pillow python-cryptography ttyd
   ok "packages present"
 elif command -v apt-get >/dev/null; then
   sudo apt-get update -qq
   sudo apt-get install -y git tmux curl jq python3 docker.io docker-compose-v2 \
-    nodejs npm ufw lm-sensors python3-pil ttyd || skip "some packages failed — fix names for your distro and rerun"
+    nodejs npm ufw lm-sensors python3-pil python3-cryptography ttyd || skip "some packages failed — fix names for your distro and rerun"
   ok "packages present"
 elif command -v dnf >/dev/null; then
   sudo dnf install -y git tmux curl jq python3 docker docker-compose nodejs npm \
-    lm_sensors python3-pillow || skip "some packages failed — fix names for your distro and rerun"
+    lm_sensors python3-pillow python3-cryptography || skip "some packages failed — fix names for your distro and rerun"
   command -v ttyd >/dev/null || skip "ttyd not in Fedora repos — build/install it manually for the web terminal"
   ok "packages present"
 else
@@ -301,6 +309,13 @@ sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
     -e "s|@TOOLPATH@|$TOOLPATH|g" -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" \
     "$REPO_DIR/systemd/gravedecay-upgrade@.service.tmpl" \
     | sudo tee /etc/systemd/system/gravedecay-upgrade@.service >/dev/null
+# Failure notifier: every platform unit references it via OnFailure=, so it
+# must exist on every box (it sends nothing until notify.env is configured —
+# see docs/NOTIFICATIONS.md).
+sed -e "s|@USER@|$RUN_USER|g" -e "s|@HOME@|$HOME_DIR|g" \
+    -e "s|@TOOLPATH@|$TOOLPATH|g" -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" \
+    "$REPO_DIR/systemd/gravedecay-notify@.service.tmpl" \
+    | sudo tee /etc/systemd/system/gravedecay-notify@.service >/dev/null
 [[ -n "$ALLOWED_USERS" ]] && ok "dashboard actions allowed for: $ALLOWED_USERS" \
   || skip "dashboard is read-only until GRAVEDECAY_ALLOWED_USERS is set (auto-fills after tailscale login on re-raise)"
 # drop an empty DOCKER_HOST= line on system-docker hosts (empty would confuse the CLI)
