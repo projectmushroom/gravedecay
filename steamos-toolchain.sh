@@ -20,6 +20,22 @@ step() { printf '\n%b🪦 %s%b\n' "$BLD" "$*" "$RST"; }
 ok()   { printf '  %b✓%b %s\n' "$GRN" "$RST" "$*"; }
 say()  { printf '  %b–%b %s\n' "$YLW" "$RST" "$*"; }
 
+# Third-party bootstrap installers, pinned to an exact commit and verified by
+# sha256 — never `curl | sh` of a moving HEAD, which (combined with this box's
+# passwordless sudo) makes a compromised upstream or MITM'd CDN root-equivalent.
+# To bump: change the commit, then update the digest to the new script's sha256.
+BREW_INSTALLER_COMMIT=4b0227cf8416504142d23893368c2e1d211d5191
+BREW_INSTALLER_SHA256=99287f194a8b3c9e6b0203a11a5fa54518be57209343e6bb954dec4635796d9d
+DOCKER_ROOTLESS_COMMIT=02cb80d6c7d24c85a458ae31d166a6c535c7a37a
+DOCKER_ROOTLESS_SHA256=519165a123f9924c530c64bdba3019124555eb311a671e149e2d1c1f79a6a92d
+fetch_verified() { # fetch_verified <url> <sha256> — prints a temp file holding the verified script
+  local url="$1" want="$2" tmp; tmp=$(mktemp)
+  curl -fsSL "$url" -o "$tmp" || { echo "download failed: $url" >&2; rm -f "$tmp"; exit 1; }
+  local got; got=$(sha256sum "$tmp" | awk '{print $1}')
+  [[ "$got" == "$want" ]] || { echo "checksum mismatch for $url (got $got want $want) — refusing to run" >&2; rm -f "$tmp"; exit 1; }
+  printf '%s' "$tmp"
+}
+
 [[ $EUID -eq 0 ]] && { echo "Run as your normal user (deck), not root."; exit 1; }
 sudo -n true 2>/dev/null || sudo -v || { echo "sudo access required"; exit 1; }
 
@@ -30,8 +46,10 @@ UID_NUM="$(id -u)"
 # ------------------------------------------------------------ 1. Homebrew ----
 step "Homebrew (durable toolchain root, under \$HOME)"
 if [[ ! -x "$BREW_PREFIX/bin/brew" ]]; then
-  NONINTERACTIVE=1 CI=1 /bin/bash -c \
-    "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  brew_installer=$(fetch_verified \
+    "https://raw.githubusercontent.com/Homebrew/install/$BREW_INSTALLER_COMMIT/install.sh" \
+    "$BREW_INSTALLER_SHA256")
+  NONINTERACTIVE=1 CI=1 /bin/bash "$brew_installer"; rm -f "$brew_installer"
   ok "Homebrew installed"
 else
   say "Homebrew already present"
@@ -54,7 +72,10 @@ step "Rootless Docker (per-user daemon under \$HOME)"
 sudo loginctl enable-linger "$USER" >/dev/null 2>&1 || true   # user services persist w/o login
 export XDG_RUNTIME_DIR="/run/user/$UID_NUM"
 if [[ ! -x "$HOME/bin/dockerd-rootless.sh" ]]; then
-  curl -fsSL https://get.docker.com/rootless | sh
+  docker_installer=$(fetch_verified \
+    "https://raw.githubusercontent.com/docker/docker-install/$DOCKER_ROOTLESS_COMMIT/rootless-install.sh" \
+    "$DOCKER_ROOTLESS_SHA256")
+  sh "$docker_installer"; rm -f "$docker_installer"
   ok "rootless docker installed"
 else
   say "rootless docker already present"
@@ -107,7 +128,9 @@ ok "wrappers at $W ($GCC_BIN)"
 # with the wrapper compilers. The systemd unit raise.sh writes puts node@22 on
 # PATH so `env node` matches the ABI this was built for.
 step "T3 Code (native node-pty compiled for $NODE_LTS)"
-if ! PATH="$W:$BREW_PREFIX/opt/$NODE_LTS/bin:$PATH" command -v t3 >/dev/null 2>&1 \
+# the install goes to ~/.local/bin, so that MUST be on the presence-check PATH —
+# omitting it made `command -v t3` always miss and reinstall (unpinned) every run.
+if ! PATH="$HOME/.local/bin:$W:$BREW_PREFIX/opt/$NODE_LTS/bin:$PATH" command -v t3 >/dev/null 2>&1 \
    || [[ ! -f "$HOME/.local/lib/node_modules/t3/dist/bin.mjs" ]]; then
   PATH="$W:$BREW_PREFIX/opt/$NODE_LTS/bin:$PATH" CC=cc CXX=c++ \
     "$BREW_PREFIX/opt/$NODE_LTS/bin/npm" install -g --prefix "$HOME/.local" t3
