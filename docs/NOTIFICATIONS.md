@@ -32,12 +32,15 @@ Requires `python3-cryptography` on the box — `raise.sh` installs it
 (best-effort via pip on SteamOS); without it the settings panel says so and
 ntfy is unaffected.
 
-### ntfy
+### ntfy (optional — you do not need this)
 
-Pick a **random, unguessable topic** (the topic name *is* the capability —
-anyone who knows it can read and publish; see Security) and either paste it
-into ⚙️ settings → Notifications → **ntfy URL**, or put it in the secret
-store by hand:
+Web Push alone is a complete setup, and **nothing here needs an account**
+(ntfy.sh is anonymous pub/sub; the topic name is the only credential). Add
+ntfy only if you want notifications on a device without the PWA, on a watch,
+or consumed by scripts. Pick a **random, unguessable topic** (the topic name
+*is* the capability — anyone who knows it can read and publish; see Security)
+and either paste it into ⚙️ settings → Notifications → **advanced: ntfy
+relay**, or put it in the secret store by hand:
 
 ```sh
 install -m 600 /dev/null $GRAVE_ROOT/config/secrets/notify.env

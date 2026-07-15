@@ -617,10 +617,10 @@ cmd_notify() { # grave notify [--event <name>] [--priority <p>] [--link </path>]
   [[ -n "$title" ]] || { say "usage: grave notify <title> [body]"; exit 1; }
   notify_configured || {
     bad "notifications are not configured"
-    say "  ntfy:     create $NOTIFY_ENV (chmod 600) with:"
-    say "              NTFY_URL=https://ntfy.sh/<your-random-topic>"
-    say "              NTFY_TOKEN=tk_...   # optional (authed/self-hosted servers)"
-    say "  Web Push: dashboard ⚙️ settings → Notifications → 🔔 enable"
+    say "  Web Push (recommended, no account): dashboard ⚙️ settings → Notifications → 🔔 enable"
+    say "  ntfy (optional relay): create $NOTIFY_ENV (chmod 600) with:"
+    say "    NTFY_URL=https://ntfy.sh/<your-random-topic>"
+    say "    NTFY_TOKEN=tk_...   # optional (authed/self-hosted servers)"
     say "  Full guide: docs/NOTIFICATIONS.md"
     exit 1
   }
