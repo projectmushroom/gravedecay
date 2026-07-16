@@ -56,26 +56,30 @@ docker cp -q . "$CTR":/repo
 docker exec "$CTR" bash /repo/tests/e2e/bootstrap.sh
 docker exec "$CTR" chown -R mole:mole /repo
 
+# docker exec -u sets neither USER nor HOME the way a login does; raise.sh
+# reads both (set -u), exactly like a real shell session provides them.
+as_mole() { docker exec -u mole -e USER=mole -e HOME=/home/mole -w /repo "$CTR" "$@"; }
+
 echo "=== phase 1: first raise (human-at-keyboard sudo) ==="
-docker exec -u mole -w /repo "$CTR" bash -c './raise.sh --profile generic </dev/null'
+as_mole bash -c './raise.sh --profile generic </dev/null'
 
 echo "=== phase 2: the human leaves — only the raise-installed scoped grant remains ==="
 docker exec "$CTR" rm /etc/sudoers.d/zzz-e2e-bootstrap
-if docker exec -u mole "$CTR" sudo -n mkdir /e2e-should-not-exist 2>/dev/null; then
+if as_mole sudo -n mkdir /e2e-should-not-exist 2>/dev/null; then
   echo "FATAL: out-of-scope sudo is still passwordless — phase 3 would prove nothing"
   exit 1
 fi
 
 echo "=== phase 3: headless re-raise — the gravedecay-upgrade.service path (#89) ==="
-docker exec -u mole -w /repo "$CTR" bash -c './raise.sh --profile generic </dev/null'
+as_mole bash -c './raise.sh --profile generic </dev/null'
 
 echo "=== phase 4: stampless headless re-raise — the pre-stamp sudoers fallback (#96) ==="
-docker exec -u mole "$CTR" rm /srv/dev/config/.sudoers.sha256
-docker exec -u mole -w /repo "$CTR" bash -c './raise.sh --profile generic </dev/null' | tee /tmp/grave-e2e-phase4.log
+as_mole rm /srv/dev/config/.sudoers.sha256
+as_mole bash -c './raise.sh --profile generic </dev/null' | tee /tmp/grave-e2e-phase4.log
 grep -q "not refreshable without a terminal" /tmp/grave-e2e-phase4.log
 
 echo "=== phase 5: doctor is the contract ==="
-docker exec -u mole "$CTR" grave doctor
+as_mole grave doctor
 docker exec "$CTR" curl -sf http://127.0.0.1:4712/healthz >/dev/null
 docker exec "$CTR" curl -sf -o /dev/null http://127.0.0.1:4711/
 docker exec "$CTR" curl -sf -o /dev/null http://127.0.0.1:4713/
