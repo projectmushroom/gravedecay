@@ -80,7 +80,8 @@ APPS = [{"name": name.strip(), "url": url.strip()}
 # exactly like actions). Stored beside the other appliance config.
 SETTINGS_PATH = os.path.join(GRAVE_ROOT, "config", "gravedecay-settings.json")
 DEFAULT_SETTINGS = {
-    "panel_order": ["prs", "linear", "ci", "tmux", "usage", "repos",
+    "panel_order": ["prs", "linear", "ci", "tmux", "sessions", "usage",
+                    "inbox", "repos",
                     "stats", "actions", "services", "docker", "journal"],
     "hidden_panels": [],   # panel ids to hide
     "hidden_apps": [],     # launcher tile names to hide
@@ -1082,6 +1083,72 @@ def collect_backups():
     return {"count": len(entries), "latest": entries[-1] if entries else None}
 
 
+def _rel(ts):
+    d = max(0, int(time.time() - ts))
+    if d < 90:
+        return f"{d}s ago"
+    if d < 5400:
+        return f"{d // 60}m ago"
+    if d < 172800:
+        return f"{d // 3600}h ago"
+    return f"{d // 86400}d ago"
+
+
+def collect_inbox(limit=50):
+    """Durable copy of delivered pages (#119), written by `grave notify` to
+    logs/notifications.jsonl — pushes are ephemeral on every channel, this is
+    where a dismissed or truncated one can still be read. Owner-only: bodies
+    carry private detail (session names, doctor output)."""
+    items = []
+    try:
+        with open(f"{GRAVE_ROOT}/logs/notifications.jsonl") as f:
+            lines = f.readlines()[-limit:]
+    except OSError:
+        return items
+    for line in lines:
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        items.append({"when": _rel(int(d.get("ts", 0))), "event": d.get("event", ""),
+                      "title": d.get("title", ""), "body": d.get("body", ""),
+                      "link": d.get("link") or "/grave/",
+                      "delivered": bool(d.get("delivered"))})
+    items.reverse()
+    return items
+
+
+def collect_agent_history(limit=20):
+    """Past agent sessions (#110): the pipe-pane logs under agents/<name>/
+    survive tmux death. agents/t3code is T3 server state, not a session dir;
+    the name allowlist also keeps hostile dir names out of the UI and the
+    /api/agent-log path join."""
+    out = []
+    base = f"{GRAVE_ROOT}/agents"
+    try:
+        names = os.listdir(base)
+    except OSError:
+        return out
+    for name in names:
+        d = os.path.join(base, name)
+        if name == "t3code" or not re.fullmatch(r"[A-Za-z0-9_-]+", name) \
+           or not os.path.isdir(d):
+            continue
+        logs = sorted(g for g in os.listdir(d)
+                      if re.fullmatch(r"session-\d{8}\.log", g))
+        if not logs:
+            continue
+        try:
+            last = int(os.path.getmtime(os.path.join(d, logs[-1])))
+            size = sum(os.path.getsize(os.path.join(d, g)) for g in logs)
+        except OSError:
+            continue
+        out.append({"name": name, "last": last, "last_when": _rel(last),
+                    "logs": logs[::-1], "size_kb": size // 1024})
+    out.sort(key=lambda x: -x["last"])
+    return out[:limit]
+
+
 def boot_mode():
     rc, _, _ = sh(["systemctl", "is-enabled", "--quiet", "t3code"])
     return "developer" if rc == 0 else "gaming"
@@ -1128,6 +1195,7 @@ def state(headers):
             "ci": {"rows": []}, "usage": None, "services": [], "repos": [],
             "docker": {"error": "docker stopped (gaming)", "containers": []},
             "journal": [], "backups": {"count": 0, "latest": None},
+            "inbox": collect_inbox(), "agent_history": collect_agent_history(),
         }
     viewer = headers.get("Tailscale-User-Login")
     if viewer is not None and viewer not in ALLOWED_USERS:
@@ -1148,6 +1216,9 @@ def state(headers):
             "tmux": tmux, "torpor": len(tmux) if frozen else 0,
             "repos": [], "journal": [], "system": collect_system(),
             "backups": collect_backups(),
+            # Delivered pages and session transcripts are owner-private, same
+            # reasoning as the journal/repos withholding above.
+            "inbox": [], "agent_history": [],
         }
     gh = collect_github()
     apps = list(APPS)
@@ -1177,6 +1248,8 @@ def state(headers):
         "journal": collect_journal(),
         "system": collect_system(),
         "backups": collect_backups(),
+        "inbox": collect_inbox(),
+        "agent_history": collect_agent_history(),
     }
 
 
@@ -1519,6 +1592,34 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(502, json.dumps({"ok": False, "output": ANSI.sub("", out + err)}))
             else:
                 self._send(200, out)
+        elif p == "/api/agent-log":
+            # Session transcript viewer (#110). Owner-gated like the file
+            # manager — transcripts show everything an agent saw or did. Both
+            # params land in a filesystem path, so allowlist their shape (the
+            # same charsets `grave agents new` enforces and pipe-pane writes).
+            if self._forbidden():
+                return
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            name = q.get("name", [""])[0]
+            fname = q.get("file", [""])[0]
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,50}", name) \
+               or not re.fullmatch(r"session-\d{8}\.log", fname):
+                self._send(400, json.dumps({"ok": False, "output": "bad session or file name"}))
+                return
+            path = os.path.join(GRAVE_ROOT, "agents", name, fname)
+            try:
+                with open(path, "rb") as f:
+                    f.seek(max(0, os.path.getsize(path) - 65536))
+                    text = f.read().decode("utf-8", "replace")
+            except OSError:
+                self._send(404, json.dumps({"ok": False, "output": "no such log"}))
+                return
+            # Raw terminal capture: strip full CSI/OSC escape sequences (ANSI
+            # only matches SGR color codes), then leftover control bytes.
+            text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(\x07|\x1b\\\\)?|\x1b.", "", text)
+            text = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", text)
+            self._send(200, json.dumps({"ok": True, "name": name, "file": fname,
+                                        "text": text}))
         elif p == "/api/push-key":
             # The VAPID public key a device needs to subscribe. Gated like the
             # file manager: only allowed viewers (and localhost) may enroll.
@@ -1640,6 +1741,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
             rc, out, err = sh(["tmux", "-L", TMUX_SOCKET, "kill-session", "-t", name])
             self._send(200, json.dumps({"ok": rc == 0, "output": out + err}))
+        elif p == "/api/session-resume":
+            # ▶ on a dead session (#110): grave recreates it in its recorded
+            # dir (meta.json) and re-attaches the pipe-pane log.
+            name = str(data.get("name", ""))
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,50}", name):
+                self._send(400, json.dumps({"ok": False, "output": "bad session name"}))
+                return
+            rc, out, err = sh([GRAVE, "agents", "resume", name], timeout=30)
+            self._send(200, json.dumps({"ok": rc == 0,
+                                        "output": ANSI.sub("", out + err).strip()}))
         elif p == "/api/admin/upgrade":
             tag = str(data.get("tag", ""))
             if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
@@ -2084,6 +2195,13 @@ body.gaming #foot{display:none}
     <button id="close-set">Close</button><span id="set-msg" class="setlabel"></span></div>
  </div>
 </div>
+<div class="overlay" id="log-dlg" style="display:none">
+ <div class="dlg">
+  <button class="mini xbtn" id="log-x" style="position:absolute;top:10px;right:10px;z-index:2">✕</button>
+  <h2 id="log-title" style="color:var(--ink);font-size:15px;margin-bottom:8px">📜</h2>
+  <pre id="log-text" style="max-height:70vh;overflow:auto;font-size:11px;white-space:pre-wrap;word-break:break-word"></pre>
+ </div>
+</div>
 <div class="overlay" id="kill-dlg" style="display:none">
  <div class="dlg" id="gc-box2">
   <button class="mini xbtn" id="kill-x" style="position:absolute;top:10px;right:10px;z-index:2">✕</button>
@@ -2177,6 +2295,8 @@ body.gaming #foot{display:none}
   </div>
   <div class="panel" data-panel="usage"><h2>🧾 Agent usage</h2><table id="usage"></table></div>
   <div class="panel" data-panel="tmux"><h2>🤖 Agent sessions — tap to open</h2><table id="tmux"></table></div>
+  <div class="panel" data-panel="sessions"><h2>📜 Session history</h2><table id="sessions"></table></div>
+  <div class="panel" data-panel="inbox"><h2>🔔 Inbox — pages this box sent</h2><div id="inbox"></div></div>
   <div class="panel" data-panel="repos"><h2>📦 Repos</h2><table id="repos"></table></div>
   <div class="tiles w-full" data-panel="stats" id="tiles"></div>
   <div class="panel w-full" data-panel="actions"><h2>🕹️ Actions</h2>
@@ -2253,10 +2373,11 @@ const appUrl=u=>(location.port&&location.port!=='443'&&u.startsWith('/'))
 const agentArg=u=>{const m=/[?&]arg=(claude|codex)(?=$|&)/.exec(u||'');return m?m[1]:null;};
 const PANEL_NAMES={prs:'Pull requests',ci:'CI status',
   linear:'Linear issues',usage:'Agent usage',tmux:'Agent sessions',repos:'Repos',
+  sessions:'Session history',inbox:'Inbox',
   stats:'Stats tiles',actions:'Actions',services:'Services',docker:'Docker',
   journal:'Journal errors'};
 const PANEL_TABS={prs:'work',ci:'work',linear:'work',usage:'work',
-  tmux:'work',repos:'work',
+  tmux:'work',repos:'work',sessions:'work',inbox:'work',
   stats:'system',actions:'system',services:'system',docker:'system',journal:'system'};
 let linearConfigured=false,lastMode=null,lastTmux=[];
 let cfg=null,cfgSrv='',envApps=[],layoutKey='';
@@ -2405,6 +2526,21 @@ function render(s){
       <td class="dim">${esc(x.attached)}</td>
       <td class="num"><a class="kill" data-kill="${esc(x.name)}" title="kill session">✕</a></td></tr>`).join('')
     :'<tr><td class="dim">no agent sessions — use the Terminal/Claude/Codex tiles</td></tr>';
+  $('sessions').innerHTML=(s.agent_history||[]).length?s.agent_history.map(h=>{
+    const live=s.tmux.some(x=>x.name===h.name);
+    return `<tr><td>${statusDot(live?'active':'inactive')}${esc(h.name)}</td>
+      <td class="dim">${esc(h.last_when)}</td>
+      <td class="num dim">${esc(String(h.size_kb))}K</td>
+      <td class="num"><a class="viewlog" href="#" data-log="${esc(h.name)}" data-file="${esc(h.logs[0])}" title="view transcript">📜</a>
+      ${live?'':` <a class="resume" href="#" data-resume="${esc(h.name)}" title="resume in its old dir">▶</a>`}</td></tr>`;
+    }).join('')
+    :'<tr><td class="dim">no past sessions yet</td></tr>';
+  $('inbox').innerHTML=(s.inbox||[]).length?s.inbox.map(n=>`
+    <div style="padding:6px 0">
+      <a href="${esc(appUrl(n.link))}">${n.delivered?'':'⚠️ '}${esc(n.title)}</a>
+      <span class="dim" style="float:right">${esc(n.when)}</span>
+      <div class="dim2" style="white-space:pre-wrap;font-size:12px">${esc(n.body)}</div></div>`).join('')
+    :'<div class="dim">no pages yet — enable notifications in ⚙️ settings</div>';
   $('repos').innerHTML=s.repos.length?s.repos.map(r=>`<tr>
       <td>${statusDot(r.dirty?'inactive':'active')}${esc(r.name)}</td>
       <td class="dim">${esc(r.branch)}${r.dirty?` · ${r.dirty} dirty`:''}</td>
@@ -2834,6 +2970,27 @@ $('close-set').onclick=closeSettings;
 $('settings-x').onclick=closeSettings;
 $('settings-panel').addEventListener('click',e=>{
   if(e.target.id==='settings-panel')closeSettings();});
+// ---------- session history: transcript viewer + resume ----------
+async function openLog(name,file){
+  $('log-title').textContent=`📜 ${name} — ${file}`;
+  $('log-text').textContent='loading…';
+  $('log-dlg').style.display='block';lockBody();
+  try{
+    const r=await(await fetch(`api/agent-log?name=${encodeURIComponent(name)}&file=${encodeURIComponent(file)}`)).json();
+    $('log-text').textContent=r.ok?(r.text||'(empty log)'):r.output;
+  }catch(e){$('log-text').textContent='failed to load: '+e;}
+}
+$('log-x').onclick=()=>{$('log-dlg').style.display='none';unlockBody();};
+document.addEventListener('click',async e=>{
+  const v=e.target.closest('a.viewlog');
+  if(v){e.preventDefault();openLog(v.dataset.log,v.dataset.file);return;}
+  const r=e.target.closest('a.resume');
+  if(r){e.preventDefault();r.textContent='…';
+    const res=await fetch('api/session-resume',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({name:r.dataset.resume})});
+    if(!(await res.json()).ok)r.textContent='✗';  // next poll redraws either way
+  }
+});
 // ---------- kill-sessions dialog ----------
 function buildKillList(){
   $('kill-list').innerHTML=lastTmux.length?lastTmux.map(x=>`<div class="setrow">
