@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Adapter for agent CLI hook payloads (Claude Code hooks, Codex notify) into
+# gravedecay's single notification primitive.
+set -euo pipefail
+
+agent="${1:-agent}"
+shift || true
+payload="$*"
+if [[ ! -t 0 ]]; then
+  stdin_payload=$(cat 2>/dev/null || true)
+  [[ -n "$stdin_payload" ]] && payload="${payload:+$payload
+}$stdin_payload"
+fi
+
+json_get() {
+  local filter="$1"
+  jq -r "$filter // empty" <<<"$payload" 2>/dev/null | head -1
+}
+
+event="$(json_get '.hook_event_name // .type // .event // .event_type // .notification_type')"
+message="$(json_get '.message // .text // .summary // .reason')"
+event_l="${event,,}"
+
+notify_event=""
+title=""
+priority=default
+case "$event_l" in
+  *notification*|*permission*|*approval*|*idle*|*input*)
+    notify_event=bell
+    title="agent needs attention"
+    ;;
+  *stop*|*complete*|*completed*|*turn*|*done*)
+    notify_event=agent-done
+    title="agent finished"
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+
+link="/"
+session=""
+if [[ -n "${TMUX:-}" ]] && command -v tmux >/dev/null 2>&1; then
+  session="$(tmux display-message -p '#S' 2>/dev/null || true)"
+  session="${session//[^A-Za-z0-9_-]/}"
+  [[ -n "$session" ]] && link="/term/?arg=$session"
+fi
+
+body="${message:-$agent${session:+ in $session} on ${HOSTNAME:-host}}"
+body="${body//$'\r'/ }"
+body="${body//$'\n'/ }"
+body="${body:0:300}"
+
+grave_bin="${GRAVEDECAY_GRAVE:-grave}"
+exec "$grave_bin" notify --event "$notify_event" --priority "$priority" --link "$link" "$title" "$body"

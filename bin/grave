@@ -28,12 +28,13 @@ source "$CONF"
 # ⚙️ checkboxes write an override file (it runs unprivileged and must not need
 # sudo for a notification preference — same reasoning as the gamewatch flag),
 # which wins over the conf value when present.
-: "${NOTIFY_EVENTS:=session-exit bell unit-failure doctor}"
+: "${NOTIFY_EVENTS:=session-exit bell agent-done unit-failure doctor}"
 [[ -r "$GRAVE_ROOT/config/notify-events" ]] && NOTIFY_EVENTS="$(<"$GRAVE_ROOT/config/notify-events")"
 
 LOG_FILE="$GRAVE_ROOT/logs/grave.log"
 NOTIFY_ENV="$GRAVE_ROOT/config/secrets/notify.env"
 PUSH_SUBS="$GRAVE_ROOT/config/push-subscriptions.json"
+AGENT_NOTIFY="$GRAVE_ROOT/scripts/grave-agent-notify"
 RED=$'\e[31m'; GRN=$'\e[32m'; YLW=$'\e[33m'; BLD=$'\e[1m'; RST=$'\e[0m'
 
 log() { { printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG_FILE"; } 2>/dev/null || true; }
@@ -593,6 +594,21 @@ notify_reachable() {
   curl "${args[@]}" "$NTFY_URL/json?poll=1"
 }
 
+claude_notify_hook_present() {
+  local settings="$HOME/.claude/settings.json" cmd="$AGENT_NOTIFY claude"
+  [[ -r "$settings" ]] || return 1
+  jq -e --arg cmd "$cmd" '
+    def hascmd($name): any(.hooks[$name][]?; any(.hooks[]?; .command == $cmd));
+    hascmd("Stop") and hascmd("Notification")
+  ' "$settings"
+}
+
+codex_notify_hook_present() {
+  local conf="$HOME/.codex/config.toml"
+  [[ -r "$conf" ]] || return 1
+  grep -Eq '^[[:space:]]*notify[[:space:]]*=.*grave-agent-notify.*codex' "$conf"
+}
+
 cmd_notify() { # grave notify [--event <name>] [--priority <p>] [--link </path>] <title> [body...]
   local event="" priority=default link=""
   while (($#)); do
@@ -875,6 +891,9 @@ cmd_doctor() {
   fi
   if [[ -e "$NOTIFY_ENV" ]] || push_ready; then
     check "failure notifier installed"  systemctl cat 'gravedecay-notify@.service'
+    check "agent notify helper installed" test -x "$AGENT_NOTIFY"
+    check "Claude notify hooks installed" claude_notify_hook_present
+    check "Codex notify hook installed"   codex_notify_hook_present
   fi
   if [[ -e "$GRAVE_ROOT/config/workspaces.json" ]]; then
     # Route through the root helper: the workspace doctor stats root-owned 0700
