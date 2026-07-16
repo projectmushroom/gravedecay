@@ -39,6 +39,11 @@ class ProvisioningSafetyTests(unittest.TestCase):
         self.assertIn("install_unit() {", RAISE)
         self.assertGreaterEqual(RAISE.count("| install_unit "), 9)
         self.assertIn("install_cli() {", RAISE)
+        # compares use sha256sum (coreutils, guaranteed) — cmp is diffutils,
+        # absent from Arch's base meta-package; a swallowed "command not
+        # found" read as "differs" and re-ran privileged installs every raise
+        self.assertIn("same_file() {", RAISE)
+        self.assertNotIn("cmp -s", RAISE)
         self.assertIn('install_cli "$REPO_DIR/bin/grave" "$GRAVE_BIN"', RAISE)
         self.assertIn("layout_ok", RAISE)
         self.assertIn('stat -c %U "$GRAVE_ROOT"', RAISE)

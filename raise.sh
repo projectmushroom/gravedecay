@@ -56,18 +56,24 @@ wait_http() {
 # and the only privileges an upgrade needs are the already-granted systemctl /
 # docker / tee-into-/etc/systemd/system set. First raise (fresh box) still
 # prompts interactively; that is the one run a human is present for.
+same_file() { # both readable and byte-identical. sha256sum is coreutils —
+  # guaranteed — while cmp is diffutils, which Arch's `base` meta-package
+  # does NOT include: a swallowed `cmp: command not found` read as "differs"
+  # and re-ran the privileged install on every raise (#85 smoke, phase 3).
+  [[ -r "$1" && -r "$2" ]] && [[ "$(sha256sum <"$1")" == "$(sha256sum <"$2")" ]]
+}
 install_unit() { # install_unit <path under /etc/systemd/system>  (rendered file on stdin)
   local dest="/etc/systemd/system/$1" tmp
   tmp=$(mktemp)
   cat >"$tmp"
-  if cmp -s "$tmp" "$dest" 2>/dev/null; then
+  if same_file "$tmp" "$dest"; then
     rm -f "$tmp"; return 0        # unchanged — no privileged write
   fi
   sudo tee "$dest" <"$tmp" >/dev/null
   rm -f "$tmp"
 }
 install_cli() { # install_cli <src> <dest> — sudo only when content differs
-  cmp -s "$1" "$2" 2>/dev/null && return 0
+  same_file "$1" "$2" && return 0
   if [[ "$IMMUTABLE" == 1 ]]; then
     install -m 755 "$1" "$2"      # ~/.local/bin — user-owned, no sudo
   else
