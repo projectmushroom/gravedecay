@@ -342,16 +342,19 @@ $RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker, $GRAVE_BIN, 
 sudoers_hash=$(printf '%s\n%s\n' "$SUDOERS_FILE" "$sudoers_content" | sha256sum | cut -d' ' -f1)
 if [[ -r "$sudoers_stamp" && "$(sed -n 2p "$sudoers_stamp")" == "$sudoers_hash" ]]; then
   skip "sudoers unchanged ($SUDOERS_FILE)"
-elif [[ ! -t 0 ]] && sudo -n systemctl --version >/dev/null 2>&1; then
-  # Headless (no TTY — the self-upgrade unit) with a working scoped grant
-  # already installed but no/stale stamp: boxes raised before the stamp
-  # existed land here on their first button-upgrade. The rewrite below needs
-  # sudo outside the NOPASSWD scope (mktemp/visudo/install) and would die at
-  # a password prompt no one can answer, while the installed grant
-  # demonstrably works (the scoped systemctl probe just used it) — so defer
-  # the refresh to the next interactive raise. NOTE `sudo -l <cmd>` cannot
-  # make this call: it answers "allowed at all" (yes, via a password-requiring
-  # wheel rule), not "allowed without a password".
+elif ! sudo -n true 2>/dev/null && [[ ! -t 0 ]] && sudo -n systemctl --version >/dev/null 2>&1; then
+  # Headless (no TTY — the self-upgrade unit) with ONLY the scoped grant
+  # working and no/stale stamp: boxes raised before the stamp existed land
+  # here on their first button-upgrade. The rewrite below needs sudo outside
+  # the NOPASSWD scope (mktemp/visudo/install) and would die at a password
+  # prompt no one can answer, while the installed grant demonstrably works
+  # (the scoped systemctl probe just used it) — so defer the refresh to the
+  # next interactive raise. The `sudo -n true` probe keeps this branch
+  # UNREACHABLE when unscoped sudo works without a password (blanket-NOPASSWD
+  # cloud images, `curl | bash` installs — stdin is a pipe there too): the
+  # #85 smoke caught a fresh box skipping its very first sudoers install.
+  # NOTE `sudo -l <cmd>` cannot make either call: it answers "allowed at all"
+  # (yes, via a password-requiring wheel rule), not "allowed passwordless".
   skip "sudoers present but not refreshable without a terminal — run ./raise.sh interactively to update it"
 else
   [[ "$SUDOERS_FILE" == /etc/sudoers.d/zz-gravedecay ]] && sudo rm -f /etc/sudoers.d/50-gravedecay

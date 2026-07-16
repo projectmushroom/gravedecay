@@ -62,6 +62,9 @@ as_mole() { docker exec -u mole -e USER=mole -e HOME=/home/mole -w /repo "$CTR" 
 
 echo "=== phase 1: first raise (human-at-keyboard sudo) ==="
 as_mole bash -c './raise.sh --profile generic </dev/null'
+# the box has a wheel rule, so the scoped grant must exist AND sort after it —
+# phase 3 is hollow if the first raise skipped or misnamed its sudoers install
+docker exec "$CTR" test -f /etc/sudoers.d/zz-gravedecay
 
 echo "=== phase 2: the human leaves — only the raise-installed scoped grant remains ==="
 docker exec "$CTR" rm /etc/sudoers.d/zzz-e2e-bootstrap

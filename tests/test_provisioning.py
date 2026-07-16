@@ -49,7 +49,10 @@ class ProvisioningSafetyTests(unittest.TestCase):
         # sent the first field test straight into the fatal privileged branch.
         # No -e probe on the drop-in either: /etc/sudoers.d is 0750 on stock
         # Arch, so the owner cannot stat entries.
-        self.assertIn("elif [[ ! -t 0 ]] && sudo -n systemctl --version", RAISE)
+        # …and it must stay unreachable when unscoped sudo works passwordless
+        # (blanket-NOPASSWD boxes, curl|bash installs) — the #85 smoke caught a
+        # fresh box skipping its very first sudoers install through it.
+        self.assertIn("elif ! sudo -n true 2>/dev/null && [[ ! -t 0 ]] && sudo -n systemctl --version", RAISE)
         self.assertNotIn("sudo -n -l", RAISE)
 
     def test_sudoers_wheel_detection_survives_a_0750_dir(self):
