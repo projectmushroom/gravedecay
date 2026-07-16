@@ -27,8 +27,10 @@ CTR=gravedecay-e2e
 cleanup() {
   rc=$?
   if (( rc != 0 )); then
-    echo "=== smoke FAILED (rc=$rc) — container journal tail ==="
-    docker exec "$CTR" journalctl -n 100 --no-pager 2>/dev/null || true
+    echo "=== smoke FAILED (rc=$rc) — sudo journal (every COMMAND asked) ==="
+    docker exec "$CTR" journalctl SYSLOG_IDENTIFIER=sudo -n 40 --no-pager -o cat 2>/dev/null || true
+    echo "=== container journal tail ==="
+    docker exec "$CTR" journalctl -n 60 --no-pager 2>/dev/null || true
   fi
   docker rm -f "$CTR" >/dev/null 2>&1 || true
   docker volume rm grave-e2e-docker >/dev/null 2>&1 || true
@@ -74,7 +76,13 @@ if as_mole sudo -n mkdir /e2e-should-not-exist 2>/dev/null; then
 fi
 
 echo "=== phase 3: headless re-raise — the gravedecay-upgrade.service path (#89) ==="
-as_mole bash -c './raise.sh --profile generic </dev/null'
+# traced: when this phase fails, the xtrace names the exact command that
+# asked for a password — no journal archaeology
+if ! as_mole bash -c 'bash -x ./raise.sh --profile generic </dev/null 2>/tmp/raise-phase3.trace'; then
+  echo "=== phase 3 FAILED — trace tail ==="
+  docker exec "$CTR" tail -60 /tmp/raise-phase3.trace
+  exit 1
+fi
 
 echo "=== phase 4: stampless headless re-raise — the pre-stamp sudoers fallback (#96) ==="
 as_mole rm /srv/dev/config/.sudoers.stamp
