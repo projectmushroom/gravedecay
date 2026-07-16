@@ -40,8 +40,8 @@ class NotifyContractTests(unittest.TestCase):
         # A grave.conf installed before the feature has no NOTIFY_EVENTS; grave
         # must default it (same pattern as PREVIEW_RANGE) and the example conf
         # must document it.
-        self.assertIn(': "${NOTIFY_EVENTS:=session-exit bell agent-done unit-failure doctor}"', GRAVE)
-        self.assertIn('NOTIFY_EVENTS="session-exit bell agent-done unit-failure doctor"', CONF)
+        self.assertIn(': "${NOTIFY_EVENTS:=session-exit bell agent-done unit-failure doctor digest}"', GRAVE)
+        self.assertIn('NOTIFY_EVENTS="session-exit bell agent-done unit-failure doctor digest"', CONF)
 
     def test_title_and_token_cannot_inject_headers(self):
         # A tmux session name reaches curl -H "Title: ..."; a CR/LF in it would

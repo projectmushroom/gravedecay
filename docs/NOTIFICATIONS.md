@@ -61,6 +61,11 @@ Subscribe to the topic in the ntfy app, then `grave notify "hello"`.
 | `agent-done` | an agent CLI turn completes | Claude `Stop` hook, Codex `notify` | that session's terminal, or T3 root |
 | `unit-failure` | a platform unit enters failed state (t3code, dashboard, terminal, gateway, upgrades, gamewatch, selfheal) | `OnFailure=gravedecay-notify@%n` | System tab |
 | `doctor` | a `grave doctor` run has failing checks | doctor itself | System tab |
+| `digest` | every morning ~08:00 — one summary of the graveyard shift: agent sessions, spend, doctor verdict, backup freshness | `gravedecay-digest.timer` → `grave digest` | dashboard |
+
+The digest embeds a full doctor run with the doctor page suppressed
+(`grave doctor --no-page`), so a contract that broke overnight arrives as one
+notification, not two. Preview it any time with `grave digest --print`.
 
 Mute a class with the checkboxes in ⚙️ settings → Notifications (written to
 `$GRAVE_ROOT/config/notify-events`, which overrides `NOTIFY_EVENTS` in
