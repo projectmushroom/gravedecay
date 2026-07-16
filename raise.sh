@@ -315,20 +315,34 @@ step "Scoped passwordless sudo (see docs/SECURITY.md)"
 # sorts AFTER 50-gravedecay and would cancel our NOPASSWD, breaking the headless
 # dashboard's mode-flip/reboot buttons and agent freeze. Name our file to sort
 # last on such hosts so the scoped NOPASSWD wins.
-SUDOERS_FILE=/etc/sudoers.d/50-gravedecay
-if ls /etc/sudoers.d/ 2>/dev/null | grep -qxE 'wheel|wheel-.*'; then
-  SUDOERS_FILE=/etc/sudoers.d/zz-gravedecay
+sudoers_stamp="$GRAVE_ROOT/config/.sudoers.stamp"   # line 1: installed path, line 2: content hash
+# Which drop-in name? Prefer what the last install recorded: /etc/sudoers.d
+# is 0750 on stock Arch — unreadable (even unstat-able) for the owner, so a
+# plain ls silently misses the wheel file and 50-gravedecay gets cancelled by
+# the very wheel rule it must outrank (found by the #85 smoke, phase 3).
+# Live detection needs privileges and is reserved for runs that may rewrite:
+# plain ls covers 0755 hosts (SteamOS), sudo -n ls covers first raises whose
+# credential line 54 just cached (and bootstrap/blanket-NOPASSWD setups).
+SUDOERS_FILE=""
+if [[ -r "$sudoers_stamp" ]]; then
+  SUDOERS_FILE=$(head -1 "$sudoers_stamp")
+  [[ "$SUDOERS_FILE" == /etc/sudoers.d/* ]] || SUDOERS_FILE=""
+fi
+if [[ -z "$SUDOERS_FILE" ]]; then
+  SUDOERS_FILE=/etc/sudoers.d/50-gravedecay
+  if { ls /etc/sudoers.d/ 2>/dev/null; sudo -n ls /etc/sudoers.d/ 2>/dev/null; } | grep -qxE 'wheel|wheel-.*'; then
+    SUDOERS_FILE=/etc/sudoers.d/zz-gravedecay
+  fi
 fi
 sudoers_content="# gravedecay: let $RUN_USER (and gravedecay action buttons) drive the platform
 $RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker, $GRAVE_BIN, /usr/bin/journalctl, /usr/bin/ufw, /usr/sbin/ufw, /usr/bin/snapper, /usr/sbin/sshd -T, /usr/bin/sshd -T, /usr/bin/tee /etc/systemd/system/*, /usr/bin/tee /sys/fs/cgroup/grave-torpor/*, /usr/bin/mkdir -p /sys/fs/cgroup/grave-torpor, /usr/bin/npm update -g *"
 # /etc/sudoers.d entries are 440 — unreadable to us — so the unchanged-skip
 # (#89: headless upgrades must not need out-of-scope sudo) compares against a
 # user-side stamp of what the last successful install wrote instead.
-sudoers_stamp="$GRAVE_ROOT/config/.sudoers.sha256"
 sudoers_hash=$(printf '%s\n%s\n' "$SUDOERS_FILE" "$sudoers_content" | sha256sum | cut -d' ' -f1)
-if [[ -r "$sudoers_stamp" && "$(cat "$sudoers_stamp")" == "$sudoers_hash" ]]; then
+if [[ -r "$sudoers_stamp" && "$(sed -n 2p "$sudoers_stamp")" == "$sudoers_hash" ]]; then
   skip "sudoers unchanged ($SUDOERS_FILE)"
-elif [[ ! -t 0 && -e "$SUDOERS_FILE" ]] && sudo -n systemctl --version >/dev/null 2>&1; then
+elif [[ ! -t 0 ]] && sudo -n systemctl --version >/dev/null 2>&1; then
   # Headless (no TTY — the self-upgrade unit) with a working scoped grant
   # already installed but no/stale stamp: boxes raised before the stamp
   # existed land here on their first button-upgrade. The rewrite below needs
@@ -353,7 +367,7 @@ else
   sudo chown root:root "$sudoers_tmp"; sudo chmod 440 "$sudoers_tmp"
   if sudo visudo -c -f "$sudoers_tmp" >/dev/null; then
     sudo install -m 440 -o root -g root "$sudoers_tmp" "$SUDOERS_FILE"
-    printf '%s\n' "$sudoers_hash" >"$sudoers_stamp"
+    printf '%s\n%s\n' "$SUDOERS_FILE" "$sudoers_hash" >"$sudoers_stamp"
     ok "sudoers valid ($SUDOERS_FILE)"
   else
     sudo rm -f "$sudoers_tmp"

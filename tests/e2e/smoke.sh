@@ -74,7 +74,7 @@ echo "=== phase 3: headless re-raise — the gravedecay-upgrade.service path (#8
 as_mole bash -c './raise.sh --profile generic </dev/null'
 
 echo "=== phase 4: stampless headless re-raise — the pre-stamp sudoers fallback (#96) ==="
-as_mole rm /srv/dev/config/.sudoers.sha256
+as_mole rm /srv/dev/config/.sudoers.stamp
 as_mole bash -c './raise.sh --profile generic </dev/null' | tee /tmp/grave-e2e-phase4.log
 grep -q "not refreshable without a terminal" /tmp/grave-e2e-phase4.log
 
