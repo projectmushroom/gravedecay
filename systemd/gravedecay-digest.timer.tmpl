@@ -1,0 +1,14 @@
+[Unit]
+Description=gravedecay - morning digest schedule
+Documentation=https://github.com/projectmushroom/gravedecay
+
+[Timer]
+# 08:00 local: after the graveyard shift and the 05:00 backup, when the human
+# wakes. Persistent so a box that was asleep at 08:00 still reports when it
+# (or its human) comes back — a late digest beats a silent morning.
+OnCalendar=*-*-* 08:00:00
+RandomizedDelaySec=5m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

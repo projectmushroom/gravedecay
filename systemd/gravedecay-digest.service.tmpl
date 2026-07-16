@@ -1,0 +1,18 @@
+[Unit]
+Description=gravedecay - morning digest page
+Documentation=https://github.com/projectmushroom/gravedecay
+# Page the human if composing the digest itself fails (silent no-op unless
+# notifications are configured -- see docs/NOTIFICATIONS.md). Delivery gating
+# lives inside `grave digest`: unconfigured or muted boxes exit 0 quietly.
+OnFailure=gravedecay-notify@%n.service
+
+[Service]
+Type=oneshot
+User=@USER@
+Group=@USER@
+ExecStart=@GRAVE_BIN@ digest
+Environment=GRAVE_ROOT=@GRAVE_ROOT@
+# Reach the durable toolchain (curl/jq/tmux on Homebrew hosts) — @TOOLPATH@ is
+# empty on package-manager hosts.
+Environment=PATH=@TOOLPATH@@HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
+SyslogIdentifier=gravedecay-digest

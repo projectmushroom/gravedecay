@@ -596,6 +596,21 @@ sudo systemctl daemon-reload
 enable_restart gravedecay-backup.timer >/dev/null 2>&1 || true
 ok "nightly verified backup scheduled (~05:00; run one any time: grave backup)"
 
+# Morning digest (#106): one ~08:00 page summarizing the graveyard shift —
+# agent sessions, spend, doctor verdict, backup freshness. Installed on every
+# box; `grave digest` gates delivery on notify config + the digest event class,
+# so an unconfigured box stays silent.
+step "Morning digest timer"
+sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
+    -e "s|@HOME@|$HOME_DIR|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
+    -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" \
+    "$REPO_DIR/systemd/gravedecay-digest.service.tmpl" \
+  | install_unit gravedecay-digest.service
+install_unit gravedecay-digest.timer <"$REPO_DIR/systemd/gravedecay-digest.timer.tmpl"
+sudo systemctl daemon-reload
+enable_restart gravedecay-digest.timer >/dev/null 2>&1 || true
+ok "morning digest scheduled (~08:00; preview any time: grave digest --print)"
+
 # -------------------------------------------------------------- 7. docker ----
 step "Docker stacks"
 if [[ "$DOCKER_ROOTLESS" == 1 ]]; then

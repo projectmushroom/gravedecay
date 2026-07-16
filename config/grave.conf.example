@@ -65,7 +65,7 @@ BACKUP_MAX_AGE_DAYS=2
 #   agent-done           an agent CLI turn completes
 #   unit-failure         a platform systemd unit entered failed state
 #   doctor               a doctor run found failing checks
-NOTIFY_EVENTS="session-exit bell agent-done unit-failure doctor"
+NOTIFY_EVENTS="session-exit bell agent-done unit-failure doctor digest"
 
 # `grave upgrade` — where the gravedecay checkout lives, and which channel:
 # release = latest v* tag (recommended), edge = main branch (for developers)

@@ -33,7 +33,7 @@ source "$CONF"
 # ⚙️ checkboxes write an override file (it runs unprivileged and must not need
 # sudo for a notification preference — same reasoning as the gamewatch flag),
 # which wins over the conf value when present.
-: "${NOTIFY_EVENTS:=session-exit bell agent-done unit-failure doctor}"
+: "${NOTIFY_EVENTS:=session-exit bell agent-done unit-failure doctor digest}"
 [[ -r "$GRAVE_ROOT/config/notify-events" ]] && NOTIFY_EVENTS="$(<"$GRAVE_ROOT/config/notify-events")"
 
 LOG_FILE="$GRAVE_ROOT/logs/grave.log"
@@ -755,6 +755,73 @@ cmd_notify() { # grave notify [--event <name>] [--priority <p>] [--link </path>]
   log "notify: manual — $title"
 }
 
+# ---------------------------------------------------------------- digest ----
+# One page at ~08:00 (gravedecay-digest.timer) answering "what did the box do
+# overnight?": agent sessions, spend, the doctor verdict, backup freshness.
+# Delivery goes through `grave notify --event digest`, so it inherits the usual
+# gating — a silent no-op when no channel is configured or the class is muted
+# in ⚙️ settings — and the timer can safely fire on every box.
+cmd_digest() { # grave digest [--print]  (--print: compose only, never page)
+  local print_only=0
+  [[ "${1:-}" == "--print" ]] && print_only=1
+
+  # Agents: sessions live right now, and sessions whose log grew in the last
+  # 24h (the pipe-pane log is the one artifact every session leaves behind).
+  local live_names live=0 ran
+  live_names=$(tmuxa list-sessions -F '#S' 2>/dev/null | paste -sd, -) || live_names=""
+  [[ -n "$live_names" ]] && live=$(awk -F, '{print NF}' <<<"$live_names")
+  ran=$(find "$GRAVE_ROOT/agents" -maxdepth 2 -name 'session-*.log' -mmin -1440 2>/dev/null \
+        | sed 's|.*/agents/||; s|/.*||' | sort -u | wc -l)
+  local agents_line="agents: $live live${live_names:+ ($live_names)} · $ran active in 24h"
+
+  # Spend: the dashboard already parses the Claude/Codex transcripts — ask it
+  # on loopback instead of duplicating the parsers in bash. Its absence (gaming
+  # mode, stopped) is itself morning news, so say so rather than omit the line.
+  local usage spend_line="spend: dashboard stopped — no numbers this morning"
+  usage=$(curl -sf -m 10 "http://127.0.0.1:${DASH_PORT:-4712}/api/state" 2>/dev/null \
+          | jq -c '.usage // empty' 2>/dev/null) || usage=""
+  if [[ -n "$usage" ]]; then
+    spend_line=$(jq -r '
+      def k: (. // 0) | if . >= 1000000 then "\((. / 100000 | round) / 10)M"
+             elif . >= 1000 then "\((. / 1000) | round)k" else tostring end;
+      "spend: Claude $\(((.claude.today.cost // 0) * 100 | round) / 100)"
+      + " (\(.claude.today.msgs // 0) msgs)"
+      + " · Codex \(((.codex.today.in // 0) + (.codex.today.cached // 0) + (.codex.today.out // 0)) | k) tok"
+      + " (\(.codex.today.sessions // 0) sessions)"' <<<"$usage" 2>/dev/null) \
+      || spend_line="spend: unavailable (unexpected /api/state shape)"
+  fi
+
+  # Doctor: the full contract run, with its own page suppressed — the digest
+  # IS the morning page, and two notifications about one failure teach the
+  # human to mute both.
+  local doctor_line doctor_out doctor_rc
+  set +e
+  doctor_out=$("$0" doctor --no-page 2>/dev/null)
+  doctor_rc=$?
+  set -e
+  if (( doctor_rc == 0 )); then
+    doctor_line="doctor: ✓ all checks passed"
+  else
+    local fails; fails=$(grep -oE '[0-9]+ check\(s\) failed' <<<"$doctor_out" | tail -1)
+    doctor_line="doctor: ✗ ${fails:-failing} — run: grave doctor"
+  fi
+
+  local backup_line="backup: none verified yet — run: grave backup"
+  if [[ -f "$BACKUP_DIR/.last-verified" ]]; then
+    local age_h=$(( ($(date +%s) - $(stat -c %Y "$BACKUP_DIR/.last-verified")) / 3600 ))
+    backup_line="backup: ✓ verified ${age_h}h ago"
+  fi
+
+  local body title
+  body=$(printf '%s\n' "🤖 $agents_line" "🧾 $spend_line" "🩺 $doctor_line" "🪦 $backup_line")
+  # $HOSTNAME (bash builtin) — the hostname binary is an optional package on
+  # Arch-family hosts and the digest must not depend on it.
+  title="🌄 ${HOSTNAME:-gravedecay}: $live agent(s) live, doctor $([[ $doctor_rc == 0 ]] && echo ✓ || echo ✗)"
+  say "$body"
+  (( print_only )) && return 0
+  cmd_notify --event digest --link "/grave/" "$title" "$body"
+}
+
 # --------------------------------------------------------------- upgrade ----
 upgrade_repo() {
   local repo="${REPO_DIR:-$GRAVE_ROOT/repos/gravedecay}"
@@ -877,7 +944,12 @@ firewall_active() {
     [[ "$zone" != trusted ]] && ! firewall-cmd --info-zone="$zone" 2>/dev/null | grep -q 'target: ACCEPT'
   else return 1; fi
 }
-cmd_doctor() {
+cmd_doctor() { # grave doctor [--no-page]
+  # --no-page suppresses the failure notification: `grave digest` embeds the
+  # doctor verdict in its own single morning page, and two pages about one
+  # failing contract is how notifications get muted wholesale.
+  local no_page=0
+  [[ "${1:-}" == "--no-page" ]] && no_page=1
   FAILURES=0
   hdr "grave doctor"
   check "tailscaled running"            systemctl is-active --quiet tailscaled
@@ -1026,6 +1098,15 @@ cmd_doctor() {
   else
     say "  ${YLW}– backup timer not installed — re-run raise.sh${RST}"
   fi
+  # Morning digest (#106): same shape as the backup timer — the schedule is the
+  # invariant; whether it actually pages is the human's ⚙️ preference (digest
+  # class in NOTIFY_EVENTS), which doctor deliberately does not second-guess.
+  if systemctl cat gravedecay-digest.timer >/dev/null 2>&1; then
+    check "digest timer enabled"        systemctl is-enabled --quiet gravedecay-digest.timer
+    check "digest timer active"         systemctl is-active --quiet gravedecay-digest.timer
+  else
+    say "  ${YLW}– digest timer not installed — re-run raise.sh${RST}"
+  fi
   # Notification invariants, each gated on its channel being opted into: a
   # dead channel silently eats every page, so reachability is an invariant,
   # not a nicety (see docs/NOTIFICATIONS.md).
@@ -1060,7 +1141,7 @@ cmd_doctor() {
     check "Tailscale LocalAPI hidden from workspaces" bash -c "[[ \$(stat -c %a /run/tailscale/tailscaled.sock) == 660 ]]"
   fi
   echo
-  if (( FAILURES > 0 )); then
+  if (( FAILURES > 0 && ! no_page )); then
     # Page the human about a failing contract (muteable via NOTIFY_EVENTS,
     # silent no-op when unconfigured). Subshell: cmd_notify exits, doctor must
     # still print its own verdict below.
@@ -1306,6 +1387,9 @@ grave — gravedecay appliance control 🪦
                              the installed PWA (enroll in ⚙️ settings). Agents,
                              failing units, and doctor use the same channels —
                              see docs/NOTIFICATIONS.md
+  grave digest [--print]     morning summary (agents, spend, doctor, backup);
+                             a timer pages it at ~08:00 — --print composes
+                             without paging
   grave backup               bundle repos, configs, docker volumes — every
                              artifact verified; a timer runs one nightly and
                              doctor enforces freshness (docs/RECOVERY.md)
@@ -1336,7 +1420,8 @@ case "${1:-help}" in
   keepalive)  shift || true; cmd_keepalive "$@" ;;
   logs)       shift; cmd_logs "$@" ;;
   notify)     shift || true; cmd_notify "$@" ;;
-  doctor)     cmd_doctor ;;
+  digest)     shift || true; cmd_digest "$@" ;;
+  doctor)     shift || true; cmd_doctor "$@" ;;
   users)      shift || true; exec sudo -n "$0" __users "$@" ;;
   projects)
     shift || true; sub="${1:-list}"; shift || true
