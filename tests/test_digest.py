@@ -48,6 +48,15 @@ class DigestContractTests(unittest.TestCase):
         self.assertIn("/api/state", GRAVE)
         self.assertIn("dashboard stopped", GRAVE)  # absence is morning news
 
+    def test_session_counts_cover_t3_not_just_tmux(self):
+        # T3 drives the same claude/codex binaries with default state dirs, so
+        # sessions are counted from those (one Claude .jsonl / one Codex
+        # rollout per session) — a tmux-only count reads "0 agents" every
+        # morning on a T3-first box while the spend line shows real money.
+        self.assertIn(".claude/projects", GRAVE)
+        self.assertIn("rollout-*.jsonl", GRAVE)
+        self.assertIn("-not -path '*/subagents/*'", GRAVE)
+
     def test_digest_failure_pages_via_shared_notifier(self):
         self.assertIn("OnFailure=gravedecay-notify@%n.service", SERVICE)
 

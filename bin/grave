@@ -765,14 +765,19 @@ cmd_digest() { # grave digest [--print]  (--print: compose only, never page)
   local print_only=0
   [[ "${1:-}" == "--print" ]] && print_only=1
 
-  # Agents: sessions live right now, and sessions whose log grew in the last
-  # 24h (the pipe-pane log is the one artifact every session leaves behind).
-  local live_names live=0 ran
+  # Agents: tmux sessions live right now, plus per-provider session counts from
+  # the CLIs' own state dirs. T3 shells out to the same claude/codex binaries
+  # with default state paths, so counting transcripts covers T3, tmux, and bare
+  # CLI sessions alike — tmux alone would read "0" every morning on a T3-first
+  # box. Claude: one .jsonl per session (subagent transcripts excluded);
+  # Codex: one rollout-*.jsonl per session.
+  local live_names live=0 claude_24h codex_24h
   live_names=$(tmuxa list-sessions -F '#S' 2>/dev/null | paste -sd, -) || live_names=""
   [[ -n "$live_names" ]] && live=$(awk -F, '{print NF}' <<<"$live_names")
-  ran=$(find "$GRAVE_ROOT/agents" -maxdepth 2 -name 'session-*.log' -mmin -1440 2>/dev/null \
-        | sed 's|.*/agents/||; s|/.*||' | sort -u | wc -l)
-  local agents_line="agents: $live live${live_names:+ ($live_names)} · $ran active in 24h"
+  claude_24h=$(find "$HOME/.claude/projects" -name '*.jsonl' -not -path '*/subagents/*' \
+               -mmin -1440 2>/dev/null | wc -l)
+  codex_24h=$(find "$HOME/.codex/sessions" -name 'rollout-*.jsonl' -mmin -1440 2>/dev/null | wc -l)
+  local agents_line="agents: $live tmux live${live_names:+ ($live_names)} · 24h sessions: $claude_24h Claude, $codex_24h Codex"
 
   # Spend: the dashboard already parses the Claude/Codex transcripts — ask it
   # on loopback instead of duplicating the parsers in bash. Its absence (gaming
