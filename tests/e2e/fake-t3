@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# t3 CLI stand-in for the appliance smoke (tests/e2e): the real npm package
+# wants provider logins CI can't have. doctor only needs --version to run and
+# a live loopback listener on the t3 port, so serve mode is a bare HTTP
+# server — enough for t3code.service, wait_http, and the doctor probes.
+[[ "${1:-}" == "--version" ]] && { echo "t3 v0.0.0-e2e"; exit 0; }
+port=4711 prev=""
+for a in "$@"; do [[ "$prev" == "--port" ]] && port="$a"; prev="$a"; done
+exec python3 -m http.server "$port" --bind 127.0.0.1

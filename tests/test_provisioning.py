@@ -39,21 +39,48 @@ class ProvisioningSafetyTests(unittest.TestCase):
         self.assertIn("install_unit() {", RAISE)
         self.assertGreaterEqual(RAISE.count("| install_unit "), 9)
         self.assertIn("install_cli() {", RAISE)
+        # compares use sha256sum (coreutils, guaranteed) — cmp is diffutils,
+        # absent from Arch's base meta-package; a swallowed "command not
+        # found" read as "differs" and re-ran privileged installs every raise
+        self.assertIn("same_file() {", RAISE)
+        self.assertNotIn("cmp -s", RAISE)
         self.assertIn('install_cli "$REPO_DIR/bin/grave" "$GRAVE_BIN"', RAISE)
         self.assertIn("layout_ok", RAISE)
         self.assertIn('stat -c %U "$GRAVE_ROOT"', RAISE)
-        self.assertIn(".sudoers.sha256", RAISE)
+        self.assertIn(".sudoers.stamp", RAISE)
         # The headless fallback must key on "is there a terminal to prompt on",
         # NOT on `sudo -l` — which answers allowed-at-all (true via a
         # password-requiring wheel rule) rather than allowed-passwordless, and
         # sent the first field test straight into the fatal privileged branch.
-        self.assertIn('elif [[ ! -t 0 && -e "$SUDOERS_FILE" ]]', RAISE)
+        # No -e probe on the drop-in either: /etc/sudoers.d is 0750 on stock
+        # Arch, so the owner cannot stat entries.
+        # …and it must stay unreachable when unscoped sudo works passwordless
+        # (blanket-NOPASSWD boxes, curl|bash installs) — the #85 smoke caught a
+        # fresh box skipping its very first sudoers install through it.
+        self.assertIn("elif ! sudo -n true 2>/dev/null && [[ ! -t 0 ]] && sudo -n systemctl --version", RAISE)
         self.assertNotIn("sudo -n -l", RAISE)
+
+    def test_sudoers_wheel_detection_survives_a_0750_dir(self):
+        # Found by the #85 smoke, phase 3: stock Arch ships /etc/sudoers.d as
+        # 0750, so an unprivileged plain ls silently misses the wheel file,
+        # 50-gravedecay gets installed, and the later-sorting wheel rule
+        # cancels the scoped NOPASSWD (SteamOS's 0755 dir was the exception
+        # that hid this). The installed name is recorded in the user-side
+        # stamp; live detection also tries sudo -n ls for first raises.
+        self.assertIn('SUDOERS_FILE=$(head -1 "$sudoers_stamp")', RAISE)
+        self.assertIn('[[ "$SUDOERS_FILE" == /etc/sudoers.d/* ]] || SUDOERS_FILE=""', RAISE)
+        self.assertIn("sudo -n ls /etc/sudoers.d/", RAISE)
+        self.assertIn('printf \'%s\\n%s\\n\' "$SUDOERS_FILE" "$sudoers_hash" >"$sudoers_stamp"', RAISE)
         self.assertIn("tailscale serve status >/dev/null 2>&1 || sudo tailscale set", RAISE)
         self.assertIn("stat -c '%G %a' /run/tailscale/tailscaled.sock", RAISE)
         # the classic offenders must be gone from raise.sh entirely
         self.assertNotIn("sudo sed -i", RAISE)
         self.assertNotIn("sudo tee /etc/systemd/system/gravedecay", RAISE)
+        # package steps: pacman probes before any privileged install (found by
+        # the #85 smoke harness — every Arch re-raise ran sudo pacman), and
+        # apt-get update is non-fatal like the install below it already was
+        self.assertIn('if pacman -T "${PACMAN_PKGS[@]}"', RAISE)
+        self.assertNotIn("sudo apt-get update -qq\n", RAISE)
 
     def test_profile_conf_set_skips_when_value_already_set(self):
         # Regression #89: profiles run on every raise; conf_set must be a

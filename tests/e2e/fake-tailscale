@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# tailscale CLI stand-in for the appliance smoke (tests/e2e): CI has no
+# tailnet. raise.sh, grave doctor, and the dashboard only need status/serve/
+# set to answer sensibly; everything else is a silent success.
+case "${1:-} ${2:-}" in
+  "status --peers=false")
+    echo "100.64.0.1  e2ebox  mole@example.com  linux  -"
+    exit 0 ;;
+  "status --json")
+    cat <<'JSON'
+{"Self": {"UserID": 100, "DNSName": "e2ebox.tail-e2e.ts.net."}, "User": {"100": {"LoginName": "mole@example.com"}}}
+JSON
+    exit 0 ;;
+esac
+exit 0

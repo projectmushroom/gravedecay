@@ -56,18 +56,24 @@ wait_http() {
 # and the only privileges an upgrade needs are the already-granted systemctl /
 # docker / tee-into-/etc/systemd/system set. First raise (fresh box) still
 # prompts interactively; that is the one run a human is present for.
+same_file() { # both readable and byte-identical. sha256sum is coreutils —
+  # guaranteed — while cmp is diffutils, which Arch's `base` meta-package
+  # does NOT include: a swallowed `cmp: command not found` read as "differs"
+  # and re-ran the privileged install on every raise (#85 smoke, phase 3).
+  [[ -r "$1" && -r "$2" ]] && [[ "$(sha256sum <"$1")" == "$(sha256sum <"$2")" ]]
+}
 install_unit() { # install_unit <path under /etc/systemd/system>  (rendered file on stdin)
   local dest="/etc/systemd/system/$1" tmp
   tmp=$(mktemp)
   cat >"$tmp"
-  if cmp -s "$tmp" "$dest" 2>/dev/null; then
+  if same_file "$tmp" "$dest"; then
     rm -f "$tmp"; return 0        # unchanged — no privileged write
   fi
   sudo tee "$dest" <"$tmp" >/dev/null
   rm -f "$tmp"
 }
 install_cli() { # install_cli <src> <dest> — sudo only when content differs
-  cmp -s "$1" "$2" 2>/dev/null && return 0
+  same_file "$1" "$2" && return 0
   if [[ "$IMMUTABLE" == 1 ]]; then
     install -m 755 "$1" "$2"      # ~/.local/bin — user-owned, no sudo
   else
@@ -205,11 +211,21 @@ if [[ "$MANAGED_TOOLCHAIN" == 1 ]]; then
       || skip "python 'cryptography' unavailable — Web Push disabled (ntfy unaffected)"
   fi
 elif command -v pacman >/dev/null; then
-  sudo pacman -S --needed --noconfirm git tmux curl jq python docker docker-compose \
-    nodejs npm ufw lm_sensors python-pillow python-cryptography ttyd
+  # Probe first (pacman -T is an unprivileged query): a steady-state re-raise
+  # — the headless upgrade path (#89) — must not run sudo pacman, which is
+  # outside the scoped NOPASSWD grant and dies at a password prompt there.
+  PACMAN_PKGS=(git tmux curl jq python docker docker-compose nodejs npm ufw
+    lm_sensors python-pillow python-cryptography ttyd)
+  if pacman -T "${PACMAN_PKGS[@]}" >/dev/null; then
+    skip "packages already installed — no privileged install"
+  else
+    sudo pacman -S --needed --noconfirm "${PACMAN_PKGS[@]}"
+  fi
   ok "packages present"
 elif command -v apt-get >/dev/null; then
-  sudo apt-get update -qq
+  # non-fatal: headless re-raise (#89) has no password for out-of-scope sudo,
+  # and the install below already tolerates failure the same way
+  sudo apt-get update -qq || skip "apt-get update failed (headless re-raise?) — continuing"
   sudo apt-get install -y git tmux curl jq python3 docker.io docker-compose-v2 \
     nodejs npm ufw lm-sensors python3-pil python3-cryptography ttyd || skip "some packages failed — fix names for your distro and rerun"
   ok "packages present"
@@ -305,29 +321,46 @@ step "Scoped passwordless sudo (see docs/SECURITY.md)"
 # sorts AFTER 50-gravedecay and would cancel our NOPASSWD, breaking the headless
 # dashboard's mode-flip/reboot buttons and agent freeze. Name our file to sort
 # last on such hosts so the scoped NOPASSWD wins.
-SUDOERS_FILE=/etc/sudoers.d/50-gravedecay
-if ls /etc/sudoers.d/ 2>/dev/null | grep -qxE 'wheel|wheel-.*'; then
-  SUDOERS_FILE=/etc/sudoers.d/zz-gravedecay
+sudoers_stamp="$GRAVE_ROOT/config/.sudoers.stamp"   # line 1: installed path, line 2: content hash
+# Which drop-in name? Prefer what the last install recorded: /etc/sudoers.d
+# is 0750 on stock Arch — unreadable (even unstat-able) for the owner, so a
+# plain ls silently misses the wheel file and 50-gravedecay gets cancelled by
+# the very wheel rule it must outrank (found by the #85 smoke, phase 3).
+# Live detection needs privileges and is reserved for runs that may rewrite:
+# plain ls covers 0755 hosts (SteamOS), sudo -n ls covers first raises whose
+# credential line 54 just cached (and bootstrap/blanket-NOPASSWD setups).
+SUDOERS_FILE=""
+if [[ -r "$sudoers_stamp" ]]; then
+  SUDOERS_FILE=$(head -1 "$sudoers_stamp")
+  [[ "$SUDOERS_FILE" == /etc/sudoers.d/* ]] || SUDOERS_FILE=""
+fi
+if [[ -z "$SUDOERS_FILE" ]]; then
+  SUDOERS_FILE=/etc/sudoers.d/50-gravedecay
+  if { ls /etc/sudoers.d/ 2>/dev/null; sudo -n ls /etc/sudoers.d/ 2>/dev/null; } | grep -qxE 'wheel|wheel-.*'; then
+    SUDOERS_FILE=/etc/sudoers.d/zz-gravedecay
+  fi
 fi
 sudoers_content="# gravedecay: let $RUN_USER (and gravedecay action buttons) drive the platform
 $RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker, $GRAVE_BIN, /usr/bin/journalctl, /usr/bin/ufw, /usr/sbin/ufw, /usr/bin/snapper, /usr/sbin/sshd -T, /usr/bin/sshd -T, /usr/bin/tee /etc/systemd/system/*, /usr/bin/tee /sys/fs/cgroup/grave-torpor/*, /usr/bin/mkdir -p /sys/fs/cgroup/grave-torpor, /usr/bin/npm update -g *"
 # /etc/sudoers.d entries are 440 — unreadable to us — so the unchanged-skip
 # (#89: headless upgrades must not need out-of-scope sudo) compares against a
 # user-side stamp of what the last successful install wrote instead.
-sudoers_stamp="$GRAVE_ROOT/config/.sudoers.sha256"
 sudoers_hash=$(printf '%s\n%s\n' "$SUDOERS_FILE" "$sudoers_content" | sha256sum | cut -d' ' -f1)
-if [[ -r "$sudoers_stamp" && "$(cat "$sudoers_stamp")" == "$sudoers_hash" ]]; then
+if [[ -r "$sudoers_stamp" && "$(sed -n 2p "$sudoers_stamp")" == "$sudoers_hash" ]]; then
   skip "sudoers unchanged ($SUDOERS_FILE)"
-elif [[ ! -t 0 && -e "$SUDOERS_FILE" ]] && sudo -n systemctl --version >/dev/null 2>&1; then
-  # Headless (no TTY — the self-upgrade unit) with a working scoped grant
-  # already installed but no/stale stamp: boxes raised before the stamp
-  # existed land here on their first button-upgrade. The rewrite below needs
-  # sudo outside the NOPASSWD scope (mktemp/visudo/install) and would die at
-  # a password prompt no one can answer, while the installed grant
-  # demonstrably works (the scoped systemctl probe just used it) — so defer
-  # the refresh to the next interactive raise. NOTE `sudo -l <cmd>` cannot
-  # make this call: it answers "allowed at all" (yes, via a password-requiring
-  # wheel rule), not "allowed without a password".
+elif ! sudo -n true 2>/dev/null && [[ ! -t 0 ]] && sudo -n systemctl --version >/dev/null 2>&1; then
+  # Headless (no TTY — the self-upgrade unit) with ONLY the scoped grant
+  # working and no/stale stamp: boxes raised before the stamp existed land
+  # here on their first button-upgrade. The rewrite below needs sudo outside
+  # the NOPASSWD scope (mktemp/visudo/install) and would die at a password
+  # prompt no one can answer, while the installed grant demonstrably works
+  # (the scoped systemctl probe just used it) — so defer the refresh to the
+  # next interactive raise. The `sudo -n true` probe keeps this branch
+  # UNREACHABLE when unscoped sudo works without a password (blanket-NOPASSWD
+  # cloud images, `curl | bash` installs — stdin is a pipe there too): the
+  # #85 smoke caught a fresh box skipping its very first sudoers install.
+  # NOTE `sudo -l <cmd>` cannot make either call: it answers "allowed at all"
+  # (yes, via a password-requiring wheel rule), not "allowed passwordless".
   skip "sudoers present but not refreshable without a terminal — run ./raise.sh interactively to update it"
 else
   [[ "$SUDOERS_FILE" == /etc/sudoers.d/zz-gravedecay ]] && sudo rm -f /etc/sudoers.d/50-gravedecay
@@ -343,7 +376,7 @@ else
   sudo chown root:root "$sudoers_tmp"; sudo chmod 440 "$sudoers_tmp"
   if sudo visudo -c -f "$sudoers_tmp" >/dev/null; then
     sudo install -m 440 -o root -g root "$sudoers_tmp" "$SUDOERS_FILE"
-    printf '%s\n' "$sudoers_hash" >"$sudoers_stamp"
+    printf '%s\n%s\n' "$SUDOERS_FILE" "$sudoers_hash" >"$sudoers_stamp"
     ok "sudoers valid ($SUDOERS_FILE)"
   else
     sudo rm -f "$sudoers_tmp"
