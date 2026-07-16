@@ -22,6 +22,11 @@ source "$CONF"
 : "${PREVIEW_RESERVED:=3050}"
 : "${MULTI_USER:=0}"
 
+# Doctor fails when the newest verified backup is older than this (#112).
+# Default here so installs whose grave.conf predates the feature still work;
+# documented in docs/RECOVERY.md and grave.conf.example.
+: "${BACKUP_MAX_AGE_DAYS:=2}"
+
 # Event classes allowed to page the human via `grave notify --event` (#78).
 # Default here so installs whose grave.conf predates the feature still work;
 # documented in docs/NOTIFICATIONS.md and grave.conf.example. The dashboard's
@@ -1005,6 +1010,22 @@ cmd_doctor() {
     say "  ${YLW}– web terminal stopped${RST}"
   fi
   check "backups dir writable"          test -w "$BACKUP_DIR"
+  # Backup freshness (#112): .last-verified is written only after every artifact
+  # in a run was created AND verified, so "fresh marker" means "a restorable
+  # backup exists", not "the timer fired". Gated on the timer unit so installs
+  # that predate it degrade to a nudge instead of a failure.
+  if systemctl cat gravedecay-backup.timer >/dev/null 2>&1; then
+    check "backup timer enabled"        systemctl is-enabled --quiet gravedecay-backup.timer
+    check "backup timer active"         systemctl is-active --quiet gravedecay-backup.timer
+    if [[ -f "$BACKUP_DIR/.last-verified" ]]; then
+      check "verified backup newer than ${BACKUP_MAX_AGE_DAYS}d" bash -c \
+        "(( \$(date +%s) - \$(stat -c %Y '$BACKUP_DIR/.last-verified') < ${BACKUP_MAX_AGE_DAYS} * 86400 ))"
+    else
+      say "  ${YLW}– no verified backup yet — first nightly run pending (or now: grave backup)${RST}"
+    fi
+  else
+    say "  ${YLW}– backup timer not installed — re-run raise.sh${RST}"
+  fi
   # Notification invariants, each gated on its channel being opted into: a
   # dead channel silently eats every page, so reachability is an invariant,
   # not a nicety (see docs/NOTIFICATIONS.md).
@@ -1049,40 +1070,74 @@ cmd_doctor() {
 }
 
 # ---------------------------------------------------------------- backup ----
+backup_tar() { # backup_tar <label> <out.tar.gz> <tar args…> — create + verify
+  # Listing the archive back proves it decompresses end to end — a truncated
+  # write (disk full mid-run) otherwise looks identical to a good backup until
+  # restore day. Counts into cmd_backup's `failures` (bash dynamic scope).
+  local label="$1" out="$2"; shift 2
+  if tar -czf "$out" "$@" 2>/dev/null && tar -tzf "$out" >/dev/null 2>&1; then
+    ok "$label"
+  else
+    bad "$label failed"; failures=$((failures+1))
+  fi
+}
+
 cmd_backup() {
   local include_secrets=0
   [[ "${1:-}" == "--include-secrets" ]] && include_secrets=1
   need_root_helper
-  local ts dest; ts=$(date +%Y%m%d-%H%M%S); dest="$BACKUP_DIR/$ts"
+  local ts dest failures=0; ts=$(date +%Y%m%d-%H%M%S); dest="$BACKUP_DIR/$ts"
   mkdir -p "$dest"/{repos,volumes,configs}
   say "Backing up to $dest"
 
+  # Every artifact is verified as it lands and any miss fails the whole run
+  # (#112): the nightly unit must land in failed state — and page via
+  # OnFailure= — rather than let retention quietly age out the last good copy.
+  # The .last-verified marker is written only on a clean run, so doctor's
+  # freshness check means "a backup that verifies", not "the timer fired".
   local repo name
   for repo in "$GRAVE_ROOT"/repos/*/; do
     [[ -d "$repo/.git" ]] || continue
     name=$(basename "$repo")
-    git -C "$repo" bundle create "$dest/repos/$name.bundle" --all 2>/dev/null && ok "repo $name (git bundle)"
+    # A repo with no commits has nothing to lose and `bundle create --all`
+    # errors on it — skip it rather than page every night about a fresh clone.
+    git -C "$repo" rev-parse --quiet --verify HEAD >/dev/null 2>&1 \
+      || { say "  ${YLW}– repo $name has no commits — skipped${RST}"; continue; }
+    if git -C "$repo" bundle create "$dest/repos/$name.bundle" --all 2>/dev/null \
+       && git bundle verify "$dest/repos/$name.bundle" >/dev/null 2>&1; then
+      ok "repo $name (git bundle, verified)"
+    else
+      bad "repo $name bundle failed"; failures=$((failures+1))
+    fi
   done
 
   local excludes=(--exclude='config/secrets' --exclude='workspaces/*/config/secrets' --exclude='workspaces/*/.config/gh' --exclude='workspaces/*/.codex/auth.json' --exclude='workspaces/*/.claude/.credentials.json' --exclude='workspaces/*/.claude.json')
   (( include_secrets )) && excludes=()
-  tar "${excludes[@]}" -C "$GRAVE_ROOT" -czf "$dest/configs/grave-platform.tar.gz" config docker docs scripts 2>/dev/null && ok "platform config"
+  backup_tar "platform config" "$dest/configs/grave-platform.tar.gz" \
+    "${excludes[@]}" -C "$GRAVE_ROOT" config docker docs scripts
   if [[ -d "$GRAVE_ROOT/workspaces" ]]; then
-    tar "${excludes[@]}" -C "$GRAVE_ROOT" -czf "$dest/configs/workspaces.tar.gz" workspaces \
-      && ok "workspace homes, state, and dirty worktrees"
+    backup_tar "workspace homes, state, and dirty worktrees" "$dest/configs/workspaces.tar.gz" \
+      "${excludes[@]}" -C "$GRAVE_ROOT" workspaces
   fi
   printf '{"version":1,"secrets_included":%s,"created":"%s"}\n' "$([[ $include_secrets == 1 ]] && echo true || echo false)" "$(date -u +%FT%TZ)" >"$dest/manifest.json"
   local d
   for d in "${AGENT_CONFIG_DIRS[@]}"; do
-    [[ -e "$HOME/$d" ]] && tar --exclude="$d/auth.json" --exclude="$d/.credentials.json" -C "$HOME" -czf "$dest/configs/${d#.}.tar.gz" "$d" 2>/dev/null && ok "agent config $d"
+    [[ -e "$HOME/$d" ]] && backup_tar "agent config $d" "$dest/configs/${d#.}.tar.gz" \
+      --exclude="$d/auth.json" --exclude="$d/.credentials.json" -C "$HOME" "$d"
   done
-  [[ -d "$GRAVE_ROOT/agents/t3code" ]] && tar -C "$GRAVE_ROOT/agents" -czf "$dest/configs/t3code-state.tar.gz" t3code && ok "t3code state"
+  [[ -d "$GRAVE_ROOT/agents/t3code" ]] && backup_tar "t3code state" "$dest/configs/t3code-state.tar.gz" \
+    -C "$GRAVE_ROOT/agents" t3code
 
   if dkctl is-active --quiet docker; then
     local vol
     for vol in $(dk volume ls -q | grep -vE '^[0-9a-f]{64}$'); do
-      dk run --rm -v "$vol":/data:ro -v "$dest/volumes":/backup alpine \
-        tar -czf "/backup/$vol.tar.gz" -C /data . && ok "volume $vol"
+      if dk run --rm -v "$vol":/data:ro -v "$dest/volumes":/backup alpine \
+           tar -czf "/backup/$vol.tar.gz" -C /data . \
+         && tar -tzf "$dest/volumes/$vol.tar.gz" >/dev/null 2>&1; then
+        ok "volume $vol (verified)"
+      else
+        bad "volume $vol failed"; failures=$((failures+1))
+      fi
     done
   else
     say "  ${YLW}docker stopped — volumes skipped this run${RST}"
@@ -1096,6 +1151,12 @@ cmd_backup() {
   while IFS= read -r old; do
     rm -rf "$BACKUP_DIR/${old:?}"; say "  pruned old backup $old"
   done < <(ls -1 "$BACKUP_DIR" 2>/dev/null | grep -E '^[0-9]{8}-[0-9]{6}$' | sort | head -n -"$BACKUP_KEEP")
+  if (( failures > 0 )); then
+    log "backup: $ts FAILED ($failures artifact(s))"
+    bad "backup incomplete: $failures artifact(s) failed — kept at $dest; freshness marker not updated"
+    exit 1
+  fi
+  date -u +%FT%TZ >"$BACKUP_DIR/.last-verified"
   log "backup: $ts complete"
   ok "backup complete: $dest"
 }
@@ -1245,7 +1306,9 @@ grave — gravedecay appliance control 🪦
                              the installed PWA (enroll in ⚙️ settings). Agents,
                              failing units, and doctor use the same channels —
                              see docs/NOTIFICATIONS.md
-  grave backup               bundle repos, configs, docker volumes
+  grave backup               bundle repos, configs, docker volumes — every
+                             artifact verified; a timer runs one nightly and
+                             doctor enforces freshness (docs/RECOVERY.md)
   grave restore [backup]     list / restore backups
 
 Docs: $GRAVE_ROOT/docs   Config: /etc/gravedecay/grave.conf

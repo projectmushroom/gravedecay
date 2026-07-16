@@ -48,9 +48,12 @@ AGENT_CONFIG_DIRS=(.claude .codex .gemini)
 # npm -g tools refreshed by `grave update`
 NPM_GLOBAL_TOOLS=(t3)
 
-# Backups
+# Backups. A nightly timer (gravedecay-backup.timer, ~05:00) runs
+# `grave backup`; doctor fails when the newest verified backup is older than
+# BACKUP_MAX_AGE_DAYS — see docs/RECOVERY.md.
 BACKUP_DIR="$GRAVE_ROOT/backups"
 BACKUP_KEEP=7
+BACKUP_MAX_AGE_DAYS=2
 
 # Notifications (`grave notify`, docs/NOTIFICATIONS.md). The channels live
 # elsewhere — ntfy in $GRAVE_ROOT/config/secrets/notify.env (NTFY_URL +

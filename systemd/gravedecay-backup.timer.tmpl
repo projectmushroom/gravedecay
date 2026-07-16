@@ -1,0 +1,14 @@
+[Unit]
+Description=gravedecay - nightly backup schedule
+Documentation=https://github.com/projectmushroom/gravedecay
+
+[Timer]
+# 05:00 local: after the graveyard shift, before the human wakes. Persistent
+# fires a missed run at next boot, so a box that slept through the night still
+# gets its backup instead of silently aging past the doctor freshness window.
+OnCalendar=*-*-* 05:00:00
+RandomizedDelaySec=20m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
