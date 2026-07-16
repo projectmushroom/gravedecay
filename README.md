@@ -260,7 +260,10 @@ transient auto-thaw timer, `grave status` shows the pending restore, and an
 explicit `grave developer` cancels it. Automatic game detection is a separate,
 persistent preference: `grave gamewatch on|off|status`. It defaults on only for
 a first raise on positively detected stock SteamOS and off on every other host;
-your explicit choice survives later raises.
+your explicit choice survives later raises. The dashboard treats this as its
+gaming-feature switch: when off, the top mode badge, gaming/developer action
+buttons, and boot-mode controls disappear so the appliance reads as a dev-only
+box. The single enable control remains under Settings.
 
 ## Notifications — the box wakes you
 

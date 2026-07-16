@@ -35,6 +35,18 @@ def load_dashboard(env):
 
 
 class DashboardContractTests(unittest.TestCase):
+    def test_gamewatch_off_presents_a_dev_only_dashboard(self):
+        # The persistent gamewatch preference is the UI feature gate. Keep one
+        # Settings control to opt back in, but hide every routine mode control;
+        # the existing game banner remains the recovery path if already buried.
+        dash = (ROOT / "dashboard/gravedecay.py").read_text()
+        self.assertIn('let throttleOn=null,gamingFeatures=false;', dash)
+        self.assertIn("gamingFeatures=show&&!!g.on;paintGamingControls();", dash)
+        self.assertIn("$('mode').style.display=gamingFeatures?'':'none';", dash)
+        self.assertIn("$('boot-mode-row').style.display=gamingFeatures?'':'none';", dash)
+        self.assertIn("document.querySelectorAll('[data-gaming-control]')", dash)
+        self.assertNotIn("$('game-banner').style.display=gamingFeatures", dash)
+
     @classmethod
     def setUpClass(cls):
         cls.server = DASHBOARD.ThreadingHTTPServer(("127.0.0.1", 0), DASHBOARD.Handler)

@@ -1975,7 +1975,7 @@ body.gaming #foot{display:none}
   <img id="toplogo" src="icon-180.png" alt="">
   <h1>gravedecay</h1>
   <span class="meta" id="meta">connecting…</span>
-  <span class="badge" id="mode" role="button" title="Tap to switch mode" style="cursor:pointer">…</span>
+  <span class="badge" id="mode" role="button" title="Tap to switch mode" style="display:none;cursor:pointer">…</span>
   <button class="gear" id="gear" title="Settings" aria-label="Settings">⚙️</button>
 </div>
 <div id="connection" role="status" aria-live="polite"><span id="connection-text"></span>
@@ -2011,14 +2011,14 @@ body.gaming #foot{display:none}
     <div id="set-widgets"></div>
   </div>
 
-  <div class="sethead">Boot mode — what a reboot starts</div>
-  <div class="setrow">
+  <div class="sethead" id="boot-mode-head" style="display:none">Boot mode — what a reboot starts</div>
+  <div class="setrow" id="boot-mode-row" style="display:none">
     <button class="mini" id="boot-dev">💻 developer</button>
     <button class="mini" id="boot-game">🎮 gaming</button>
     <span class="setlabel dim2" id="boot-state"></span>
   </div>
 
-  <div class="sethead" id="throttle-head" style="display:none">Game-mode auto-throttle<span class="dim2" id="throttle-info" role="button" tabindex="0" title="What is this?" style="cursor:pointer;margin-left:7px;border:1px solid var(--ring);border-radius:50%;padding:0 5px">ⓘ</span></div>
+  <div class="sethead" id="throttle-head" style="display:none">Gaming features &amp; auto-throttle<span class="dim2" id="throttle-info" role="button" tabindex="0" title="What is this?" style="cursor:pointer;margin-left:7px;border:1px solid var(--ring);border-radius:50%;padding:0 5px">ⓘ</span></div>
   <div class="setrow" id="throttle-row" style="display:none">
     <button class="mini" id="throttle-on">🎮 on</button>
     <button class="mini" id="throttle-off">⏸ off</button>
@@ -2119,10 +2119,13 @@ body.gaming #foot{display:none}
   <div class="dlg">
     <button class="mini xbtn" id="throttle-x" title="close (Esc)" aria-label="close"
       style="position:absolute;top:10px;right:10px;z-index:2">✕</button>
-    <h2>🎮 Game-mode auto-throttle</h2>
+    <h2>🎮 Gaming features &amp; auto-throttle</h2>
     <p class="dim2">This box does double duty — your agents work while you're away,
       and it's a console when you want to play. Auto-throttle makes the hand-off
       automatic, so you never have to flip modes yourself.</p>
+    <p class="dim2">Turning this off also hides the dashboard's mode switcher,
+      boot-mode row, and gaming actions, leaving a focused dev-box UI. This
+      Settings control remains available so you can opt back in.</p>
     <p><b>Launch a game</b> → agent sessions are <b>frozen</b> in place (kept in
       RAM, provably zero CPU) and T3 Code + the database containers stop, handing
       all the RAM and GPU to the game.</p>
@@ -2177,8 +2180,8 @@ body.gaming #foot{display:none}
   <div class="tiles w-full" data-panel="stats" id="tiles"></div>
   <div class="panel w-full" data-panel="actions"><h2>🕹️ Actions</h2>
     <div class="actions">
-      <button data-act="gaming">🎮 Gaming mode</button>
-      <button data-act="developer">💻 Developer mode</button>
+      <button data-act="gaming" data-gaming-control style="display:none">🎮 Gaming mode</button>
+      <button data-act="developer" data-gaming-control style="display:none">💻 Developer mode</button>
       <button data-act="restart-t3" data-confirm="Restart T3 Code? Active agent sessions survive, the UI reconnects.">↻ Restart T3 Code</button>
       <button data-act="update-t3" data-confirm="Install the latest stable T3 Code release and restart its web service? Active agent sessions survive.">⬆ Update T3 Code</button>
       <button data-act="update-grave" data-confirm="Update gravedecay using this appliance's configured release/edge channel, then re-raise it? The dashboard will briefly reconnect; agent sessions survive.">⬆ Update gravedecay</button>
@@ -2625,6 +2628,7 @@ $('add-linear').onclick=async()=>{
 $('new-linear').addEventListener('keydown',e=>{if(e.key==='Enter')$('add-linear').click()});
 // mode badge = one-tap mode flip (delegates to the action button, incl. confirm)
 $('mode').onclick=()=>{
+  if(!gamingFeatures)return;
   const target=lastMode==='developer'?'gaming':'developer';
   const b=document.querySelector(`[data-act="${target}"]`);
   if(b&&!b.disabled)b.click();
@@ -2879,18 +2883,30 @@ async function setBoot(m){
 }
 $('boot-dev').onclick=()=>setBoot('developer');
 $('boot-game').onclick=()=>setBoot('gaming');
-// game-mode auto-throttle: info modal + on/off toggle (Steam Machine only —
-// the section stays hidden unless the watcher service is installed)
-let throttleOn=null;
+// Gamewatch is also the dashboard's gaming-feature switch. With it off, the
+// appliance presents as a dev-only box: the one enable control remains in
+// Settings, while mode/boot/action controls disappear. If the stack is already
+// buried, the game banner still provides the emergency developer-mode wake.
+let throttleOn=null,gamingFeatures=false;
 function paintThrottle(){
   $('throttle-on').classList.toggle('activebtn',throttleOn===true);
   $('throttle-off').classList.toggle('activebtn',throttleOn===false);
+}
+function paintGamingControls(){
+  $('mode').style.display=gamingFeatures?'':'none';
+  $('boot-mode-head').style.display=gamingFeatures?'':'none';
+  $('boot-mode-row').style.display=gamingFeatures?'':'none';
+  document.querySelectorAll('[data-gaming-control]').forEach(x=>x.style.display=gamingFeatures?'':'none');
+  if(!gamingFeatures&&$('game-confirm').style.display==='block'){
+    $('game-confirm').style.display='none';unlockBody();
+  }
 }
 function applyGamewatch(g){
   const show=!!g.installed;
   $('throttle-head').style.display=show?'':'none';
   $('throttle-row').style.display=show?'':'none';
-  if(show){throttleOn=g.on;paintThrottle();
+  gamingFeatures=show&&!!g.on;paintGamingControls();
+  if(show){throttleOn=!!g.on;paintThrottle();
     if(g.on&&!g.running)$('throttle-state').textContent='on (watcher stopped?)';}
 }
 async function setThrottle(on){
@@ -2900,7 +2916,7 @@ async function setThrottle(on){
       body:JSON.stringify({action:on?'gamewatch-on':'gamewatch-off'})});
     const j=await r.json();
     $('throttle-state').textContent=j.ok?'saved ✓':(j.output||'failed');
-    if(j.ok){throttleOn=on;paintThrottle();}
+    if(j.ok){throttleOn=on;gamingFeatures=on;paintThrottle();paintGamingControls();}
   }catch(e){$('throttle-state').textContent='failed: '+e;}
 }
 $('throttle-on').onclick=()=>setThrottle(true);

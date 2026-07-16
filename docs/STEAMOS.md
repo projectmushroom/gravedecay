@@ -167,8 +167,12 @@ grave gaming --for 2h          # manual gaming mode with timed auto-thaw
 The preference is synchronized to a hot-reloaded flag, so a toggle takes effect
 within one poll. `grave doctor` checks preference/flag consistency, verifies the
 watcher when enabled, and reports when only fragile process-name matching is
-evaluable. The dashboard exposes the same control under **⚙️ Settings →
-Game-mode auto-throttle** whenever the watcher is installed.
+evaluable. The dashboard exposes the same control under **⚙️ Settings → Gaming
+features & auto-throttle** whenever the watcher is installed. When it is off,
+the dashboard hides the top mode switcher, boot-mode row, and manual mode action
+buttons, leaving a dev-only presentation plus this one control for opting back
+in. If the dev stack was already buried, the wake banner remains available so
+the operator cannot be locked out of developer mode.
 
 `grave gaming --for` is independent of gamewatch. It accepts systemd timespans
 such as `30m`, `2h`, and `1h30m`, installs a transient system timer that runs
