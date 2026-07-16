@@ -54,10 +54,11 @@ BACKUP_KEEP=7
 # this only picks which event classes may page the human. The dashboard's
 # ⚙️ checkboxes write $GRAVE_ROOT/config/notify-events, which overrides this
 # value when present. Remove a word to mute that class:
-#   session-exit / bell  agent tmux sessions ending / ringing the bell
+#   session-exit / bell  agent tmux sessions ending / needing attention
+#   agent-done           an agent CLI turn completes
 #   unit-failure         a platform systemd unit entered failed state
 #   doctor               a doctor run found failing checks
-NOTIFY_EVENTS="session-exit bell unit-failure doctor"
+NOTIFY_EVENTS="session-exit bell agent-done unit-failure doctor"
 
 # `grave upgrade` — where the gravedecay checkout lives, and which channel:
 # release = latest v* tag (recommended), edge = main branch (for developers)

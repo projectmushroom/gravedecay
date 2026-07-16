@@ -1,5 +1,6 @@
 import os
 import pathlib
+import re
 import subprocess
 import tempfile
 import unittest
@@ -11,6 +12,7 @@ RAISE = (ROOT / "raise.sh").read_text()
 TMUX = (ROOT / "config/tmux.conf").read_text()
 CONF = (ROOT / "config/grave.conf.example").read_text()
 NOTIFY_UNIT = (ROOT / "systemd/gravedecay-notify@.service.tmpl").read_text()
+AGENT_NOTIFY = (ROOT / "bin/grave-agent-notify").read_text()
 
 # Every non-instanced platform unit must page on failure. Workspace @-units are
 # a deliberate follow-up (they run as grave-<slug>, not the owner).
@@ -37,8 +39,8 @@ class NotifyContractTests(unittest.TestCase):
         # A grave.conf installed before the feature has no NOTIFY_EVENTS; grave
         # must default it (same pattern as PREVIEW_RANGE) and the example conf
         # must document it.
-        self.assertIn(': "${NOTIFY_EVENTS:=session-exit bell unit-failure doctor}"', GRAVE)
-        self.assertIn('NOTIFY_EVENTS="session-exit bell unit-failure doctor"', CONF)
+        self.assertIn(': "${NOTIFY_EVENTS:=session-exit bell agent-done unit-failure doctor}"', GRAVE)
+        self.assertIn('NOTIFY_EVENTS="session-exit bell agent-done unit-failure doctor"', CONF)
 
     def test_title_and_token_cannot_inject_headers(self):
         # A tmux session name reaches curl -H "Title: ..."; a CR/LF in it would
@@ -83,6 +85,23 @@ class NotifyContractTests(unittest.TestCase):
         self.assertIn("gravedecay-notify@.service.tmpl", RAISE)
         self.assertIn("install_unit gravedecay-notify@.service", RAISE)
 
+    def test_raise_installs_and_provisions_agent_cli_hooks(self):
+        self.assertIn('install -m 755 "$REPO_DIR/bin/grave-agent-notify" "$GRAVE_AGENT_NOTIFY"', RAISE)
+        self.assertIn('provision_agent_hooks "$HOME_DIR" "$GRAVE_AGENT_NOTIFY"', RAISE)
+        self.assertIn(".hooks.Stop", RAISE)
+        self.assertIn(".hooks.Notification", RAISE)
+        self.assertIn('notify = ["%s", "codex"]', RAISE)
+        self.assertIn("Codex notify already set", RAISE)
+
+    def test_fresh_claude_settings_jq_expression_compiles(self):
+        match = re.search(r'jq --arg cmd "\$helper claude" -n \\\n\s+\'([^\']+)\'', RAISE)
+        self.assertIsNotNone(match)
+        proc = subprocess.run(
+            ["jq", "--arg", "cmd", "/tmp/grave-agent-notify claude", "-n", match.group(1)],
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
     def test_doctor_checks_gate_on_each_channel_existing(self):
         # No notify.env / no enrolled devices → no checks (opt-in); with them,
         # doctor must verify ntfy reachability without publishing (?poll=1),
@@ -94,6 +113,9 @@ class NotifyContractTests(unittest.TestCase):
         self.assertIn('check "web push sender ready"', GRAVE)
         self.assertIn("/api/push-key' | jq -e .ok", GRAVE)
         self.assertIn("systemctl cat 'gravedecay-notify@.service'", GRAVE)
+        self.assertIn('check "agent notify helper installed"', GRAVE)
+        self.assertIn('check "Claude notify hooks installed"', GRAVE)
+        self.assertIn('check "Codex notify hook installed"', GRAVE)
 
     def test_push_leg_builds_json_with_jq_and_respects_delivery_status(self):
         # A hostile session name must not break out of the push payload (jq
@@ -134,11 +156,17 @@ class NotifyContractTests(unittest.TestCase):
         # doctor's own verdict.
         self.assertIn('( cmd_notify --event doctor --priority high', GRAVE)
 
+    def test_agent_notify_adapter_maps_cli_payloads(self):
+        self.assertIn("agent-done", AGENT_NOTIFY)
+        self.assertIn("hook_event_name", AGENT_NOTIFY)
+        self.assertIn("*turn*", AGENT_NOTIFY)
+        self.assertIn("GRAVEDECAY_GRAVE", AGENT_NOTIFY)
+
 
 class NotifyExecutionTests(unittest.TestCase):
     """Drive bin/grave notify with a temp conf and a fake curl on PATH."""
 
-    def run_notify(self, *args, notify_env=None, events="session-exit bell unit-failure doctor"):
+    def run_notify(self, *args, notify_env=None, events="session-exit bell agent-done unit-failure doctor"):
         tmp = pathlib.Path(self.tmpdir.name)
         (tmp / "logs").mkdir(exist_ok=True)
         (tmp / "config/secrets").mkdir(parents=True, exist_ok=True)
@@ -225,6 +253,57 @@ class NotifyExecutionTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("Authorization: Bearer tk_secret", curl_log.read_text().splitlines())
+
+
+class AgentNotifyExecutionTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+
+    def run_agent_notify(self, *args, payload="", tmux=False):
+        tmp = pathlib.Path(self.tmpdir.name)
+        log = tmp / "grave.log"
+        fake_grave = tmp / "grave"
+        fake_grave.write_text('#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" > "$GRAVE_LOG"\n')
+        fake_grave.chmod(0o755)
+        bindir = tmp / "bin"
+        bindir.mkdir()
+        if tmux:
+            fake_tmux = bindir / "tmux"
+            fake_tmux.write_text("#!/usr/bin/env bash\nprintf '%s\\n' claude-yolo\n")
+            fake_tmux.chmod(0o755)
+        env = {
+            **os.environ,
+            "GRAVEDECAY_GRAVE": str(fake_grave),
+            "GRAVE_LOG": str(log),
+            "PATH": f"{bindir}:{os.environ['PATH']}",
+        }
+        if tmux:
+            env["TMUX"] = "/tmp/tmux-1000/default,1,0"
+        proc = subprocess.run(
+            [str(ROOT / "bin/grave-agent-notify"), *args],
+            input=payload, env=env, capture_output=True, text=True, timeout=30,
+        )
+        return proc, log
+
+    def test_codex_turn_complete_maps_to_agent_done(self):
+        proc, log = self.run_agent_notify("codex", '{"type":"agent-turn-complete"}', payload="")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        args = log.read_text().splitlines()
+        self.assertIn("--event", args)
+        self.assertIn("agent-done", args)
+        self.assertIn("--link", args)
+        self.assertIn("/", args)
+
+    def test_claude_notification_maps_to_bell_and_tmux_link(self):
+        proc, log = self.run_agent_notify(
+            "claude", payload='{"hook_event_name":"Notification","message":"approval needed"}', tmux=True
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        args = log.read_text().splitlines()
+        self.assertIn("bell", args)
+        self.assertIn("/term/?arg=claude-yolo", args)
+        self.assertIn("agent needs attention", args)
 
 
 if __name__ == "__main__":

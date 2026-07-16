@@ -634,7 +634,7 @@ NOTIFY_ENV = os.path.join(GRAVE_ROOT, "config", "secrets", "notify.env")
 # must not need sudo to flip a notification preference (same reasoning as the
 # gamewatch flag file).
 NOTIFY_EVENTS_PATH = os.path.join(GRAVE_ROOT, "config", "notify-events")
-NOTIFY_CLASSES = ["session-exit", "bell", "unit-failure", "doctor"]
+NOTIFY_CLASSES = ["session-exit", "bell", "agent-done", "unit-failure", "doctor"]
 GRAVE_CONF = os.environ.get("GRAVE_CONF", "/etc/gravedecay/grave.conf")
 VAPID_PEM = os.path.join(GRAVE_ROOT, "config", "secrets", "vapid.pem")
 PUSH_SUBS_PATH = os.path.join(GRAVE_ROOT, "config", "push-subscriptions.json")
@@ -2672,8 +2672,8 @@ function buildSettings(existing){
 }
 // ---------- notifications (ntfy + web push) ----------
 let notifyInfo=null;
-const EVENT_LABEL={'session-exit':'session ends','bell':'agent bell',
-  'unit-failure':'unit fails','doctor':'doctor fails'};
+const EVENT_LABEL={'session-exit':'session ends','bell':'needs attention',
+  'agent-done':'agent done','unit-failure':'unit fails','doctor':'doctor fails'};
 const b64ToU8=s=>{const b=atob(s.replace(/-/g,'+').replace(/_/g,'/')
   .padEnd(s.length+(4-s.length%4)%4,'='));return Uint8Array.from(b,c=>c.charCodeAt(0));};
 const notifyMsg=t=>{$('notify-msg').textContent=t;};

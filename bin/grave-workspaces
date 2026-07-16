@@ -90,6 +90,38 @@ def sync_provider(w):
     try: link.unlink()
     except FileNotFoundError: pass
     if w.get("provider",{}).get("llm") and PROVIDER_SECRET.is_file(): link.symlink_to(PROVIDER_SECRET)
+def chown_workspace(path, account):
+    if os.environ.get("GRAVE_WORKSPACE_TEST") != "1" and account:
+        os.chown(path, account.pw_uid, account.pw_gid)
+def ensure_agent_dir(path, account):
+    path.mkdir(parents=True, exist_ok=True); path.chmod(0o700); chown_workspace(path, account)
+def provision_agent_hooks(home, account):
+    helper=Path(os.environ.get("GRAVE_AGENT_NOTIFY", ROOT/"scripts/grave-agent-notify"))
+    command=f"{helper} claude"
+    claude=home/".claude"; codex=home/".codex"
+    ensure_agent_dir(claude, account); ensure_agent_dir(codex, account)
+    settings=claude/"settings.json"
+    try:
+        data=json.loads(settings.read_text()) if settings.exists() and settings.stat().st_size else {}
+    except (OSError, json.JSONDecodeError):
+        data=None
+    if data is not None:
+        hooks=data.setdefault("hooks", {})
+        entry={"matcher":"","hooks":[{"type":"command","command":command}]}
+        for name in ("Stop","Notification"):
+            current=hooks.get(name) if isinstance(hooks.get(name), list) else []
+            if not any(h.get("command") == command for block in current for h in block.get("hooks", [])):
+                current.append(entry)
+            hooks[name]=current
+        settings.write_text(json.dumps(data, indent=2) + "\n"); settings.chmod(0o600); chown_workspace(settings, account)
+
+    config=codex/"config.toml"
+    text=config.read_text() if config.exists() else ""
+    if "grave-agent-notify" not in text and not re.search(r"(?m)^[ \t]*notify[ \t]*=", text):
+        helper_s=str(helper).replace("\\", "\\\\").replace('"', '\\"')
+        text=text.rstrip() + f'\n\nnotify = ["{helper_s}", "codex"]\n'
+        config.write_text(text)
+    config.touch(exist_ok=True); config.chmod(0o600); chown_workspace(config, account)
 
 def provision(w):
     name=unix_name(w["slug"]); home=HOME_ROOT/w["slug"]
@@ -97,11 +129,14 @@ def provision(w):
     except KeyError:
         run("useradd", "--system", "--create-home", "--home-dir", str(home), "--shell", "/bin/bash", name)
         account=None
+    if not account and os.environ.get("GRAVE_WORKSPACE_TEST") != "1":
+        account=pwd.getpwnam(name)
     if os.environ.get("GRAVE_WORKSPACE_TEST") == "1":
         for d in (home, home/"repos", home/"state/t3", home/"config", home/"config/secrets", home/"runtime", home/"logs"): d.mkdir(parents=True, exist_ok=True)
     else:
         run("install", "-d", "-m", "700", "-o", name, "-g", name, *(str(d) for d in (home, home/"repos", home/"state", home/"state/t3", home/"config", home/"config/secrets", home/"runtime", home/"logs")))
     if account and (account.pw_dir != str(home) or account.pw_uid == 0): die(f"unsafe Unix account drift for {name}")
+    provision_agent_hooks(home, account)
     SERVICE_ROOT.mkdir(parents=True,exist_ok=True); SERVICE_ROOT.chmod(0o700)
     env=service_env(w)
     values={"WORKSPACE_SLUG":w["slug"],"GRAVE_WORKSPACE_ID":w["id"],"WORKSPACE_ROLE":w["role"],"WORKSPACE_HOME":str(home),

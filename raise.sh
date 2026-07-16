@@ -80,6 +80,43 @@ install_cli() { # install_cli <src> <dest> — sudo only when content differs
     sudo install -m 755 "$1" "$2"
   fi
 }
+provision_agent_hooks() { # provision_agent_hooks <home> <helper>
+  local home="$1" helper="$2" claude_dir codex_dir settings tmp codex_conf
+  claude_dir="$home/.claude"; codex_dir="$home/.codex"
+  mkdir -p "$claude_dir" "$codex_dir"
+  settings="$claude_dir/settings.json"
+  tmp=$(mktemp)
+  if [[ -s "$settings" ]]; then
+    if ! jq --arg cmd "$helper claude" '
+      def hascmd($cmd): any(.[]?; any(.hooks[]?; .command == $cmd));
+      .hooks = (.hooks // {})
+      | .hooks.Stop = ((.hooks.Stop // []) as $a
+          | if ($a | hascmd($cmd)) then $a
+            else $a + [{"matcher":"","hooks":[{"type":"command","command":$cmd}]}] end)
+      | .hooks.Notification = ((.hooks.Notification // []) as $a
+          | if ($a | hascmd($cmd)) then $a
+            else $a + [{"matcher":"","hooks":[{"type":"command","command":$cmd}]}] end)
+    ' "$settings" >"$tmp"; then
+      rm -f "$tmp"; tmp=""; skip "Claude settings.json is not valid JSON — agent hooks not changed"
+    fi
+  else
+    jq --arg cmd "$helper claude" -n \
+      '{hooks:{Stop:[{matcher:"",hooks:[{type:"command",command:$cmd}]}],Notification:[{matcher:"",hooks:[{type:"command",command:$cmd}]}]}}' >"$tmp"
+  fi
+  if [[ -n "$tmp" ]]; then
+    mv "$tmp" "$settings"; chmod 600 "$settings"
+  fi
+
+  codex_conf="$codex_dir/config.toml"
+  touch "$codex_conf"; chmod 600 "$codex_conf"
+  if grep -q 'grave-agent-notify' "$codex_conf"; then
+    :
+  elif grep -qE '^[[:space:]]*notify[[:space:]]*=' "$codex_conf"; then
+    skip "Codex notify already set — leaving $codex_conf unchanged"
+  else
+    printf '\nnotify = ["%s", "codex"]\n' "$helper" >>"$codex_conf"
+  fi
+}
 
 [[ $EUID -eq 0 ]] && { echo "Run as your normal user, not root (sudo is used internally)."; exit 1; }
 sudo -n systemctl --version >/dev/null 2>&1 || sudo -v || { echo "sudo access required"; exit 1; }
@@ -150,6 +187,7 @@ if [[ "$IMMUTABLE" == 1 ]]; then
 else
   GRAVE_BIN="/usr/local/bin/grave"
 fi
+GRAVE_AGENT_NOTIFY="$GRAVE_ROOT/scripts/grave-agent-notify"
 
 # Who may press the dashboard's action buttons (mode flips, reboot, T3 pairing
 # token). Tailnet viewers not in this list are read-only. Default to the box
@@ -289,6 +327,8 @@ step "grave CLI"
 [[ "$IMMUTABLE" == 1 ]] && mkdir -p "$(dirname "$GRAVE_BIN")"   # /usr/local is read-only here
 install_cli "$REPO_DIR/bin/grave" "$GRAVE_BIN"
 install_cli "$REPO_DIR/bin/grave-workspaces" "$(dirname "$GRAVE_BIN")/grave-workspaces"
+install -m 755 "$REPO_DIR/bin/grave-agent-notify" "$GRAVE_AGENT_NOTIFY"
+provision_agent_hooks "$HOME_DIR" "$GRAVE_AGENT_NOTIFY"
 [[ -d /etc/gravedecay ]] || sudo mkdir -p /etc/gravedecay
 if [[ ! -f /etc/gravedecay/grave.conf ]]; then
   sed -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \

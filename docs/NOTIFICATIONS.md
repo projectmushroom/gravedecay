@@ -57,14 +57,15 @@ Subscribe to the topic in the ntfy app, then `grave notify "hello"`.
 | Event class | Fires when | Source | Tap opens |
 |---|---|---|---|
 | `session-exit` | an agent tmux session ends | tmux `session-closed` hook | `/term/` |
-| `bell` | an agent rings the terminal bell (done / waiting on a prompt) | tmux `alert-bell` hook | that session's terminal |
+| `bell` | an agent rings the terminal bell or asks for attention | tmux `alert-bell`, Claude `Notification` hook | that session's terminal, or T3 root |
+| `agent-done` | an agent CLI turn completes | Claude `Stop` hook, Codex `notify` | that session's terminal, or T3 root |
 | `unit-failure` | a platform unit enters failed state (t3code, dashboard, terminal, gateway, upgrades, gamewatch, selfheal) | `OnFailure=gravedecay-notify@%n` | System tab |
 | `doctor` | a `grave doctor` run has failing checks | doctor itself | System tab |
 
 Mute a class with the checkboxes in ⚙️ settings → Notifications (written to
 `$GRAVE_ROOT/config/notify-events`, which overrides `NOTIFY_EVENTS` in
 grave.conf — the dashboard runs unprivileged, so a preference flip must not
-need sudo). Muting all four leaves `grave notify` available for
+need sudo). Muting all event classes leaves `grave notify` available for
 manual/scripted use: `long-build; grave notify "build done"`.
 
 Every source calls `grave notify --event <class>`, a **silent no-op** when no
@@ -92,8 +93,10 @@ lines ship enabled on every box and cost nothing until you opt in.
 ## Existing boxes
 
 `raise.sh` installs the `gravedecay-notify@.service` unit and refreshed unit
-files on the next re-raise, but it deliberately never clobbers an existing
-`config/tmux.conf` — re-copy it from the repo to pick up the session hooks
+files on the next re-raise. It also creates Claude/Codex CLI hooks in
+`~/.claude/settings.json` and `~/.codex/config.toml` when Codex does not
+already own a conflicting `notify` command. It deliberately never clobbers an
+existing `config/tmux.conf` — re-copy it from the repo to pick up the session hooks
 (same drill as the clipboard config):
 
 ```sh
@@ -135,8 +138,9 @@ Gated on each channel being opted into:
   mode 600.
 - **web push sender ready** — asks the dashboard's `/api/push-key`, catching
   a `cryptography` module that vanished (e.g. after an OS update).
-- **failure notifier installed** (either channel) —
-  `gravedecay-notify@.service` exists.
+- **failure notifier and agent hooks installed** (either channel) —
+  `gravedecay-notify@.service`, `grave-agent-notify`, Claude hooks, and Codex
+  notify exist.
 
 A failing doctor run is itself a `doctor`-class notification, so a broken
 invariant pages you even when you aren't looking at the dashboard.
