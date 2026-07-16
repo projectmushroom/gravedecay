@@ -1,0 +1,24 @@
+[Unit]
+Description=gravedecay tailnet keepalive (warm relay paths so idle websockets don't drop)
+# Pings online tailnet peers on a short interval — opt-in via the flag file
+# $GRAVE_ROOT/config/keepalive.on (`grave keepalive on`). Needs tailscaled up.
+After=multi-user.target tailscaled.service
+Wants=network-online.target
+# Page the human if this unit lands in failed state (silent no-op unless
+# notifications are configured -- see docs/NOTIFICATIONS.md).
+OnFailure=gravedecay-notify@%n.service
+
+[Service]
+Type=simple
+User=@USER@
+Group=@USER@
+ExecStart=@GRAVE_ROOT@/scripts/gravedecay-keepalive
+Restart=always
+RestartSec=5
+Environment=HOME=@HOME@
+# Reach the durable toolchain (tailscale, grave) — @TOOLPATH@ is the
+# Homebrew/rootless bins; empty on package-manager hosts.
+Environment=PATH=@TOOLPATH@@HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=multi-user.target

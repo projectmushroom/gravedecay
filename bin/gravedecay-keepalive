@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# gravedecay-keepalive — "always alive". Keep tailnet relay paths warm so a
+# remote device that can't hold a direct Tailscale connection doesn't drop its
+# T3 / dashboard websocket when idle.
+#
+# Why this exists: a device that can't NAT-traverse to the box falls back to a
+# DERP relay. An idle relayed path lets the websocket stall, and the client
+# reconnect-loops ("steamdeck: Failed to connect. Reconnecting… disconnected").
+# Sending one small packet to each online peer every couple of seconds keeps the
+# path warm. It helps flaky/remote networks; on a very lossy uplink it reduces
+# but may not fully eliminate drops (see docs/ARCHITECTURE.md).
+#
+# Opt-in via the flag file $GRAVE_ROOT/config/keepalive.on (toggle it with
+# `grave keepalive on|off`); the loop re-reads it every poll, so toggles take
+# effect within one interval without restarting the service.
+set -uo pipefail
+
+CONF=/etc/gravedecay/grave.conf
+[[ -r "$CONF" ]] && . "$CONF" 2>/dev/null || true
+GRAVE_ROOT="${GRAVE_ROOT:-$HOME/gravedecay}"
+FLAG="$GRAVE_ROOT/config/keepalive.on"
+LOG="$GRAVE_ROOT/logs/keepalive.log"
+INTERVAL="${KEEPALIVE_SECONDS:-2}"   # must stay under the client's reconnect gap
+mkdir -p "$GRAVE_ROOT/config" "$GRAVE_ROOT/logs" 2>/dev/null || true
+
+[[ -x /home/linuxbrew/.linuxbrew/bin/brew ]] && eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv bash)" 2>/dev/null || true
+export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
+log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$LOG"; }
+
+# Online peer tailnet IPs, one per line — dependency-free (no jq/python): the
+# first column of `tailscale status` is always the IP; offline peers carry
+# "offline" in their status column; drop our own IP so we don't ping ourselves.
+online_peers() {
+  local self
+  self="$(tailscale ip -4 2>/dev/null | head -1)"
+  tailscale status 2>/dev/null | awk -v self="$self" \
+    '$1 ~ /^100\./ && $1 != self && tolower($0) !~ /offline/ {print $1}'
+}
+
+log "keepalive started (interval ${INTERVAL}s)"
+while :; do
+  if [[ -e "$FLAG" ]]; then
+    # Warm every online peer in parallel; --timeout bounds a slow/unreachable
+    # peer so a stalled ping can never drag the loop past its interval.
+    while IFS= read -r ip; do
+      [[ -n "$ip" ]] && tailscale ping -c 1 --timeout 2s "$ip" >/dev/null 2>&1 &
+    done < <(online_peers)
+    wait 2>/dev/null || true
+  fi
+  sleep "$INTERVAL"
+done

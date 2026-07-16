@@ -24,6 +24,7 @@ PLATFORM_UNITS = [
     "gravedecay-upgrade",
     "gravedecay-upgrade@",
     "gravedecay-gamewatch",
+    "gravedecay-keepalive",
     "gravedecay-selfheal",
 ]
 

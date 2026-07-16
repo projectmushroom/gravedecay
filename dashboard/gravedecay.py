@@ -177,6 +177,8 @@ ACTIONS = {
     "bootmode-gaming": [GRAVE, "bootmode", "gaming"],
     "gamewatch-on": [GRAVE, "gamewatch", "on"],    # auto-throttle: freeze on game launch
     "gamewatch-off": [GRAVE, "gamewatch", "off"],
+    "keepalive-on": [GRAVE, "keepalive", "on"],    # 🟢 "always alive": warm tailnet relay paths
+    "keepalive-off": [GRAVE, "keepalive", "off"],
 }
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 # Only one grave action at a time: concurrent mode flips race each other
@@ -1092,6 +1094,14 @@ def gamewatch_state():
     return {"installed": installed, "on": on, "running": running}
 
 
+def keepalive_state():
+    """"Always alive" tailnet keepalive: installed? on? loop running?"""
+    installed = sh(["systemctl", "cat", "gravedecay-keepalive.service"])[0] == 0
+    on = os.path.exists(os.path.join(GRAVE_ROOT, "config", "keepalive.on"))
+    running = sh(["systemctl", "is-active", "--quiet", "gravedecay-keepalive"])[0] == 0
+    return {"installed": installed, "on": on, "running": running}
+
+
 def state(headers):
     t3 = unit_state("t3code")
     mode = "developer" if t3["active"] == "active" else "gaming"
@@ -1109,7 +1119,7 @@ def state(headers):
             "viewer": headers.get("Tailscale-User-Login", "local"),
             "mode": mode, "apps": list(APPS), "settings": load_settings(),
             "boot_mode": boot_mode(), "gamewatch": gamewatch_state(),
-            "notify": notify_state(),
+            "keepalive": keepalive_state(), "notify": notify_state(),
             "tmux": tmux, "torpor": len(tmux) if frozen else 0,
             "system": collect_system(),
             "github": {"login": None, "prs": [], "error": "paused in game mode"},
@@ -1128,6 +1138,7 @@ def state(headers):
         return {
             "host": HOST, "now": time.strftime("%H:%M:%S"), "viewer": viewer,
             "mode": mode, "boot_mode": boot_mode(), "gamewatch": gamewatch_state(),
+            "keepalive": keepalive_state(),
             "apps": list(APPS), "settings": load_settings(),
             "github": {"login": None, "prs": [], "error": "restricted"},
             "linear": {"configured": False, "issues": [], "error": None},
@@ -1149,6 +1160,7 @@ def state(headers):
         "mode": mode,
         "boot_mode": boot_mode(),
         "gamewatch": gamewatch_state(),
+        "keepalive": keepalive_state(),
         "apps": apps,
         "github": gh,
         "ci": collect_ci(),
@@ -2013,6 +2025,13 @@ body.gaming #foot{display:none}
     <span class="setlabel dim2" id="throttle-state"></span>
   </div>
 
+  <div class="sethead" id="keepalive-head" style="display:none">Always alive<span class="dim2" title="Pings your online tailnet devices every couple of seconds so a remote device that can only reach the box over a DERP relay keeps its path warm — otherwise an idle relayed connection stalls and T3/the dashboard reconnect-loop. Helps flaky/remote networks; may not fully stop drops on a very lossy link." style="margin-left:7px;border:1px solid var(--ring);border-radius:50%;padding:0 5px;cursor:help">ⓘ</span></div>
+  <div class="setrow" id="keepalive-row" style="display:none">
+    <button class="mini" id="keepalive-on">🟢 on</button>
+    <button class="mini" id="keepalive-off">⏸ off</button>
+    <span class="setlabel dim2" id="keepalive-state"></span>
+  </div>
+
   <div class="sethead">Auth &amp; pairing</div>
   <div class="setrow">
     <button class="mini" id="t3-pair-btn">🔑 New T3 pairing token</button>
@@ -2310,6 +2329,7 @@ function render(s){
   lastTmux=s.tmux||[];
   if(s.boot_mode){bootMode=s.boot_mode;paintBoot();}
   if(s.gamewatch){applyGamewatch(s.gamewatch);}
+  if(s.keepalive){applyKeepalive(s.keepalive);}
   // notify prefs are owner-only state; keep them out of a mid-edit modal
   if(s.notify&&$('settings-panel').style.display!=='block')notifyInfo=s.notify;
   // adopt settings saved elsewhere (another device/tab) — but never while
@@ -2884,6 +2904,32 @@ async function setThrottle(on){
 }
 $('throttle-on').onclick=()=>setThrottle(true);
 $('throttle-off').onclick=()=>setThrottle(false);
+// "always alive": tailnet keepalive on/off toggle (installed on every box, so
+// the row shows whenever /api/state reports the unit is present).
+let keepaliveOn=null;
+function paintKeepalive(){
+  $('keepalive-on').classList.toggle('activebtn',keepaliveOn===true);
+  $('keepalive-off').classList.toggle('activebtn',keepaliveOn===false);
+}
+function applyKeepalive(g){
+  const show=!!g.installed;
+  $('keepalive-head').style.display=show?'':'none';
+  $('keepalive-row').style.display=show?'':'none';
+  if(show){keepaliveOn=g.on;paintKeepalive();
+    $('keepalive-state').textContent=(g.on&&!g.running)?'on (service stopped?)':'';}
+}
+async function setKeepalive(on){
+  $('keepalive-state').textContent='saving…';
+  try{
+    const r=await fetch('api/action',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({action:on?'keepalive-on':'keepalive-off'})});
+    const j=await r.json();
+    $('keepalive-state').textContent=j.ok?'saved ✓':(j.output||'failed');
+    if(j.ok){keepaliveOn=on;paintKeepalive();}
+  }catch(e){$('keepalive-state').textContent='failed: '+e;}
+}
+$('keepalive-on').onclick=()=>setKeepalive(true);
+$('keepalive-off').onclick=()=>setKeepalive(false);
 function closeThrottle(){$('throttle-dlg').style.display='none';unlockBody();}
 $('throttle-info').onclick=()=>{$('throttle-dlg').style.display='block';lockBody();};
 $('throttle-x').onclick=closeThrottle;
