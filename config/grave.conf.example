@@ -28,11 +28,15 @@ TOOL_PATH="@TOOL_PATH@"
 # Host profiles may append machine-specific units (GPU pinning etc.).
 ALWAYS_ON=(tailscaled sshd NetworkManager gravedecay gravedecay-term)
 
-# Game-mode auto-throttle (Steam Machine): gravedecay-gamewatch polls for a
-# running game and flips grave gaming/developer. Toggle with `grave gamewatch
-# on|off` (a flag file, not here). These just tune detection.
+# Game-mode auto-throttle: gravedecay-gamewatch polls for a running game and
+# flips grave gaming/developer. `grave gamewatch on|off` saves the persistent
+# preference under $GRAVE_ROOT/config (first raise: on only on stock SteamOS,
+# off elsewhere). These values tune detection in preference order.
 GAME_POLL_SECONDS=8
-GAME_PROC="reaper"        # Steam's per-game wrapper process (matched by name)
+GAME_SIGNALS=(gamescope steam-cgroup gamemode process)
+GAME_CGROUP_SAMPLE_SECONDS=0.25
+GAME_CGROUP_MIN_CPU_USEC=10000
+GAME_PROC="reaper"        # last-resort exact process-name match
 
 # tmux socket name used for agent sessions
 TMUX_SOCKET="agents"

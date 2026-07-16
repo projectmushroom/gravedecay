@@ -144,26 +144,41 @@ workspace data or provider/integration secrets.
 
 ## Game Mode auto-throttle
 
-The `steam-machine` profile installs `gravedecay-gamewatch.service` and turns it
-on: launch a game and the box **freezes agents + frees RAM/GPU** (`grave
-gaming`); quit the game and it **thaws + restores** (`grave developer`). You just
-play — the appliance gets out of the way by itself, then comes back mid-thought.
+The optional watcher capability is installed on every gravedecay host. On a
+first raise it defaults **on only when stock SteamOS is positively detected**;
+dev-only appliances, Silverblue, and non-SteamOS gaming PCs default off but can
+opt in later with `grave gamewatch on`, without changing host profile. An
+explicit choice is saved in `config/gamewatch.preference`, so later raises and
+profile reapplications never undo `grave gamewatch off` (or `on`). Manual
+`grave gaming` and `grave developer` remain available regardless.
 
-Detection prefers **Feral GameMode** (SteamOS runs `gamemoded`; Steam registers a
-game while it's in game mode — a positive `ClientCount` means "game up"), falling
-back to Steam's per-game `reaper` process (matched by name, so it can never match
-the watcher's own script). It only auto-restores if it had previously seen a
-game, so it won't fight a manual `grave gaming`.
+When enabled, launching a game **freezes agents + frees RAM/GPU** (`grave
+gaming`); quitting **thaws + restores** (`grave developer`). Detection follows
+the configured `GAME_SIGNALS` order: `gamescope`, an active `app-steam-*.scope`
+with measurable CPU work, Feral GameMode's D-Bus `ClientCount`, then the exact
+`GAME_PROC` name as a last resort. The list and Steam-cgroup sample thresholds
+live in `grave.conf`. It only auto-restores after seeing a game, so it does not
+fight a manual `grave gaming`.
 
 ```sh
-grave gamewatch on|off|status   # toggle (a flag file — no restart needed)
+grave gamewatch on|off|status   # persistent preference; no restart needed
+grave gaming --for 2h          # manual gaming mode with timed auto-thaw
 ```
 
-Toggling is a flag file under `$GRAVE_ROOT`, re-read every poll, so `off` takes
-effect within a few seconds. `grave doctor` checks the watcher is running when
-the flag is on. It's also in the dashboard: **⚙️ Settings → Game-mode
-auto-throttle** has on/off buttons and an ⓘ that explains it — the section only
-appears when the watcher is installed (i.e. on a Steam Machine).
+The preference is synchronized to a hot-reloaded flag, so a toggle takes effect
+within one poll. `grave doctor` checks preference/flag consistency, verifies the
+watcher when enabled, and reports when only fragile process-name matching is
+evaluable. The dashboard exposes the same control under **⚙️ Settings → Gaming
+features & auto-throttle** whenever the watcher is installed. When it is off,
+the dashboard hides the top mode switcher, boot-mode row, and manual mode action
+buttons, leaving a dev-only presentation plus this one control for opting back
+in. If the dev stack was already buried, the wake banner remains available so
+the operator cannot be locked out of developer mode.
+
+`grave gaming --for` is independent of gamewatch. It accepts systemd timespans
+such as `30m`, `2h`, and `1h30m`, installs a transient system timer that runs
+`grave developer`, and appears in `grave status`. Running `grave developer`
+early cancels the pending timer.
 
 ## Dashboard action buttons (allow-list)
 

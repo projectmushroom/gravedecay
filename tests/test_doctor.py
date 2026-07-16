@@ -27,16 +27,18 @@ class DoctorContractTests(unittest.TestCase):
         self.assertIn("boot mode: gaming", GRAVE)
 
     def test_gamewatch_doctor_only_hard_fails_when_unit_installed(self):
-        # Regression #56: the watcher unit installs only on gaming-capable hosts,
-        # so a stale flag without the unit must give an actionable message, not a
-        # bare active/enabled failure; and `gamewatch on` refuses without it.
+        # A partial/legacy install can still have a stale flag without the now-
+        # universal watcher unit. Give an actionable message instead of bare
+        # active/enabled failures; `gamewatch on` also refuses without the unit.
         self.assertIn("systemctl cat gravedecay-gamewatch.service >/dev/null 2>&1", GRAVE)
         self.assertIn("gravedecay-gamewatch.service not installed", GRAVE)
 
-    def test_raise_installs_gamewatch_for_steam_machine_profile(self):
-        # Regression #56: previously gated on IMMUTABLE only, so a mutable Steam
-        # Machine set the flag with no unit behind it and doctor failed forever.
-        self.assertIn('if [[ "$IMMUTABLE" == 1 || "$PROFILE" == steam-machine ]]; then', RAISE)
+    def test_raise_installs_optional_gamewatch_on_every_host(self):
+        # Gaming is optional policy, not a host-profile capability. Generic dev
+        # boxes default off but must be able to opt in without re-profiling.
+        self.assertIn('step "Optional game-mode watcher"', RAISE)
+        self.assertIn('enable_restart gravedecay-gamewatch', RAISE)
+        self.assertNotIn('if [[ "$IMMUTABLE" == 1 || "$PROFILE" == steam-machine ]]; then', RAISE)
 
     def test_workspace_doctor_runs_through_the_root_helper(self):
         # Regression #45: run unprivileged the workspace doctor hits root-owned

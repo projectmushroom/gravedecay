@@ -9,8 +9,10 @@
 gravedecay converts a spare machine (old laptop, mini PC, Steam Machine) into a
 personal, tailnet-only AI development server: your repos, databases, and coding
 agents live on it 24/7, while your laptops, phones, and tablets become thin
-clients. Gaming keeps priority — one tap flips the box between *developer*
-and *gaming* mode, freezing your agent sessions in place until you're done.
+clients. It presents as a focused dev box by default. If that machine also
+games, an optional gaming layer adds mode switches that freeze your agent
+sessions and free RAM/GPU until you're done. Stock SteamOS enables that layer
+on first raise; every other system leaves it off unless you opt in.
 
 ```
         ┌─────────────────────────────── the box ─────────────────────────────────┐
@@ -43,10 +45,11 @@ and *gaming* mode, freezing your agent sessions in place until you're done.
    Tailscale (`tailscale serve` for the HTTPS origin, Tailscale SSH as
    fallback) and key-only sshd. Firewall is default-deny. No port
    forwarding, ever.
-3. **Gaming keeps priority.** `grave gaming` frees RAM/GPU; remote access and
-   the dashboard stay up. Two tiers: 🧊 freeze agent sessions in place
-   (cgroup freezer — RAM kept, provably zero CPU) or ☠️ kill them for
-   maximum headroom.
+3. **Dev box first; gaming when needed.** Non-SteamOS hosts default to a clean
+   dev-only dashboard. `grave gamewatch on` adds the gaming switches and
+   automatic detection on any supported host. `grave gaming` then frees
+   RAM/GPU while remote access stays up: 🧊 freeze sessions in place or ☠️ kill
+   them for maximum headroom.
 4. **Agent-operated.** The scripts do the deterministic 90 %; a coding agent
    (Claude Code, Codex, …) handles the box-specific 10 %. `AGENTS.md` is the
    playbook you point your agent at.
@@ -92,6 +95,12 @@ grave t3 update                   # install stable T3 and restart its service
 Requirements: a systemd-based distro (Arch-family is first-class; Debian/Fedora
 best-effort), ~8 GB RAM, and a [Tailscale](https://tailscale.com) account
 (free tier is fine).
+
+> **Gaming is optional.** A generic Linux raise is a dev appliance with no
+> gaming controls in the main UI. If the same box also runs games, use `grave
+> gamewatch on` (or **Settings → Gaming features & auto-throttle**) to reveal
+> the mode switcher, boot options, and gaming actions. Stock SteamOS starts with
+> this enabled; all other systems start with it off.
 
 ### Optional trusted collaborators
 
@@ -239,11 +248,17 @@ on the HTTPS tailnet). If a drag doesn't land on your clipboard, hold
 that always works. (Existing boxes: `raise.sh` won't clobber an existing
 `config/tmux.conf`; re-copy it from the repo to pick up the clipboard config.)
 
-## Game mode
+## Optional game mode
+
+gravedecay does not assume every development box is a console. The watcher
+capability is installed but idle on non-SteamOS systems, and the dashboard stays
+dev-focused. Opt in at any time with `grave gamewatch on`; `off` removes the
+gaming controls again without removing the underlying development appliance.
 
 ```
 grave gaming          # 🧊 torpor: stop T3/docker, FREEZE agent sessions
 grave gaming --kill   # ☠️ scorched earth: sessions die, maximum free RAM
+grave gaming --for 2h # ⏱️ torpor, then automatically return to developer mode
 grave developer       # 💻 thaw + restore everything
 ```
 
@@ -253,6 +268,16 @@ and resume mid-thought on wake. In game mode the dashboard swaps to a minimal
 vitals view, stops calling remote APIs, and slows its polling — the resource
 diet is enforced, not implied. Tailscale, SSH, dashboard, and terminal stay
 up; you can always get back in.
+
+`--for` accepts systemd timespans such as `30m`, `2h`, or `1h30m`. It creates a
+transient auto-thaw timer, `grave status` shows the pending restore, and an
+explicit `grave developer` cancels it. Automatic game detection is a separate,
+persistent preference: `grave gamewatch on|off|status`. It defaults on only for
+a first raise on positively detected stock SteamOS and off on every other host;
+your explicit choice survives later raises. The dashboard treats this as its
+gaming-feature switch: when off, the top mode badge, gaming/developer action
+buttons, and boot-mode controls disappear so the appliance reads as a dev-only
+box. The single enable control remains under Settings.
 
 ## Notifications — the box wakes you
 
@@ -291,7 +316,7 @@ refused. See `docs/PORTS.md`.
 ```
 grave status                     # services, containers, agents, temps, disk
 grave doctor                     # verify every platform invariant
-grave gaming [--kill]            # 🎮 free resources (freeze or kill sessions)
+grave gaming [--kill] [--for 2h] # 🎮 free resources; optionally auto-restore
 grave developer                  # 💻 thaw + restore
 grave agents new mybot [dir]     # persistent tmux agent session
 grave agents attach mybot        # detach: Ctrl-b d — session survives
@@ -317,13 +342,20 @@ mounts (`/`, `/grave`, `/term`) → host profile → `grave doctor`.
 Machine-specific quirks live in `profiles/*.sh`, applied once by
 `raise.sh --profile <name>`:
 
-- **generic** — any always-on box; masks suspend by default.
+- **generic** — any always-on dev box; masks suspend by default. Gaming stays
+  out of the main UI unless you opt in with `grave gamewatch on`.
 - **t2-macbook** — Intel T2 Macs: sleep masked, lid ignored, amdgpu pinned to
   a fixed DPM state (dGPU crash workaround).
 - **steam-machine** — stock SteamOS (immutable rootfs). Durable toolchain under
   `$HOME` (Homebrew + rootless Docker), `GRAVE_ROOT` on `/home`, always-on, and
-  games alongside — survives SteamOS updates untouched. Bootstrap once with
-  `steamos-toolchain.sh`, then raise; see [docs/STEAMOS.md](docs/STEAMOS.md).
+  games alongside — survives SteamOS updates untouched. Gamewatch defaults on
+  for detected stock SteamOS, while `grave gamewatch off` is persistent.
+  Bootstrap once with `steamos-toolchain.sh`, then raise; see
+  [docs/STEAMOS.md](docs/STEAMOS.md).
+
+Every profile has the same optional gaming capability. The profile controls
+hardware/platform invariants; `grave gamewatch on|off` controls whether gaming
+behavior and its dashboard switches are part of this particular box.
 
 Each profile flips matching `CHECK_*` doctor flags — quirks doctor can't
 verify will silently regress. Writing your own is ~20 lines; see

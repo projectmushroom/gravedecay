@@ -133,6 +133,13 @@ elif findmnt -no OPTIONS / 2>/dev/null | grep -qw ro; then
   IMMUTABLE=1
 fi
 
+# Gamewatch is a preference, not an immutable-host invariant. Positively detect
+# stock SteamOS for its first-raise default; Silverblue and other immutable/dev
+# boxes still get the watcher capability, but leave it off unless requested.
+OS_ID="$(. /etc/os-release 2>/dev/null; printf '%s' "${ID:-}")"
+STEAMOS=0
+[[ "$OS_ID" == steamos ]] && STEAMOS=1
+
 BREW_PREFIX=""
 for p in /home/linuxbrew/.linuxbrew "$HOME_DIR/.linuxbrew"; do
   [[ -x "$p/bin/brew" ]] && { BREW_PREFIX="$p"; break; }
@@ -151,6 +158,12 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 if [[ "$IMMUTABLE" == 1 && "$GRAVE_ROOT" == "/srv/dev" ]]; then
   GRAVE_ROOT="$HOME_DIR/gravedecay"
 fi
+
+# Capture this before the layout step creates config/. It lets the preference
+# migration distinguish a genuinely fresh raise from an older install where an
+# absent gamewatch flag may be the operator's explicit opt-out.
+GRAVE_CONFIG_EXISTED=0
+[[ -d "$GRAVE_ROOT/config" ]] && GRAVE_CONFIG_EXISTED=1
 
 # Tool binaries + an extra PATH so systemd services (and raise's own lookups)
 # find the durable toolchain that lives under $HOME.
@@ -541,21 +554,18 @@ if [[ "$IMMUTABLE" == 1 ]]; then
   ok "self-heal enabled (runs each boot)"
 fi
 
-# Game-mode auto-throttle watcher (idle unless `grave gamewatch on`). Installed on
-# any gaming-capable box — immutable hosts AND the steam-machine profile — not
-# just immutable ones: otherwise a mutable Steam Machine sets the gamewatch flag
-# with no unit behind it, and doctor fails forever (the profile's own hint and
-# STEAMOS.md both promise this install).
-if [[ "$IMMUTABLE" == 1 || "$PROFILE" == steam-machine ]]; then
-  step "Game-mode auto-throttle watcher"
-  install -m 755 "$REPO_DIR/bin/gravedecay-gamewatch" "$GRAVE_ROOT/scripts/gravedecay-gamewatch"
-  sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
-      -e "s|@HOME@|$HOME_DIR|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
-      "$REPO_DIR/systemd/gravedecay-gamewatch.service.tmpl" | install_unit gravedecay-gamewatch.service
-  sudo systemctl daemon-reload
-  enable_restart gravedecay-gamewatch >/dev/null 2>&1 || true
-  ok "game-mode watcher installed (flip on with: grave gamewatch on)"
-fi
+# Optional game-mode watcher capability. Install it everywhere, idle behind its
+# flag, so a generic dev box can opt into gaming controls later without changing
+# profile. The separate policy step below defaults it on only for fresh stock
+# SteamOS and preserves every explicit choice; capability never implies policy.
+step "Optional game-mode watcher"
+install -m 755 "$REPO_DIR/bin/gravedecay-gamewatch" "$GRAVE_ROOT/scripts/gravedecay-gamewatch"
+sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
+    -e "s|@HOME@|$HOME_DIR|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
+    "$REPO_DIR/systemd/gravedecay-gamewatch.service.tmpl" | install_unit gravedecay-gamewatch.service
+sudo systemctl daemon-reload
+enable_restart gravedecay-gamewatch >/dev/null 2>&1 || true
+ok "optional game-mode watcher installed (toggle with: grave gamewatch on|off)"
 
 # Tailnet keepalive watcher (idle unless `grave keepalive on`). Warms DERP relay
 # paths to online peers so a remote device that can't hold a direct Tailscale
@@ -698,6 +708,34 @@ if [[ -n "$PROFILE" ]]; then
   profile_apply
   ok "profile applied"
 fi
+
+# -------------------------------------------------- 10b. gamewatch policy ----
+# The flag is the watcher's hot-reloaded runtime input; the preference file is
+# the durable tri-state needed to preserve an explicit off across re-raises.
+# Migrate old installs without undoing their last choice, and default on only
+# for a genuinely fresh stock-SteamOS raise.
+gamewatch_pref="$GRAVE_ROOT/config/gamewatch.preference"
+gamewatch_flag="$GRAVE_ROOT/config/gamewatch.on"
+if [[ ! -r "$gamewatch_pref" ]]; then
+  if [[ -e "$gamewatch_flag" ]]; then
+    gamewatch_default=on                 # migrate the old enabled flag
+  elif [[ "$GRAVE_CONFIG_EXISTED" == 1 ]]; then
+    gamewatch_default=off                # preserve an old explicit opt-out
+  elif [[ "$STEAMOS" == 1 ]]; then
+    gamewatch_default=on                 # first raise on stock SteamOS
+  else
+    gamewatch_default=off                # dev-only and other OSes
+  fi
+  printf '%s\n' "$gamewatch_default" >"$gamewatch_pref"
+  ok "gamewatch default: $gamewatch_default$([[ "$gamewatch_default" == on ]] && echo ' (stock SteamOS)' || true)"
+fi
+gamewatch_preference="$(tr -d '[:space:]' <"$gamewatch_pref")"
+case "$gamewatch_preference" in
+  on)  : >"$gamewatch_flag" ;;
+  off) rm -f "$gamewatch_flag" ;;
+  *)   rm -f "$gamewatch_flag"
+       skip "invalid gamewatch.preference '$gamewatch_preference' — expected on or off; auto-throttle left off" ;;
+esac
 
 # ------------------------------------------------------------- 11. doctor ----
 step "Doctor"

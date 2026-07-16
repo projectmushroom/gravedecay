@@ -99,6 +99,30 @@ test('settings and narrow data records remain usable', async ({ page }) => {
   expect(box.height).toBeGreaterThanOrEqual(32);
 });
 
+test('gamewatch off presents a dev-only UI and can be opted back in', async ({ page }) => {
+  await page.locator('[data-tab="system"]').click();
+  await page.evaluate(async () => {
+    const state = await (await fetch('api/state')).json();
+    state.mode = 'developer';
+    state.gamewatch = { installed: true, on: false, running: true };
+    render(state);
+  });
+  await expect(page.locator('#mode')).toBeHidden();
+  await expect(page.locator('[data-act="gaming"]')).toBeHidden();
+  await expect(page.locator('[data-act="developer"]')).toBeHidden();
+
+  await page.locator('#gear').click();
+  await expect(page.locator('#throttle-row')).toBeVisible();
+  await expect(page.locator('#boot-mode-row')).toBeHidden();
+
+  await page.evaluate(() => applyGamewatch({ installed: true, on: true, running: true }));
+  await expect(page.locator('#mode')).toBeVisible();
+  await expect(page.locator('#boot-mode-row')).toBeVisible();
+  await page.locator('#settings-x').click();
+  await expect(page.locator('[data-act="gaming"]')).toBeVisible();
+  await expect(page.locator('[data-act="developer"]')).toBeVisible();
+});
+
 test('a polling refresh preserves the document scroll position', async ({ page }) => {
   await renderLongMobileRecords(page);
   const before = await page.evaluate(async () => {

@@ -53,10 +53,7 @@ profile_apply() {
   # do — ALWAYS_ON services (tailscaled, sshd, gravedecay) are never touched by
   # gaming mode. Verify after first game night with: grave doctor
 
-  # Game-mode auto-throttle ON by default on a Steam Machine: launching a game
-  # freezes agents + frees RAM/GPU, exiting restores them. raise.sh installed
-  # the watcher; this flips its flag on. Disable any time with `grave gamewatch
-  # off`.
-  mkdir -p "$GRAVE_ROOT/config"
-  : > "$GRAVE_ROOT/config/gamewatch.on"
+  # Gamewatch policy is applied centrally by raise.sh: first raises on detected
+  # stock SteamOS default on, every other OS defaults off, and an explicit
+  # `grave gamewatch on|off` survives future profile reapplications.
 }
