@@ -581,6 +581,21 @@ sudo systemctl daemon-reload
 enable_restart gravedecay-keepalive >/dev/null 2>&1 || true
 ok "tailnet keepalive installed (turn on with: grave keepalive on)"
 
+# Nightly verified backup (#112). Installed and enabled on every box: an
+# always-on appliance holding the repos must not depend on a human remembering
+# `grave backup`. The service pages via gravedecay-notify@ on failure and
+# doctor enforces marker freshness — see docs/RECOVERY.md.
+step "Nightly backup timer"
+sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
+    -e "s|@HOME@|$HOME_DIR|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
+    -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" -e "s|@DOCKER_HOST@|$DOCKER_HOSTV|g" \
+    "$REPO_DIR/systemd/gravedecay-backup.service.tmpl" \
+  | grep -v '^Environment=DOCKER_HOST=$' | install_unit gravedecay-backup.service
+install_unit gravedecay-backup.timer <"$REPO_DIR/systemd/gravedecay-backup.timer.tmpl"
+sudo systemctl daemon-reload
+enable_restart gravedecay-backup.timer >/dev/null 2>&1 || true
+ok "nightly verified backup scheduled (~05:00; run one any time: grave backup)"
+
 # -------------------------------------------------------------- 7. docker ----
 step "Docker stacks"
 if [[ "$DOCKER_ROOTLESS" == 1 ]]; then

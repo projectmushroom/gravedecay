@@ -1,0 +1,20 @@
+[Unit]
+Description=gravedecay - nightly verified backup
+Documentation=https://github.com/projectmushroom/gravedecay
+# Page the human if the backup lands in failed state (silent no-op unless
+# notifications are configured -- see docs/NOTIFICATIONS.md). `grave backup`
+# exits nonzero when any artifact fails to create or verify, so a bad backup
+# is a page, never a quiet gap in the retention window.
+OnFailure=gravedecay-notify@%n.service
+
+[Service]
+Type=oneshot
+User=@USER@
+Group=@USER@
+ExecStart=@GRAVE_BIN@ backup
+Environment=GRAVE_ROOT=@GRAVE_ROOT@
+Environment=DOCKER_HOST=@DOCKER_HOST@
+# Reach the durable toolchain (git/docker on Homebrew hosts) — @TOOLPATH@ is
+# empty on package-manager hosts.
+Environment=PATH=@TOOLPATH@@HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
+SyslogIdentifier=gravedecay-backup

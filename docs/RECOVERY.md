@@ -18,9 +18,26 @@ an encrypted/off-box destination you control. `manifest.json` records the
 choice. Without secrets, restored users reauthenticate; grants, MCP config,
 state, and dirty work remain recoverable.
 
-Retention: last `BACKUP_KEEP` (default 7). Schedule it:
-`systemd-run --on-calendar=daily` a `grave backup`, or a cron/timer of your
-choice. Copy `$GRAVE_ROOT/backups` off-box if the data matters.
+Retention: last `BACKUP_KEEP` (default 7). Copy `$GRAVE_ROOT/backups` off-box
+if the data matters — snapshots and on-box backups die with the disk.
+
+## Scheduling and verification
+
+raise.sh installs and enables `gravedecay-backup.timer`: a `grave backup`
+every night around 05:00 (randomized ±20 min, `Persistent=true` so a box that
+slept through the night catches up at wake/boot).
+
+Every artifact is verified as it is written — git bundles with
+`git bundle verify`, tarballs by listing them back — and any failure makes the
+whole run exit nonzero, which lands `gravedecay-backup.service` in failed
+state and pages via `gravedecay-notify@` (when notifications are configured,
+docs/NOTIFICATIONS.md). Only a fully clean run updates
+`$BACKUP_DIR/.last-verified`.
+
+Doctor enforces the contract: the timer must be enabled and active, and
+`.last-verified` must be newer than `BACKUP_MAX_AGE_DAYS` (default 2) — so a
+box whose backups silently stopped fails doctor and pages, instead of being
+discovered on restore day.
 
 ## Restore pieces
 
