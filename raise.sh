@@ -557,6 +557,20 @@ if [[ "$IMMUTABLE" == 1 || "$PROFILE" == steam-machine ]]; then
   ok "game-mode watcher installed (flip on with: grave gamewatch on)"
 fi
 
+# Tailnet keepalive watcher (idle unless `grave keepalive on`). Warms DERP relay
+# paths to online peers so a remote device that can't hold a direct Tailscale
+# connection doesn't drop its T3/dashboard websocket when idle. Installed on
+# every box — remote access is the whole point of the appliance, and relay-only
+# clients are common away from home.
+step "Tailnet keepalive watcher"
+install -m 755 "$REPO_DIR/bin/gravedecay-keepalive" "$GRAVE_ROOT/scripts/gravedecay-keepalive"
+sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
+    -e "s|@HOME@|$HOME_DIR|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
+    "$REPO_DIR/systemd/gravedecay-keepalive.service.tmpl" | install_unit gravedecay-keepalive.service
+sudo systemctl daemon-reload
+enable_restart gravedecay-keepalive >/dev/null 2>&1 || true
+ok "tailnet keepalive installed (turn on with: grave keepalive on)"
+
 # -------------------------------------------------------------- 7. docker ----
 step "Docker stacks"
 if [[ "$DOCKER_ROOTLESS" == 1 ]]; then

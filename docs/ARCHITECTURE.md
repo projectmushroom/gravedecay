@@ -70,6 +70,22 @@ snapshots, and `/var/lib/docker` on a separate never-snapshotted subvolume.
 Mode is not stored anywhere: it is *derived* (t3code active ⇒ developer).
 No state files to drift.
 
+## Always alive (tailnet keepalive)
+
+The box is reached over the tailnet. A device that can't NAT-traverse to it (a
+remote laptop on café/hotel/mobile Wi-Fi) falls back to a **DERP relay**. An
+idle relayed path stalls, and the T3 / dashboard websocket reconnect-loops
+(`Failed to connect. Reconnecting… disconnected`).
+
+`gravedecay-keepalive.service` is an opt-in loop that pings every *online*
+tailnet peer every `KEEPALIVE_SECONDS` (default 2, under the client's reconnect
+gap) so the relay path never goes idle. It is installed on every box but idle
+until the flag file `$GRAVE_ROOT/config/keepalive.on` exists — toggle it with
+`grave keepalive on|off` or the dashboard ⚙️ **Always alive** row; the loop
+re-reads the flag each poll. It reduces idle drops for relay-only clients but is
+a mitigation, not a cure: a genuinely lossy uplink can still break the socket,
+and a *direct* Tailscale connection (when NAT allows) is always better.
+
 ## The doctor contract
 
 Every platform invariant is a `grave doctor` check. If a profile or a manual

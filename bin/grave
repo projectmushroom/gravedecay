@@ -520,6 +520,28 @@ cmd_gamewatch() {
   esac
 }
 
+# ------------------------------------------------------------ keepalive ----
+# "Always alive" toggle. The gravedecay-keepalive.service loop pings online
+# tailnet peers every couple of seconds so a remote device on a DERP relay keeps
+# its path warm and its T3/dashboard websocket doesn't idle-drop. This just
+# flips the flag file the loop reads each poll (no sudo — it lives under
+# $GRAVE_ROOT).
+cmd_keepalive() {
+  local flag="$GRAVE_ROOT/config/keepalive.on"
+  case "${1:-status}" in
+    on)  systemctl cat gravedecay-keepalive.service >/dev/null 2>&1 \
+           || { bad "gravedecay-keepalive.service not installed on this host — re-raise to install it"; exit 1; }
+         mkdir -p "$GRAVE_ROOT/config"; : > "$flag"
+         ok "always-alive ON — warming tailnet relay paths; 'grave keepalive off' to stop" ;;
+    off) rm -f "$flag"; ok "always-alive OFF (tailnet paths no longer warmed)" ;;
+    status)
+      [[ -e "$flag" ]] && say "always-alive: ${GRN}on${RST}" || say "always-alive: ${YLW}off${RST}"
+      if systemctl is-active --quiet gravedecay-keepalive; then say "  keepalive service: running"
+      else say "  keepalive service: ${YLW}stopped${RST} (re-raise to install)"; fi ;;
+    *) say "usage: grave keepalive [on|off|status]"; exit 1 ;;
+  esac
+}
+
 # ---------------------------------------------------------------- notify ----
 # Push a message to the human (docs/NOTIFICATIONS.md) over two channels:
 #   ntfy     — $GRAVE_ROOT/config/secrets/notify.env (600, git-ignored):
@@ -843,6 +865,15 @@ cmd_doctor() {
       FAILURES=$((FAILURES+1))
     fi
   fi
+  if [[ -e "$GRAVE_ROOT/config/keepalive.on" ]]; then
+    if systemctl cat gravedecay-keepalive.service >/dev/null 2>&1; then
+      check "tailnet keepalive running"   systemctl is-active --quiet gravedecay-keepalive
+      check "tailnet keepalive enabled"   systemctl is-enabled --quiet gravedecay-keepalive
+    else
+      bad "keepalive on but gravedecay-keepalive.service not installed — 'grave keepalive off' or re-raise"
+      FAILURES=$((FAILURES+1))
+    fi
+  fi
   if dkctl is-active --quiet docker; then
     check "docker healthy"              dk info
     # dk is a shell function, so expand the real argv for the piped subshell
@@ -1108,6 +1139,8 @@ grave — gravedecay appliance control 🪦
                              up (default) or gaming (ALWAYS_ON only)
   grave gamewatch [on|off]   auto gaming/developer flip when a game launches
                              (Steam Machine); 'status' to check
+  grave keepalive [on|off]   "always alive": warm tailnet relay paths so a
+                             remote/relay device's websocket doesn't idle-drop
   grave notify <t> [body]    page your devices: ntfy topic and/or Web Push to
                              the installed PWA (enroll in ⚙️ settings). Agents,
                              failing units, and doctor use the same channels —
@@ -1136,6 +1169,7 @@ case "${1:-help}" in
   upgrade)    shift || true; cmd_upgrade "$@" ;;
   bootmode)   shift || true; cmd_bootmode "$@" ;;
   gamewatch)  shift || true; cmd_gamewatch "$@" ;;
+  keepalive)  shift || true; cmd_keepalive "$@" ;;
   logs)       shift; cmd_logs "$@" ;;
   notify)     shift || true; cmd_notify "$@" ;;
   doctor)     cmd_doctor ;;
