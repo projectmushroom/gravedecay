@@ -68,7 +68,16 @@ snapshots, and `/var/lib/docker` on a separate never-snapshotted subvolume.
   the box stays reachable and observable mid-game.
 
 Mode is not stored anywhere: it is *derived* (t3code active ⇒ developer).
-No state files to drift.
+No mode state files can drift. `grave gaming --for <timespan>` may add a named
+transient systemd timer for the future developer transition; `grave status`
+reports it and `grave developer` cancels it.
+
+Automatic transitions are an independent gamewatch policy. The durable
+`config/gamewatch.preference` (`on`/`off`) is synchronized to the watcher's
+hot-reloaded flag. First raises default it on only for detected stock SteamOS
+and off elsewhere. Detection is ordered and configurable (`gamescope`, active
+Steam app cgroups, Feral GameMode, then an exact process name), so a profile can
+tune signals without changing mode semantics.
 
 ## Always alive (tailnet keepalive)
 

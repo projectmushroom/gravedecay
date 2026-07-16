@@ -38,7 +38,9 @@ people—not mutually hostile or public tenants.
 
 `raise.sh` installs `/etc/sudoers.d/50-gravedecay`: NOPASSWD for your user on
 `systemctl`, `docker`, `grave`, `journalctl`, `ufw`, `snapper`, `sshd -T` —
-what `grave` and gravedecay's action buttons need. This is effectively
+what `grave` and gravedecay's action buttons need. The authorized `grave` root
+helper creates the transient gaming auto-thaw timer without granting direct
+`systemd-run` access. This is effectively
 root-equivalent for *your* user (systemctl alone gets you there); the point is
 convenience for a single-human box, not privilege separation. If your box has
 other human users, tighten it.

@@ -1,7 +1,8 @@
 [Unit]
 Description=gravedecay game-mode auto-throttle (freeze agents while gaming)
-# Watches for a running game and flips grave gaming/developer. Opt-in via the
-# flag file $GRAVE_ROOT/config/gamewatch.on — see docs/STEAMOS.md.
+# Watches for a running game and flips grave gaming/developer. The hot-reloaded
+# flag at $GRAVE_ROOT/config/gamewatch.on is synchronized from the persistent
+# gamewatch.preference by raise.sh / grave gamewatch — see docs/STEAMOS.md.
 After=multi-user.target
 Wants=network-online.target
 # Page the human if this unit lands in failed state (silent no-op unless

@@ -35,6 +35,9 @@ LOG_FILE="$GRAVE_ROOT/logs/grave.log"
 NOTIFY_ENV="$GRAVE_ROOT/config/secrets/notify.env"
 PUSH_SUBS="$GRAVE_ROOT/config/push-subscriptions.json"
 AGENT_NOTIFY="$GRAVE_ROOT/scripts/grave-agent-notify"
+GAMEWATCH_PREFERENCE="$GRAVE_ROOT/config/gamewatch.preference"
+AUTO_THAW_UNIT="gravedecay-auto-thaw"
+AUTO_THAW_TIMER="$AUTO_THAW_UNIT.timer"
 RED=$'\e[31m'; GRN=$'\e[32m'; YLW=$'\e[33m'; BLD=$'\e[1m'; RST=$'\e[0m'
 
 log() { { printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG_FILE"; } 2>/dev/null || true; }
@@ -73,6 +76,56 @@ compose() { # compose <stack> <args...>
 }
 
 mem_available_mib() { awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo; }
+
+auto_thaw_active() {
+  systemctl is-active --quiet "$AUTO_THAW_TIMER"
+}
+
+cancel_auto_thaw() {
+  auto_thaw_active || return 0
+  need_root_helper
+  sudo systemctl stop "$AUTO_THAW_TIMER" >/dev/null 2>&1 || true
+  ok "cancelled pending gaming auto-thaw"
+}
+
+schedule_auto_thaw() { # schedule_auto_thaw <systemd timespan, e.g. 2h or 90m>
+  local duration="$1" grave_bin
+  systemd-analyze timespan "$duration" >/dev/null 2>&1 \
+    || { bad "invalid --for duration '$duration' (examples: 30m, 2h, 1h30m)"; exit 1; }
+  command -v systemd-run >/dev/null 2>&1 \
+    || { bad "systemd-run is required for --for"; exit 1; }
+  need_root_helper
+  grave_bin="$(readlink -f "$0")"
+  # Re-enter the already-authorized grave root helper instead of broadening the
+  # sudoers surface to systemd-run. Existing boxes can use --for immediately
+  # after a headless upgrade, even before their next interactive sudoers refresh.
+  sudo -n "$grave_bin" __auto-thaw schedule "$duration"
+}
+
+cmd_auto_thaw_root() { # root-only helper: cmd_auto_thaw_root schedule <timespan>
+  [[ $EUID == 0 ]] || { bad "auto-thaw root helper must run through sudo"; exit 1; }
+  local sub="${1:-}" duration="${2:-}" uid="${SUDO_UID:-}" gid="${SUDO_GID:-}"
+  [[ "$sub" == schedule && "$uid" =~ ^[0-9]+$ && "$gid" =~ ^[0-9]+$ ]] \
+    || { bad "invalid auto-thaw helper invocation"; exit 1; }
+  systemd-analyze timespan "$duration" >/dev/null 2>&1 \
+    || { bad "invalid auto-thaw duration"; exit 1; }
+  local user home grave_bin
+  user="$(getent passwd "$uid" | cut -d: -f1)"
+  home="$(getent passwd "$uid" | cut -d: -f6)"
+  [[ -n "$user" && -n "$home" ]] || { bad "cannot resolve auto-thaw owner"; exit 1; }
+  grave_bin="$(readlink -f "$0")"
+  # A system transient timer survives the invoking shell/dashboard request. The
+  # service itself runs as the appliance owner so rootless Docker and the user
+  # tmux session are restored in the same context as an interactive command.
+  /usr/bin/systemd-run --quiet --collect \
+    --unit="$AUTO_THAW_UNIT" --on-active="$duration" \
+    --timer-property=AccuracySec=1s \
+    --description="Restore gravedecay developer mode after gaming" \
+    --uid="$uid" --gid="$gid" --setenv="HOME=$home" \
+    --setenv="USER=$user" --setenv="LOGNAME=$user" \
+    "$grave_bin" developer
+  ok "auto-thaw scheduled in $duration"
+}
 
 pkg_mgr() {
   if command -v pacman >/dev/null; then echo pacman
@@ -197,6 +250,14 @@ cmd_status() {
   if command -v sensors >/dev/null; then
     sensors 2>/dev/null | awk '/^Package id 0|^Tctl|junction|^edge/ {printf "    temp %s\n", $0}' | head -3
   fi
+
+  if auto_thaw_active; then
+    local deadline
+    deadline="$(LC_ALL=C systemctl list-timers "$AUTO_THAW_TIMER" --no-legend --no-pager 2>/dev/null \
+      | awk 'NF {print $1, $2, $3, $4; exit}')"
+    hdr "Gaming auto-thaw"
+    say "    pending${deadline:+; next: $deadline}"
+  fi
 }
 
 # ------------------------------------------------------------- start/stop ----
@@ -278,9 +339,20 @@ stop_dev() { # stop_dev [kill]  — kill: also destroy tmux sessions (max free R
   log "developer mode: stopped"
 }
 
-cmd_gaming() { # cmd_gaming [--kill]
-  local tier=pause
-  [[ "${1:-}" == "--kill" ]] && tier=kill
+cmd_gaming() { # cmd_gaming [--kill] [--for <timespan>]
+  local tier=pause duration=""
+  while (($#)); do
+    case "$1" in
+      --kill) tier=kill ;;
+      --for)  shift; duration="${1:?usage: grave gaming [--kill] [--for <duration>]}" ;;
+      *)      say "usage: grave gaming [--kill] [--for <duration>]"; exit 1 ;;
+    esac
+    shift
+  done
+  [[ -z "$duration" ]] || systemd-analyze timespan "$duration" >/dev/null 2>&1 \
+    || { bad "invalid --for duration '$duration' (examples: 30m, 2h, 1h30m)"; exit 1; }
+  cancel_auto_thaw
+  [[ -z "$duration" ]] || schedule_auto_thaw "$duration"
   local before after
   before=$(mem_available_mib)
   if [[ "$tier" == kill ]]; then stop_dev kill; else stop_dev; fi
@@ -297,6 +369,9 @@ cmd_gaming() { # cmd_gaming [--kill]
 }
 
 cmd_developer() {
+  # Stopping only the timer is safe when this command is itself the transient
+  # service fired by that timer; stopping the service would kill the restore.
+  cancel_auto_thaw
   thaw_agents
   start_dev
   say ""
@@ -504,15 +579,17 @@ cmd_bootmode() { # what the box boots into: developer (dev services up) or gamin
 # for a running game and flips grave gaming/developer; this just flips the flag
 # file it reads each poll (no sudo — the file lives under $GRAVE_ROOT).
 cmd_gamewatch() {
-  local flag="$GRAVE_ROOT/config/gamewatch.on"
+  local flag="$GRAVE_ROOT/config/gamewatch.on" state="$GRAVE_ROOT/logs/gamewatch.state"
   case "${1:-status}" in
     on)  systemctl cat gravedecay-gamewatch.service >/dev/null 2>&1 \
            || { bad "gravedecay-gamewatch.service not installed on this host — raise with --profile steam-machine first"; exit 1; }
-         mkdir -p "$GRAVE_ROOT/config"; : > "$flag"
+         mkdir -p "$GRAVE_ROOT/config"; printf 'on\n' >"$GAMEWATCH_PREFERENCE"; : > "$flag"; rm -f "$state"
          ok "auto-throttle ON — launching a game freezes agents; 'grave gamewatch off' to stop" ;;
-    off) rm -f "$flag"; ok "auto-throttle OFF (games no longer flip modes)" ;;
+    off) mkdir -p "$GRAVE_ROOT/config"; printf 'off\n' >"$GAMEWATCH_PREFERENCE"; rm -f "$flag" "$state"
+         ok "auto-throttle OFF (persistent; games no longer flip modes)" ;;
     status)
       [[ -e "$flag" ]] && say "auto-throttle: ${GRN}on${RST}" || say "auto-throttle: ${YLW}off${RST}"
+      [[ -r "$GAMEWATCH_PREFERENCE" ]] && say "  saved preference: $(tr -d '[:space:]' <"$GAMEWATCH_PREFERENCE")"
       if systemctl is-active --quiet gravedecay-gamewatch; then say "  watcher service: running"
       else say "  watcher service: ${YLW}stopped${RST} (install via raise.sh --profile steam-machine)"; fi
       [[ -r "$GRAVE_ROOT/logs/gamewatch.state" ]] && say "  last seen: $(cat "$GRAVE_ROOT/logs/gamewatch.state")" ;;
@@ -856,10 +933,32 @@ cmd_doctor() {
     check "linger on (user services start without login)" \
       bash -c "loginctl show-user \"\$(id -un)\" 2>/dev/null | grep -q 'Linger=yes'"
   fi
+  if [[ -r "$GAMEWATCH_PREFERENCE" ]]; then
+    local gamewatch_preference
+    gamewatch_preference="$(tr -d '[:space:]' <"$GAMEWATCH_PREFERENCE")"
+    case "$gamewatch_preference" in
+      on)  check "gamewatch preference synced (on)" test -e "$GRAVE_ROOT/config/gamewatch.on" ;;
+      off) check "gamewatch preference synced (off)" test ! -e "$GRAVE_ROOT/config/gamewatch.on" ;;
+      *)   bad "invalid gamewatch preference '$gamewatch_preference' (expected on or off)"
+           FAILURES=$((FAILURES+1)) ;;
+    esac
+  else
+    say "  ${YLW}– gamewatch preference not initialized — re-run raise.sh${RST}"
+  fi
   if [[ -e "$GRAVE_ROOT/config/gamewatch.on" ]]; then
     if systemctl cat gravedecay-gamewatch.service >/dev/null 2>&1; then
       check "game-mode watcher running"   systemctl is-active --quiet gravedecay-gamewatch
       check "game-mode watcher enabled"   systemctl is-enabled --quiet gravedecay-gamewatch
+      local detector_report detector_rc
+      set +e
+      detector_report="$($GRAVE_ROOT/scripts/gravedecay-gamewatch doctor 2>&1)"
+      detector_rc=$?
+      set -e
+      case "$detector_rc" in
+        0) ok "game detection signals evaluable ($detector_report)" ;;
+        2) say "  ${YLW}– game detection has only the fragile process fallback ($detector_report)${RST}" ;;
+        *) bad "game detection signals unusable ($detector_report)"; FAILURES=$((FAILURES+1)) ;;
+      esac
     else
       bad "gamewatch on but gravedecay-gamewatch.service not installed — 'grave gamewatch off' or raise with --profile steam-machine"
       FAILURES=$((FAILURES+1))
@@ -1111,6 +1210,7 @@ grave — gravedecay appliance control 🪦
   grave gaming               🎮 free resources: stop services, FREEZE agent
                              sessions in place (🧊 torpor — RAM kept, zero CPU)
   grave gaming --kill        ☠️ same but destroy agent sessions (max free RAM)
+  grave gaming --for 2h      ⏱️ torpor now, automatically restore after 2h
   grave developer            💻 thaw sessions + restore full development mode
   grave start | stop         same as developer / gaming (without the banner)
   grave restart              stop + start developer services
@@ -1137,8 +1237,8 @@ grave — gravedecay appliance control 🪦
                              (--tag vX.Y.Z pins one; --edge follows main)
   grave bootmode [dev|game]  what a reboot boots into: developer services
                              up (default) or gaming (ALWAYS_ON only)
-  grave gamewatch [on|off]   auto gaming/developer flip when a game launches
-                             (Steam Machine); 'status' to check
+  grave gamewatch [on|off]   persistent automatic gaming/developer switching;
+                             'status' shows the watcher and last signal
   grave keepalive [on|off]   "always alive": warm tailnet relay paths so a
                              remote/relay device's websocket doesn't idle-drop
   grave notify <t> [body]    page your devices: ntfy topic and/or Web Push to
@@ -1154,6 +1254,7 @@ EOF
 
 # ------------------------------------------------------------------ main ----
 case "${1:-help}" in
+  __auto-thaw) shift || true; cmd_auto_thaw_root "$@" ;;
   status)     cmd_status ;;
   gaming)     shift || true; cmd_gaming "$@" ;;
   developer)  cmd_developer ;;

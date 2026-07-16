@@ -244,6 +244,7 @@ that always works. (Existing boxes: `raise.sh` won't clobber an existing
 ```
 grave gaming          # 🧊 torpor: stop T3/docker, FREEZE agent sessions
 grave gaming --kill   # ☠️ scorched earth: sessions die, maximum free RAM
+grave gaming --for 2h # ⏱️ torpor, then automatically return to developer mode
 grave developer       # 💻 thaw + restore everything
 ```
 
@@ -253,6 +254,13 @@ and resume mid-thought on wake. In game mode the dashboard swaps to a minimal
 vitals view, stops calling remote APIs, and slows its polling — the resource
 diet is enforced, not implied. Tailscale, SSH, dashboard, and terminal stay
 up; you can always get back in.
+
+`--for` accepts systemd timespans such as `30m`, `2h`, or `1h30m`. It creates a
+transient auto-thaw timer, `grave status` shows the pending restore, and an
+explicit `grave developer` cancels it. Automatic game detection is a separate,
+persistent preference: `grave gamewatch on|off|status`. It defaults on only for
+a first raise on positively detected stock SteamOS and off on every other host;
+your explicit choice survives later raises.
 
 ## Notifications — the box wakes you
 
@@ -291,7 +299,7 @@ refused. See `docs/PORTS.md`.
 ```
 grave status                     # services, containers, agents, temps, disk
 grave doctor                     # verify every platform invariant
-grave gaming [--kill]            # 🎮 free resources (freeze or kill sessions)
+grave gaming [--kill] [--for 2h] # 🎮 free resources; optionally auto-restore
 grave developer                  # 💻 thaw + restore
 grave agents new mybot [dir]     # persistent tmux agent session
 grave agents attach mybot        # detach: Ctrl-b d — session survives
@@ -322,8 +330,10 @@ Machine-specific quirks live in `profiles/*.sh`, applied once by
   a fixed DPM state (dGPU crash workaround).
 - **steam-machine** — stock SteamOS (immutable rootfs). Durable toolchain under
   `$HOME` (Homebrew + rootless Docker), `GRAVE_ROOT` on `/home`, always-on, and
-  games alongside — survives SteamOS updates untouched. Bootstrap once with
-  `steamos-toolchain.sh`, then raise; see [docs/STEAMOS.md](docs/STEAMOS.md).
+  games alongside — survives SteamOS updates untouched. Gamewatch defaults on
+  for detected stock SteamOS, while `grave gamewatch off` is persistent.
+  Bootstrap once with `steamos-toolchain.sh`, then raise; see
+  [docs/STEAMOS.md](docs/STEAMOS.md).
 
 Each profile flips matching `CHECK_*` doctor flags — quirks doctor can't
 verify will silently regress. Writing your own is ~20 lines; see

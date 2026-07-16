@@ -3,12 +3,13 @@
 # freeze agents + free RAM/GPU (grave gaming); when it exits, thaw + restore
 # (grave developer). So you just play — the box gets out of the way by itself.
 #
-# Opt-in via the flag file $GRAVE_ROOT/config/gamewatch.on (toggle it with
+# Enabled via the flag file $GRAVE_ROOT/config/gamewatch.on (toggle it with
 # `grave gamewatch on|off`); the watcher re-reads it every loop, so toggles take
-# effect within one poll without restarting the service.
+# effect within one poll without restarting the service. raise.sh keeps the
+# persistent preference in config/gamewatch.preference and syncs the flag.
 set -uo pipefail
 
-CONF=/etc/gravedecay/grave.conf
+CONF="${GRAVE_CONF:-/etc/gravedecay/grave.conf}"
 [[ -r "$CONF" ]] && . "$CONF" 2>/dev/null || true
 GRAVE_ROOT="${GRAVE_ROOT:-$HOME/gravedecay}"
 FLAG="$GRAVE_ROOT/config/gamewatch.on"
@@ -16,6 +17,11 @@ STATE="$GRAVE_ROOT/logs/gamewatch.state"
 LOG="$GRAVE_ROOT/logs/gamewatch.log"
 INTERVAL="${GAME_POLL_SECONDS:-8}"
 GAME_PROC="${GAME_PROC:-reaper}"   # Steam's per-game wrapper process
+: "${GAME_CGROUP_SAMPLE_SECONDS:=0.25}"
+: "${GAME_CGROUP_MIN_CPU_USEC:=10000}"
+: "${GAME_CGROUP_ROOT:=/sys/fs/cgroup}"
+declare -p GAME_SIGNALS >/dev/null 2>&1 \
+  || GAME_SIGNALS=(gamescope steam-cgroup gamemode process)
 mkdir -p "$GRAVE_ROOT/config" "$GRAVE_ROOT/logs" 2>/dev/null || true
 
 [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]] && eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv bash)" 2>/dev/null || true
@@ -24,33 +30,157 @@ export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$LOG"; }
 
-game_running() {
-  # Primary: Feral GameMode (SteamOS runs gamemoded) — Steam registers a game
-  # while it's in game mode, so a positive client count means "a game is up".
+signal_gamescope() {
+  # gamescope is the most stable SteamOS boundary: unlike Steam's wrapper names,
+  # its process name is part of the compositor's public interface.
+  pgrep -x gamescope >/dev/null 2>&1
+}
+
+steam_scope_units() {
+  systemctl --user list-units --type=scope --state=running --plain --no-legend \
+    'app-steam-*.scope' 2>/dev/null | awk '{print $1}'
+}
+
+steam_scope_usage_usec() {
+  local unit cg stat total=0 value
+  while read -r unit; do
+    [[ -n "$unit" ]] || continue
+    cg="$(systemctl --user show "$unit" --property=ControlGroup --value 2>/dev/null)"
+    [[ -n "$cg" ]] || continue
+    stat="$GAME_CGROUP_ROOT$cg/cpu.stat"
+    [[ -r "$stat" ]] || continue
+    value="$(awk '$1 == "usage_usec" {print $2}' "$stat" 2>/dev/null)"
+    [[ "${value:-}" =~ ^[0-9]+$ ]] && total=$((total + value))
+  done < <(steam_scope_units)
+  printf '%s\n' "$total"
+}
+
+signal_steam_cgroup() {
+  # An app-steam scope may linger while a launcher is idle. Require measurable
+  # CPU progress across a short sample instead of treating mere existence as a
+  # running game.
+  local before after
+  before="$(steam_scope_usage_usec)"
+  (( before > 0 )) || return 1
+  sleep "$GAME_CGROUP_SAMPLE_SECONDS"
+  after="$(steam_scope_usage_usec)"
+  (( after - before >= GAME_CGROUP_MIN_CPU_USEC ))
+}
+
+signal_gamemode() {
+  # Steam and several non-Steam launchers register with Feral GameMode.
   local n
   n="$(busctl --user get-property com.feralinteractive.GameMode \
         /com/feralinteractive/GameMode com.feralinteractive.GameMode ClientCount 2>/dev/null | awk '{print $NF}')"
-  [[ "${n:-0}" =~ ^[0-9]+$ && "$n" -gt 0 ]] && return 0
-  # Fallback: Steam's per-game wrapper process (native or Proton). Match by
-  # exact process name (-x), never -f — a -f pattern can match this very script.
+  [[ "${n:-0}" =~ ^[0-9]+$ && "$n" -gt 0 ]]
+}
+
+signal_process() {
+  # Last resort. Match by exact name (-x), never -f — a -f pattern can match
+  # this very script.
   pgrep -x -- "$GAME_PROC" >/dev/null 2>&1
 }
 
-last=""; [[ -r "$STATE" ]] && last="$(cat "$STATE" 2>/dev/null)"
+game_probe() {
+  local signal
+  for signal in "${GAME_SIGNALS[@]}"; do
+    case "$signal" in
+      gamescope)    signal_gamescope && { printf '%s\n' "$signal"; return 0; } ;;
+      steam-cgroup) signal_steam_cgroup && { printf '%s\n' "$signal"; return 0; } ;;
+      gamemode)     signal_gamemode && { printf '%s\n' "$signal"; return 0; } ;;
+      process)      signal_process && { printf '%s\n' "$signal"; return 0; } ;;
+      *)            return 2 ;;
+    esac
+  done
+  return 1
+}
+
+signal_evaluable() {
+  case "$1" in
+    gamescope)    command -v pgrep >/dev/null 2>&1 && command -v gamescope >/dev/null 2>&1 ;;
+    steam-cgroup) command -v systemctl >/dev/null 2>&1 \
+                    && [[ -d "$GAME_CGROUP_ROOT" ]] \
+                    && systemctl --user show-environment >/dev/null 2>&1 ;;
+    gamemode)     command -v busctl >/dev/null 2>&1 \
+                    && busctl --user get-property com.feralinteractive.GameMode \
+                         /com/feralinteractive/GameMode \
+                         com.feralinteractive.GameMode ClientCount >/dev/null 2>&1 ;;
+    process)      command -v pgrep >/dev/null 2>&1 && [[ -n "$GAME_PROC" ]] ;;
+    *)            return 2 ;;
+  esac
+}
+
+doctor_signals() {
+  local signal available=() robust=() unknown=()
+  for signal in "${GAME_SIGNALS[@]}"; do
+    case "$signal" in
+      gamescope|steam-cgroup|gamemode|process)
+        if signal_evaluable "$signal"; then
+          available+=("$signal")
+          [[ "$signal" != process ]] && robust+=("$signal")
+        fi ;;
+      *) unknown+=("$signal") ;;
+    esac
+  done
+  if ((${#unknown[@]})); then
+    printf 'unknown configured signal(s): %s\n' "${unknown[*]}"
+    return 1
+  fi
+  if ((${#robust[@]})); then
+    printf '%s\n' "${available[*]}"
+    return 0
+  fi
+  if ((${#available[@]})); then
+    printf '%s\n' "${available[*]}"
+    return 2
+  fi
+  printf 'none of the configured signals are evaluable: %s\n' "${GAME_SIGNALS[*]}"
+  return 1
+}
+
+case "${1:-}" in
+  probe)  game_probe ; exit $? ;;
+  doctor) doctor_signals; exit $? ;;
+  "")     ;;
+  *)      echo "usage: gravedecay-gamewatch [probe|doctor]" >&2; exit 2 ;;
+esac
+
+last=""; invalid_logged=0
+[[ -r "$STATE" ]] && last="$(cat "$STATE" 2>/dev/null)"
 log "gamewatch started (interval ${INTERVAL}s)"
 while :; do
   if [[ -e "$FLAG" ]]; then
-    if game_running; then now=game; else now=idle; fi
-    if [[ "$now" != "$last" ]]; then
-      if [[ "$now" == game ]]; then
-        log "game detected -> grave gaming (freeze agents, free RAM/GPU)"
+    signal=""
+    if signal="$(game_probe)"; then
+      now="game:$signal"; invalid_logged=0
+    else
+      probe_rc=$?
+      if (( probe_rc == 2 )); then
+        (( invalid_logged )) || log "invalid GAME_SIGNALS configuration; keeping current mode"
+        invalid_logged=1
+        sleep "$INTERVAL"
+        continue
+      fi
+      now=idle; invalid_logged=0
+    fi
+    if [[ "${now%%:*}" != "${last%%:*}" ]]; then
+      if [[ "${now%%:*}" == game ]]; then
+        log "game detected ($signal) -> grave gaming (freeze agents, free RAM/GPU)"
         grave gaming >>"$LOG" 2>&1 || true
       elif [[ -n "$last" ]]; then   # only auto-restore if we'd previously seen a game
         log "game exited -> grave developer (thaw, restore)"
         grave developer >>"$LOG" 2>&1 || true
       fi
       last="$now"; printf '%s\n' "$now" >"$STATE"
+    elif [[ "$now" != "$last" ]]; then
+      # The game remains up but a higher-priority signal became available (or
+      # vice versa). Refresh observability without repeating a mode transition.
+      last="$now"; printf '%s\n' "$now" >"$STATE"
     fi
+  else
+    # Re-enabling must re-evaluate the current state instead of inheriting a
+    # stale pre-disable transition.
+    last=""; invalid_logged=0
   fi
   sleep "$INTERVAL"
 done

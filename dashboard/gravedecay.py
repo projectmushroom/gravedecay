@@ -2129,9 +2129,10 @@ body.gaming #foot{display:none}
     <p><b>Quit the game</b> → everything <b>thaws and resumes</b> right where it
       left off, mid-thought.</p>
     <p class="dim2">Tailscale, SSH, this dashboard and the web terminal always stay
-      up — the box is reachable even mid-game. A running game is detected via
-      SteamOS's GameMode. You can also toggle this from a terminal with
-      <code>grave gamewatch on|off</code>.</p>
+      up — the box is reachable even mid-game. Detection checks gamescope,
+      Steam app cgroups, Feral GameMode, then an exact process-name fallback.
+      It defaults on only on stock SteamOS, and your choice persists across
+      upgrades. You can also toggle it with <code>grave gamewatch on|off</code>.</p>
     <div class="setrow"><button id="throttle-close">Got it</button></div>
   </div>
 </div>
