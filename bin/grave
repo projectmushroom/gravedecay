@@ -582,7 +582,7 @@ cmd_gamewatch() {
   local flag="$GRAVE_ROOT/config/gamewatch.on" state="$GRAVE_ROOT/logs/gamewatch.state"
   case "${1:-status}" in
     on)  systemctl cat gravedecay-gamewatch.service >/dev/null 2>&1 \
-           || { bad "gravedecay-gamewatch.service not installed on this host — raise with --profile steam-machine first"; exit 1; }
+           || { bad "gravedecay-gamewatch.service not installed — re-run raise.sh first"; exit 1; }
          mkdir -p "$GRAVE_ROOT/config"; printf 'on\n' >"$GAMEWATCH_PREFERENCE"; : > "$flag"; rm -f "$state"
          ok "auto-throttle ON — launching a game freezes agents; 'grave gamewatch off' to stop" ;;
     off) mkdir -p "$GRAVE_ROOT/config"; printf 'off\n' >"$GAMEWATCH_PREFERENCE"; rm -f "$flag" "$state"
@@ -591,7 +591,7 @@ cmd_gamewatch() {
       [[ -e "$flag" ]] && say "auto-throttle: ${GRN}on${RST}" || say "auto-throttle: ${YLW}off${RST}"
       [[ -r "$GAMEWATCH_PREFERENCE" ]] && say "  saved preference: $(tr -d '[:space:]' <"$GAMEWATCH_PREFERENCE")"
       if systemctl is-active --quiet gravedecay-gamewatch; then say "  watcher service: running"
-      else say "  watcher service: ${YLW}stopped${RST} (install via raise.sh --profile steam-machine)"; fi
+      else say "  watcher service: ${YLW}stopped${RST} (re-run raise.sh)"; fi
       [[ -r "$GRAVE_ROOT/logs/gamewatch.state" ]] && say "  last seen: $(cat "$GRAVE_ROOT/logs/gamewatch.state")" ;;
     *) say "usage: grave gamewatch [on|off|status]"; exit 1 ;;
   esac
@@ -960,7 +960,7 @@ cmd_doctor() {
         *) bad "game detection signals unusable ($detector_report)"; FAILURES=$((FAILURES+1)) ;;
       esac
     else
-      bad "gamewatch on but gravedecay-gamewatch.service not installed — 'grave gamewatch off' or raise with --profile steam-machine"
+      bad "gamewatch on but gravedecay-gamewatch.service not installed — 'grave gamewatch off' or re-run raise.sh"
       FAILURES=$((FAILURES+1))
     fi
   fi

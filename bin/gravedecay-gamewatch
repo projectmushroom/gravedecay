@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# gravedecay-gamewatch — Steam Machine auto-throttle. When a game launches,
+# gravedecay-gamewatch — optional gaming auto-throttle. When a game launches,
 # freeze agents + free RAM/GPU (grave gaming); when it exits, thaw + restore
 # (grave developer). So you just play — the box gets out of the way by itself.
 #

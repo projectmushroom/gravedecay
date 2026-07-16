@@ -144,9 +144,10 @@ workspace data or provider/integration secrets.
 
 ## Game Mode auto-throttle
 
-The watcher capability is installed on gaming-capable/immutable hosts. On a
+The optional watcher capability is installed on every gravedecay host. On a
 first raise it defaults **on only when stock SteamOS is positively detected**;
-dev-only appliances, Silverblue, and non-SteamOS gaming PCs default off. An
+dev-only appliances, Silverblue, and non-SteamOS gaming PCs default off but can
+opt in later with `grave gamewatch on`, without changing host profile. An
 explicit choice is saved in `config/gamewatch.preference`, so later raises and
 profile reapplications never undo `grave gamewatch off` (or `on`). Manual
 `grave gaming` and `grave developer` remain available regardless.

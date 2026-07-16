@@ -554,20 +554,18 @@ if [[ "$IMMUTABLE" == 1 ]]; then
   ok "self-heal enabled (runs each boot)"
 fi
 
-# Game-mode auto-throttle watcher (idle unless `grave gamewatch on`). Installed on
-# any gaming-capable box — immutable hosts AND the steam-machine profile. The
-# separate policy step below decides the first-raise default and preserves the
-# operator's choice; installing capability never implies enabling it.
-if [[ "$IMMUTABLE" == 1 || "$PROFILE" == steam-machine ]]; then
-  step "Game-mode auto-throttle watcher"
-  install -m 755 "$REPO_DIR/bin/gravedecay-gamewatch" "$GRAVE_ROOT/scripts/gravedecay-gamewatch"
-  sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
-      -e "s|@HOME@|$HOME_DIR|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
-      "$REPO_DIR/systemd/gravedecay-gamewatch.service.tmpl" | install_unit gravedecay-gamewatch.service
-  sudo systemctl daemon-reload
-  enable_restart gravedecay-gamewatch >/dev/null 2>&1 || true
-  ok "game-mode watcher installed (toggle with: grave gamewatch on|off)"
-fi
+# Optional game-mode watcher capability. Install it everywhere, idle behind its
+# flag, so a generic dev box can opt into gaming controls later without changing
+# profile. The separate policy step below defaults it on only for fresh stock
+# SteamOS and preserves every explicit choice; capability never implies policy.
+step "Optional game-mode watcher"
+install -m 755 "$REPO_DIR/bin/gravedecay-gamewatch" "$GRAVE_ROOT/scripts/gravedecay-gamewatch"
+sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
+    -e "s|@HOME@|$HOME_DIR|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
+    "$REPO_DIR/systemd/gravedecay-gamewatch.service.tmpl" | install_unit gravedecay-gamewatch.service
+sudo systemctl daemon-reload
+enable_restart gravedecay-gamewatch >/dev/null 2>&1 || true
+ok "optional game-mode watcher installed (toggle with: grave gamewatch on|off)"
 
 # Tailnet keepalive watcher (idle unless `grave keepalive on`). Warms DERP relay
 # paths to online peers so a remote device that can't hold a direct Tailscale
