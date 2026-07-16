@@ -398,6 +398,10 @@ cmd_agents() {
       local dir="${2:-$GRAVE_ROOT/repos}"
       tmuxa -f "$TMUX_CONF" new-session -d -s "$name" -c "$dir"
       mkdir -p "$GRAVE_ROOT/agents/$name"
+      # Record the working dir so `agents resume` (and the dashboard's ▶
+      # button) can bring a dead session back where it lived (#110).
+      jq -n --arg dir "$dir" --arg created "$(date -u +%FT%TZ)" \
+        '{dir:$dir, created:$created}' >"$GRAVE_ROOT/agents/$name/meta.json" 2>/dev/null || true
       # Resolve the dated log path in bash: the old deferred date-in-tmux form
       # double-escaped the percents and logged a literal filename, never a date.
       local logfile="$GRAVE_ROOT/agents/$name/session-$(date +%Y%m%d).log"
@@ -407,7 +411,33 @@ cmd_agents() {
       exec tmux -L "$TMUX_SOCKET" attach -t "${1:?usage: grave agents attach <name>}" ;;
     kill)
       tmuxa kill-session -t "${1:?usage: grave agents kill <name>}"; ok "killed ${1}" ;;
-    *) say "usage: grave agents [list|new|attach|kill]"; exit 1 ;;
+    history)
+      # Dead sessions leave their pipe-pane logs behind (#110): list every
+      # session dir that has logs, live or not. agents/t3code is T3 server
+      # state, not a tmux session dir.
+      local d name logs last state
+      printf '%-24s %-6s %-18s %s\n' "SESSION" "STATE" "LAST ACTIVITY" "LOGS"
+      for d in "$GRAVE_ROOT"/agents/*/; do
+        name=$(basename "$d"); [[ "$name" == t3code ]] && continue
+        logs=$(ls -1 "$d" 2>/dev/null | grep -c '^session-[0-9]*\.log$') || true
+        (( logs > 0 )) || continue
+        last=$(date -d "@$(stat -c %Y "$d"session-*.log | sort -n | tail -1)" '+%F %H:%M')
+        state=dead; tmuxa has-session -t "=$name" 2>/dev/null && state=live
+        printf '%-24s %-6s %-18s %s\n' "$name" "$state" "$last" "$logs"
+      done ;;
+    resume)
+      local name="${1:?usage: grave agents resume <name>}"
+      [[ "$name" =~ ^[A-Za-z0-9_-]+$ ]] || { bad "session name must be letters, digits, '-' or '_'"; exit 1; }
+      if tmuxa has-session -t "=$name" 2>/dev/null; then
+        ok "session '$name' is already live (attach: grave agents attach $name)"; return
+      fi
+      # Back to the dir it lived in; sessions predating meta.json fall back to
+      # the default. The old logs stay put — the new day's log appends beside them.
+      local dir
+      dir=$(jq -r '.dir // empty' "$GRAVE_ROOT/agents/$name/meta.json" 2>/dev/null) || dir=""
+      [[ -d "$dir" ]] || dir="$GRAVE_ROOT/repos"
+      cmd_agents new "$name" "$dir" ;;
+    *) say "usage: grave agents [list|new|attach|kill|history|resume]"; exit 1 ;;
   esac
 }
 
@@ -680,10 +710,32 @@ push_send() { # push_send <title> <body> <priority> <link> <event>
   return 1
 }
 
+notify_record() { # notify_record <title> <body> <link> <event> <delivered> — inbox line (#119)
+  # Pushes are ephemeral on every channel (dismiss and it's gone; iOS truncates
+  # long bodies); this file is the durable copy the dashboard's 🔔 Inbox
+  # renders. jq builds the JSON so hostile titles/session names can't break the
+  # encoding; 0600 because bodies carry private detail; best-effort throughout —
+  # a full disk must never break delivery itself.
+  local inbox="$GRAVE_ROOT/logs/notifications.jsonl"
+  {
+    mkdir -p "$GRAVE_ROOT/logs"
+    # size-capped: keep the newest ~400 entries once the file passes 256 KiB
+    if [[ -f "$inbox" ]] && (( $(stat -c %s "$inbox") > 262144 )); then
+      tail -n 400 "$inbox" >"$inbox.tmp" && mv "$inbox.tmp" "$inbox"
+    fi
+    [[ -f "$inbox" ]] || : >"$inbox"
+    chmod 600 "$inbox"
+    jq -nc --arg t "$1" --arg b "$2" --arg l "$3" --arg e "$4" --argjson d "$5" \
+      '{ts:(now|floor), event:(if $e=="" then "manual" else $e end),
+        title:$t, body:$b, link:$l, delivered:$d}' >>"$inbox"
+  } 2>/dev/null || true
+}
+
 notify_send() { # notify_send <title> <body> <priority> <link> <event> — ok if ANY channel delivered
   local sent=0
   if ntfy_ready; then ntfy_send "$1" "$2" "$3" && sent=1; fi
   if push_ready; then push_send "$1" "$2" "$3" "$4" "$5" && sent=1; fi
+  notify_record "$1" "$2" "$4" "$5" "$([[ $sent == 1 ]] && echo true || echo false)"
   (( sent ))
 }
 
@@ -1103,6 +1155,11 @@ cmd_doctor() { # grave doctor [--no-page]
   else
     say "  ${YLW}– backup timer not installed — re-run raise.sh${RST}"
   fi
+  # Notification inbox (#119): bodies carry private detail (session names,
+  # doctor output), so the durable copy must stay owner-only.
+  if [[ -f "$GRAVE_ROOT/logs/notifications.jsonl" ]]; then
+    check "notification inbox is private" bash -c "[[ \$(stat -c %a '$GRAVE_ROOT/logs/notifications.jsonl') == 600 ]]"
+  fi
   # Morning digest (#106): same shape as the backup timer — the schedule is the
   # invariant; whether it actually pages is the human's ⚙️ preference (digest
   # class in NOTIFY_EVENTS), which doctor deliberately does not second-guess.
@@ -1366,6 +1423,9 @@ grave — gravedecay appliance control 🪦
   grave agents new <n> [dir]    create persistent agent session
   grave agents attach <n>       attach (detach: Ctrl-b d)
   grave agents kill <n>         kill session
+  grave agents history          past sessions — logs survive death; view 📜
+                                and resume ▶ from the dashboard too
+  grave agents resume <n>       recreate a dead session in its old dir
 
   grave docker [ps|up <stack>|down <stack>|logs <c>|stacks|disk]
   grave logs [t3|dash|ssh|tailscale|system|grave|agent <n>|<container/unit>]

@@ -77,6 +77,17 @@ Every source calls `grave notify --event <class>`, a **silent no-op** when no
 channel is configured or the class is muted — the hooks and `OnFailure=`
 lines ship enabled on every box and cost nothing until you opt in.
 
+## The inbox — pushes are ephemeral, this isn't
+
+Every page that reaches a channel is also appended to
+`$GRAVE_ROOT/logs/notifications.jsonl` (0600 — bodies carry private detail;
+size-capped, newest ~400 kept) and shown in the dashboard's **🔔 Inbox**
+panel. Dismissed the push, or iOS truncated the digest on the lock screen?
+The full text is there, with each entry linking to the same place the push
+tap would have opened. Entries that failed delivery on every channel are
+marked ⚠️ — they're the reason a quiet phone isn't proof of a quiet box
+(doctor checks channel reachability for that).
+
 ## How Web Push works here
 
 - The dashboard generates a **VAPID P-256 key** on first use

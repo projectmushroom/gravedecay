@@ -13,7 +13,7 @@ services your projects need (databases, browsers). This is the opposite of
 |---|---|---|
 | T3 Code (web UI) | `t3code.service`, loopback :4711 | Spawns `claude`/`codex` CLI sessions as host child processes |
 | gravedecay | `gravedecay.service`, loopback :4712 | Needs systemd/journald/tmux/sysfs — impossible from a container |
-| CLI agent sessions | `tmux -L agents` | Survive client disconnects; `grave agents new/attach` |
+| CLI agent sessions | `tmux -L agents` | Survive client disconnects; `grave agents new/attach`; logs survive session death (`history`/`resume`, 📜/▶ in the dashboard) |
 | Backing services | Docker compose stacks in `$GRAVE_ROOT/docker/` | Postgres, Redis, Playwright — disposable, loopback-bound |
 | Control plane | `grave` (bash, `/usr/local/bin`) | One entrypoint for modes, doctor, logs, backup |
 | Self-updater | `gravedecay-upgrade.service`, detached oneshot | Survives the dashboard restart caused by its own re-raise |
@@ -47,11 +47,12 @@ Everything lives under `$GRAVE_ROOT` (default `/srv/dev`):
 
 ```
 repos/     all git checkouts (~/Projects symlinks here)
-agents/    per-agent state: t3code server state, tmux session logs
+agents/    per-agent state: t3code server state, tmux session logs + meta.json
+           (dir a session lived in — outlive the session for history/resume)
 docker/    compose stacks (core, browsers, yours)
 config/    grave.conf source-of-truth copies, tmux.conf, secrets/ (600, git-ignored)
 scripts/   gravedecay.py, dashboard-static/ PWA shell assets, and helpers
-logs/      grave.log
+logs/      grave.log, notifications.jsonl (🔔 inbox — durable copy of sent pages, 600)
 backups/   timestamped: git bundles + config tars + volume tars
 docs/      this documentation, synced from the repo
 ```
