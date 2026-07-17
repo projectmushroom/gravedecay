@@ -506,6 +506,26 @@ fi
 step "Web terminal (ttyd → tmux agents socket)"
 if command -v ttyd >/dev/null; then
   install -m 755 "$REPO_DIR/bin/webterm" "$GRAVE_ROOT/scripts/webterm"
+  # Custom single-file frontend (ttyd -I): the packaged ttyd 1.7.7 drops
+  # OSC 52, so mouse-copy out of tmux never reaches the clipboard — see
+  # docs/TERMINAL.md. Built here (pure splice, no network) so the served
+  # page always matches the repo; doctor greps for the marker.
+  install -d "$GRAVE_ROOT/web/term"
+  python3 - "$REPO_DIR/web/term" "$GRAVE_ROOT/web/term/index.html" <<'PY'
+import os, sys
+src, out = sys.argv[1], sys.argv[2]
+html = open(os.path.join(src, "index.tmpl.html")).read()
+for marker, fname in [("/*@XTERM_CSS@*/", "vendor/xterm-5.5.0.css"),
+                      ("/*@XTERM_JS@*/",  "vendor/xterm-5.5.0.min.js"),
+                      ("/*@FIT_JS@*/",    "vendor/xterm-addon-fit-0.10.0.min.js"),
+                      ("/*@APP_JS@*/",    "app.js")]:
+    html = html.replace(marker, open(os.path.join(src, fname)).read())
+assert "/*@" not in html, "unspliced marker left in term index"
+tmp = out + ".tmp"
+open(tmp, "w").write(html)
+os.replace(tmp, out)
+PY
+  ok "term frontend built → $GRAVE_ROOT/web/term/index.html"
   sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
       -e "s|@TERM_PORT@|$TERM_PORT|g" -e "s|@HOME@|$HOME_DIR|g" \
       -e "s|@TTYD@|$TTYD_BIN|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \

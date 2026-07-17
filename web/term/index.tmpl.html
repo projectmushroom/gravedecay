@@ -1,0 +1,76 @@
+<!doctype html>
+<!-- gravedecay-term-frontend v1 · custom ttyd index for the gravedecay web
+     terminal. Built by raise.sh from web/term/ (vendor xterm.js inlined —
+     ttyd -I serves exactly one file); edit the repo sources, never the
+     installed copy. grave doctor greps for the marker on this line. -->
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#0d0d0d">
+<title>gravedecay terminal</title>
+<style>
+/*@XTERM_CSS@*/
+</style>
+<style>
+/* grave-term skin — matches the dashboard (phosphor on near-black) */
+html,body{height:100%;margin:0;background:#0d0d0d;overscroll-behavior:none}
+#terminal{position:fixed;inset:0;
+  padding:env(safe-area-inset-top) env(safe-area-inset-right)
+          env(safe-area-inset-bottom) env(safe-area-inset-left)}
+.xterm .xterm-viewport{overflow-y:hidden}
+#bar{position:fixed;top:calc(4px + env(safe-area-inset-top));
+  right:calc(8px + env(safe-area-inset-right));display:flex;gap:6px;z-index:10;
+  opacity:.4;transition:opacity .15s}
+#bar:hover,#bar:focus-within,#bar.lit{opacity:1}
+#bar button{font:16px/1 sans-serif;min-width:38px;min-height:34px;
+  background:#0a0d0a;color:#d6ffd0;border:1px solid #2e4a2e;border-radius:4px;
+  cursor:pointer;padding:4px 8px}
+#bar button:active{background:#2e4a2e}
+#bar button.armed{border-color:#ffb000;box-shadow:0 0 7px rgba(255,176,0,.5);
+  animation:pulse 1s infinite alternate}
+@keyframes pulse{from{opacity:.7}to{opacity:1}}
+#toast{position:fixed;top:calc(10px + env(safe-area-inset-top));left:50%;
+  transform:translateX(-50%);background:#0a0d0a;color:#d6ffd0;
+  border:1px solid #2e4a2e;padding:4px 12px;font:12px ui-monospace,monospace;
+  opacity:0;transition:opacity .2s;pointer-events:none;z-index:12}
+#toast.show{opacity:1}
+#status{position:fixed;bottom:calc(10px + env(safe-area-inset-bottom));left:50%;
+  transform:translateX(-50%);background:#0a0d0a;color:#ffb000;
+  border:1px solid #ffb000;padding:4px 12px;font:12px ui-monospace,monospace;z-index:12}
+#paste-dlg{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:20;
+  display:flex;align-items:center;justify-content:center}
+#paste-dlg[hidden]{display:none}
+#paste-box{background:#0a0d0a;border:1px solid #2e4a2e;padding:10px;
+  width:min(480px,90vw);display:flex;flex-direction:column;gap:8px}
+#paste-box p{margin:0;color:#557a55;font:12px ui-monospace,monospace}
+#paste-ta{width:100%;height:120px;background:#050705;color:#d6ffd0;
+  border:1px solid #2e4a2e;font:13px ui-monospace,monospace;resize:vertical}
+#paste-box .row{display:flex;gap:8px;justify-content:flex-end}
+#paste-box button{font:13px ui-monospace,monospace;background:#0a0d0a;
+  color:#d6ffd0;border:1px solid #2e4a2e;padding:6px 12px;cursor:pointer}
+</style>
+</head><body>
+<div id="terminal"></div>
+<div id="bar">
+  <button id="copy" title="copy selection (Ctrl+Shift+C) — with nothing selected: last copy / screen">📋</button>
+  <button id="paste" title="paste (Ctrl+Shift+V)">📥</button>
+</div>
+<div id="toast"></div>
+<div id="status" hidden></div>
+<div id="paste-dlg" hidden>
+  <div id="paste-box">
+    <p>this browser blocks clipboard reads — paste here instead</p>
+    <textarea id="paste-ta" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
+    <div class="row"><button id="paste-send">↵ send to terminal</button><button id="paste-x">✕ cancel</button></div>
+  </div>
+</div>
+<script>
+/*@XTERM_JS@*/
+</script>
+<script>
+/*@FIT_JS@*/
+</script>
+<script>
+/*@APP_JS@*/
+</script>
+</body></html>

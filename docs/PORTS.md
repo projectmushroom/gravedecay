@@ -9,7 +9,7 @@ listening — add a row in the same commit that adds a listener.
 | 4710 | 127.0.0.1 | multi-user identity gateway (opt-in) | `tailscale serve` → HTTPS origin |
 | 4711 | 127.0.0.1 | t3code | `tailscale serve` → https `/` |
 | 4712 | 127.0.0.1 | gravedecay | `tailscale serve` → https `/grave` (the entry point — install the PWA from here) |
-| 4713 | 127.0.0.1 | gravedecay-term (ttyd) | `tailscale serve` → https `/term` (shell for the whole tailnet — see SECURITY.md) |
+| 4713 | 127.0.0.1 | gravedecay-term (ttyd, custom clipboard-capable frontend — see TERMINAL.md) | `tailscale serve` → https `/term` (shell for the whole tailnet — see SECURITY.md) |
 | 5432 | 127.0.0.1 | core-postgres | loopback only |
 | 6379 | 127.0.0.1 | core-redis | loopback only |
 | 3050 | 127.0.0.1 | browsers-playwright | loopback only |

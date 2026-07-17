@@ -13,7 +13,10 @@ Group=@USER@
 # -i lo: loopback only (reached via tailscale serve /term).  -W: writable.
 # --url-arg lets the launcher tiles pick the session (?arg=claude etc).
 # No --base-path: tailscale serve strips the /term mount prefix.
+# -I: custom frontend with working clipboard (OSC 52 + copy/paste bar) —
+#     built by raise.sh from web/term/, see docs/TERMINAL.md.
 ExecStart=@TTYD@ -p @TERM_PORT@ -i lo -W --url-arg \
+  -I @GRAVE_ROOT@/web/term/index.html \
   -t fontSize=14 -t 'theme={"background":"#0d0d0d"}' -t titleFixed=gravedecay \
   @GRAVE_ROOT@/scripts/webterm
 Restart=always

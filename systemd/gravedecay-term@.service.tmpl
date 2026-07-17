@@ -9,7 +9,9 @@ User=grave-%i
 Group=grave-%i
 EnvironmentFile=@GRAVE_ROOT@/config/workspace-services/%i.env
 EnvironmentFile=-@GRAVE_ROOT@/workspaces/%i/config/secrets/linear.env
-ExecStart=/usr/bin/env ${TTYD_BIN} -p ${TERM_PORT} -i lo -W --url-arg -t fontSize=14 -t titleFixed=gravedecay-${WORKSPACE_SLUG} @GRAVE_ROOT@/scripts/webterm
+# -I: shared clipboard-capable frontend (owner-built, world-readable static
+#     HTML under the appliance root — see docs/TERMINAL.md)
+ExecStart=/usr/bin/env ${TTYD_BIN} -p ${TERM_PORT} -i lo -W --url-arg -I @GRAVE_ROOT@/web/term/index.html -t fontSize=14 -t titleFixed=gravedecay-${WORKSPACE_SLUG} @GRAVE_ROOT@/scripts/webterm
 Environment=HOME=@GRAVE_ROOT@/workspaces/%i
 Environment=GRAVE_ROOT=@GRAVE_ROOT@/workspaces/%i
 Environment=TMUX_SOCKET=grave-%i

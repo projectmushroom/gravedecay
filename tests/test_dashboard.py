@@ -335,6 +335,52 @@ class DashboardContractTests(unittest.TestCase):
         self.assertEqual(calls, [["sudo", "-n", "systemctl", "--no-block", "start",
                                   "gravedecay-upgrade@v0.5.0.service"]])
 
+    def test_session_capture_validates_name_and_targets_exactly(self):
+        # Issue #104: the universal copy path. Names are charset-gated (same
+        # rule as kill) and the tmux target uses =name so a session named
+        # "claude" can never prefix-match "claude-yolo"'s scrollback.
+        calls = []
+        original = DASHBOARD.sh
+        DASHBOARD.sh = lambda cmd, timeout=10: (calls.append(cmd) or (0, "line1\nline2", ""))
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                self.post("/api/session-capture", {"name": "bad name; rm -rf"})
+            self.assertEqual(error.exception.code, 400)
+            self.assertEqual(calls, [])
+            with self.post("/api/session-capture", {"name": "claude"}) as response:
+                payload = json.loads(response.read())
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["output"], "line1\nline2")
+        finally:
+            DASHBOARD.sh = original
+        self.assertEqual(calls, [["tmux", "-L", DASHBOARD.TMUX_SOCKET, "capture-pane",
+                                  "-p", "-J", "-t", "=claude", "-S", "-2000"]])
+
+    def test_session_copy_ui_and_iframe_clipboard_delegation(self):
+        # The 📋 capture dialog must exist and be wired, and the app modal
+        # iframe must delegate clipboard permissions — an embedded terminal
+        # cannot write the clipboard without it (issue #104).
+        page = DASHBOARD.PAGE
+        self.assertIn('allow="clipboard-read; clipboard-write"', page)
+        self.assertIn('id="capture-dlg"', page)
+        self.assertIn("api/session-capture", page)
+        self.assertIn("data-capture=", page)
+
+    def test_term_units_serve_the_clipboard_frontend(self):
+        # Stock packaged ttyd (1.7.7) drops OSC 52 — every terminal unit must
+        # serve the raise.sh-built frontend, and doctor must enforce it
+        # (docs/TERMINAL.md).
+        for unit in ("gravedecay-term.service.tmpl", "gravedecay-term@.service.tmpl"):
+            self.assertIn("-I @GRAVE_ROOT@/web/term/index.html",
+                          (ROOT / "systemd" / unit).read_text(), unit)
+        self.assertIn("gravedecay-term-frontend",
+                      (ROOT / "web/term/index.tmpl.html").read_text())
+        app = (ROOT / "web/term/app.js").read_text()
+        self.assertIn("registerOscHandler(52", app)
+        self.assertIn("if (b64 === '?') return true;", app)  # never leak clipboard reads
+        self.assertIn("gravedecay-term-frontend", (ROOT / "bin/grave").read_text())
+        self.assertIn("web/term/index.html", (ROOT / "raise.sh").read_text())
+
 
 if __name__ == "__main__":
     unittest.main()
