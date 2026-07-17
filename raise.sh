@@ -695,6 +695,12 @@ Documentation=https://tailscale.com/kb/
 After=network-pre.target
 Wants=network-pre.target
 [Service]
+# notify (not the default simple) so systemd waits for tailscaled to signal
+# readiness before running ExecStartPost. The gravedecay-localapi drop-in
+# chgrp/chmods /run/tailscale/tailscaled.sock in ExecStartPost; under simple
+# that fires the instant the process forks, before the socket exists, failing
+# the unit into a Restart=on-failure loop. This matches upstream's unit.
+Type=notify
 ExecStart=$TSD --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
 ExecStopPost=$TSCLI --socket=/run/tailscale/tailscaled.sock down
 RuntimeDirectory=tailscale
