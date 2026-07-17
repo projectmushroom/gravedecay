@@ -1,0 +1,46 @@
+name: apple-clients
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "clients/apple/**"
+      - ".github/workflows/apple.yml"
+  pull_request:
+    paths:
+      - "clients/apple/**"
+      - ".github/workflows/apple.yml"
+
+jobs:
+  # The protocol core is platform-independent — cheap Linux run first.
+  kit-linux:
+    runs-on: ubuntu-latest
+    container: swift:6.0
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test --package-path clients/apple/GravedecayKit
+
+  apps-macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Core tests (Darwin, includes TtydWebSocket)
+        run: swift test --package-path clients/apple/GravedecayKit
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        working-directory: clients/apple
+        run: xcodegen --spec project.yml
+      - name: Build macOS app
+        working-directory: clients/apple
+        run: >
+          xcodebuild -project Gravedecay.xcodeproj -scheme Gravedecay-macOS
+          -configuration Debug build
+          CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY=""
+      - name: Build iOS app (simulator)
+        working-directory: clients/apple
+        run: >
+          xcodebuild -project Gravedecay.xcodeproj -scheme Gravedecay-iOS
+          -destination "generic/platform=iOS Simulator"
+          -configuration Debug build
+          CODE_SIGNING_ALLOWED=NO

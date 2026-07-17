@@ -8,3 +8,11 @@ node_modules/
 playwright-report/
 test-results/
 **/.DS_Store
+
+# apple clients: generated project + built/vendored frameworks
+clients/apple/Gravedecay.xcodeproj/
+clients/apple/App/Generated/
+clients/apple/Vendor/
+clients/apple/vendor/
+clients/apple/GravedecayKit/.build/
+clients/apple/**/xcuserdata/
