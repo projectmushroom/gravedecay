@@ -90,7 +90,9 @@ final class AppModel: ObservableObject {
         urlSession = URLSession(configuration: configuration)
     }
 
-    static func proxyConfiguration(for proxy: SocksProxy) -> ProxyConfiguration {
+    // Pure helper — must stay callable from nonisolated contexts (WebPane
+    // builds its WKWebView configuration outside the main-actor inference).
+    nonisolated static func proxyConfiguration(for proxy: SocksProxy) -> ProxyConfiguration {
         let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(proxy.host),
                                            port: NWEndpoint.Port(rawValue: proxy.port)!)
         let configuration = ProxyConfiguration(socksv5Proxy: endpoint)
