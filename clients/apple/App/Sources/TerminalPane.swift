@@ -167,7 +167,11 @@ struct TerminalPane {
 
     private func makeView(_ coordinator: Coordinator) -> TerminalView {
         let view = TerminalView(frame: .zero)
-        view.nativeBackgroundColor = TTColor(red: 0.05, green: 0.05, blue: 0.05, alpha: 1)
+        #if os(iOS)
+        view.nativeBackgroundColor = UIColor(red: 0.05, green: 0.05, blue: 0.05, alpha: 1)
+        #else
+        view.nativeBackgroundColor = NSColor(red: 0.05, green: 0.05, blue: 0.05, alpha: 1)
+        #endif
         coordinator.controller.attach(view)
         return view
     }
