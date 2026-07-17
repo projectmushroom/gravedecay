@@ -26,11 +26,19 @@ systemctl enable --now sshd
 # tailscale stub + a tailscaled stand-in owning the LocalAPI socket that
 # raise's permission guards stat (group/mode must match the appliance owner).
 install -m 755 /repo/tests/e2e/fake-tailscale /usr/local/bin/tailscale
+# Type=notify mirrors real tailscaled: systemd holds the unit "activating"
+# until the daemon signals readiness (after the LocalAPI socket exists), so the
+# gravedecay-localapi ExecStartPost chgrp/chmod can't race socket creation. The
+# stub creates the socket, then signals ready via systemd-notify (NotifyAccess=all
+# because the notifier is a child of the ExecStart shell, not the main PID).
+# Keeps the stub faithful to the shipped unit and satisfies doctor's Type=notify.
 cat >/etc/systemd/system/tailscaled.service <<'EOF'
 [Unit]
 Description=tailscaled stand-in for the appliance smoke
 [Service]
-ExecStart=/bin/sh -c 'mkdir -p /run/tailscale && : > /run/tailscale/tailscaled.sock && chgrp mole /run/tailscale/tailscaled.sock && chmod 660 /run/tailscale/tailscaled.sock && exec sleep infinity'
+Type=notify
+NotifyAccess=all
+ExecStart=/bin/sh -c 'mkdir -p /run/tailscale && : > /run/tailscale/tailscaled.sock && chgrp mole /run/tailscale/tailscaled.sock && chmod 660 /run/tailscale/tailscaled.sock && systemd-notify --ready && exec sleep infinity'
 [Install]
 WantedBy=multi-user.target
 EOF
