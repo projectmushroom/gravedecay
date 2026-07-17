@@ -1010,6 +1010,10 @@ cmd_doctor() { # grave doctor [--no-page]
   FAILURES=0
   hdr "grave doctor"
   check "tailscaled running"            systemctl is-active --quiet tailscaled
+  # A Type=simple tailscaled races the localapi ExecStartPost against socket
+  # creation and crash-loops (see raise.sh). notify is the invariant that keeps
+  # the box on the tailnet across reboots; upstream's packaged unit sets it too.
+  check "tailscaled unit uses Type=notify" bash -c "[[ \$(systemctl show -p Type --value tailscaled) == notify ]]"
   check "tailscale logged in"           tailscale status --peers=false
   # OpenSSH server unit is `sshd` on Arch/Fedora, `ssh` on Debian/Ubuntu.
   check "ssh server running"            bash -c "systemctl is-active --quiet sshd || systemctl is-active --quiet ssh"
