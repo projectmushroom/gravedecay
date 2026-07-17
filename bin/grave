@@ -1135,6 +1135,11 @@ cmd_doctor() { # grave doctor [--no-page]
   fi
   if systemctl is-active --quiet gravedecay-term; then
     check "web terminal answering"       curl -sf -o /dev/null "http://127.0.0.1:${TERM_PORT:-4713}/"
+    # Stock ttyd 1.7.7 serves a frontend that drops OSC 52 — clipboard copy
+    # out of tmux silently dies (docs/TERMINAL.md). The unit must serve the
+    # raise.sh-built index (ttyd -I), which carries this marker.
+    check "web terminal clipboard frontend" bash -c \
+      "curl -sf 'http://127.0.0.1:${TERM_PORT:-4713}/' | grep -q gravedecay-term-frontend"
   else
     say "  ${YLW}– web terminal stopped${RST}"
   fi

@@ -1751,6 +1751,20 @@ class Handler(BaseHTTPRequestHandler):
             rc, out, err = sh([GRAVE, "agents", "resume", name], timeout=30)
             self._send(200, json.dumps({"ok": rc == 0,
                                         "output": ANSI.sub("", out + err).strip()}))
+        elif p == "/api/session-capture":
+            # Session scrollback into a textarea — the copy path that works
+            # even where the in-terminal one can't (no touch selection in
+            # xterm.js, WebKit clipboard gesture rules). See docs/TERMINAL.md.
+            name = str(data.get("name", ""))
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,50}", name):
+                self._send(400, json.dumps({"ok": False, "output": "bad session name"}))
+                return
+            # =name: exact-match target (bare names prefix-match). -J joins
+            # wrapped lines; -S -2000 reaches back into scrollback.
+            rc, out, err = sh(["tmux", "-L", TMUX_SOCKET, "capture-pane", "-p", "-J",
+                               "-t", "=" + name, "-S", "-2000"])
+            self._send(200, json.dumps(
+                {"ok": rc == 0, "output": out if rc == 0 else out + err}))
         elif p == "/api/admin/upgrade":
             tag = str(data.get("tag", ""))
             if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
@@ -1932,6 +1946,11 @@ pre{background:var(--inset);border:1px solid var(--hairline);padding:10px;
 .full{margin-bottom:10px}
 .kill{color:var(--crit);cursor:pointer;padding:0 6px}
 .kill:hover{background:var(--crit);color:#000}
+.capture{cursor:pointer;padding:0 6px}
+.capture:hover{background:var(--accent-soft);color:#000}
+#capture-ta{width:100%;height:52vh;background:var(--page);color:var(--ink-2);
+  border:1px solid var(--hairline);padding:8px;font:12px/1.5 ui-monospace,monospace;
+  white-space:pre;resize:vertical;margin-bottom:8px}
 /* game mode banner */
 #game-banner{display:none;border:1px solid var(--crit);padding:18px;margin-bottom:14px;
   text-align:center;background:#120a0a;animation:pulse 2.4s ease-in-out infinite}
@@ -2212,6 +2231,16 @@ body.gaming #foot{display:none}
     <span class="setlabel dim2" id="kill-msg"></span></div>
  </div>
 </div>
+<div class="overlay" id="capture-dlg" style="display:none">
+ <div class="dlg">
+  <button class="mini xbtn" id="capture-x" title="close (Esc)" aria-label="close"
+    style="position:absolute;top:10px;right:10px;z-index:2">✕</button>
+  <h2 style="color:var(--ink);font-size:15px;margin-bottom:8px">📋 <span id="capture-title"></span></h2>
+  <textarea id="capture-ta" readonly autocomplete="off" spellcheck="false"></textarea>
+  <div class="setrow"><button class="mini" id="capture-copy">📋 Copy all</button>
+    <span class="setlabel dim2" id="capture-msg"></span></div>
+ </div>
+</div>
 <div class="overlay" id="console" style="display:none">
   <div class="dlg">
     <button class="mini xbtn" id="console-x" title="close (Esc)" aria-label="close"
@@ -2283,7 +2312,8 @@ body.gaming #foot{display:none}
         title="open in a full window">↗ full</a>
       <button class="mini xbtn" id="appframe-x" title="close (Esc)" aria-label="close">✕</button>
     </div>
-    <iframe id="appframe-if" src="about:blank" title="app"></iframe>
+    <iframe id="appframe-if" src="about:blank" title="app"
+      allow="clipboard-read; clipboard-write"></iframe>
   </div>
 </div>
 <div id="panels">
@@ -2524,7 +2554,7 @@ function render(s){
       <td>${statusDot('active')}<a href="${esc(appUrl('/term/?arg='+encodeURIComponent(x.name)))}">${esc(x.name)}</a></td>
       <td class="num">${esc(x.windows)} win</td>
       <td class="dim">${esc(x.attached)}</td>
-      <td class="num"><a class="kill" data-kill="${esc(x.name)}" title="kill session">✕</a></td></tr>`).join('')
+      <td class="num"><a class="capture" data-capture="${esc(x.name)}" title="copy session output">📋</a><a class="kill" data-kill="${esc(x.name)}" title="kill session">✕</a></td></tr>`).join('')
     :'<tr><td class="dim">no agent sessions — use the Terminal/Claude/Codex tiles</td></tr>';
   $('sessions').innerHTML=(s.agent_history||[]).length?s.agent_history.map(h=>{
     const live=s.tmux.some(x=>x.name===h.name);
@@ -2711,7 +2741,7 @@ $('game-confirm').addEventListener('click',e=>{
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){
   closeConsole();$('game-confirm').style.display='none';
   $('settings-panel').style.display='none';$('kill-dlg').style.display='none';
-  $('throttle-dlg').style.display='none';
+  $('throttle-dlg').style.display='none';$('capture-dlg').style.display='none';
   closeFiles();closeAppModal();
   unlockBody();}});
 $('console-close').onclick=()=>{$('console').style.display='none'};
@@ -2733,9 +2763,37 @@ document.querySelectorAll('button[data-act]').forEach(b=>b.onclick=()=>{
   if(b.dataset.confirm&&!confirm(b.dataset.confirm))return;
   runStream(act);
 });
-// tap a session name to open it in the terminal; ✕ kills it (event
-// delegation — rows are rebuilt every poll)
+// ---------- session output capture (📋 in the sessions panel) ----------
+// The universal copy path: tmux scrollback into a textarea. A textarea has
+// NATIVE selection everywhere (including iOS, where xterm.js has none), and
+// the copy button runs inside a real tap so WebKit allows the write.
+async function openCapture(name){
+  $('capture-title').textContent=name+' — last 2000 lines';
+  $('capture-ta').value='… capturing …';
+  $('capture-msg').textContent='';
+  $('capture-dlg').style.display='block';lockBody();
+  try{
+    const r=await fetch('api/session-capture',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+    const j=await r.json();
+    $('capture-ta').value=j.ok?j.output:(j.output||'capture failed');
+  }catch(err){$('capture-ta').value='capture failed: '+err;}
+}
+function closeCapture(){$('capture-dlg').style.display='none';unlockBody();}
+$('capture-x').onclick=closeCapture;
+$('capture-dlg').addEventListener('click',e=>{if(e.target.id==='capture-dlg')closeCapture();});
+$('capture-copy').onclick=async()=>{
+  const ta=$('capture-ta');
+  try{await navigator.clipboard.writeText(ta.value);$('capture-msg').textContent='✓ copied';}
+  catch(_){ // clipboard API blocked: leave everything selected for a native copy
+    ta.focus();ta.select();
+    $('capture-msg').textContent='blocked by browser — text selected, copy manually';}
+};
+// tap a session name to open it in the terminal; 📋 copies its output;
+// ✕ kills it (event delegation — rows are rebuilt every poll)
 $('tmux').addEventListener('click',async e=>{
+  const c=e.target.dataset&&e.target.dataset.capture;
+  if(c){e.preventDefault();openCapture(c);return;}
   const n=e.target.dataset&&e.target.dataset.kill;
   if(!n)return;
   e.preventDefault();

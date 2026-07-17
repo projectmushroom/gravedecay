@@ -110,6 +110,11 @@ not only `/grave/`. Its manifest starts at `/grave/` but declares scope `/` so
 launcher navigation to T3 (`/`), the terminal (`/term/`), and pairing (`/pair/`)
 stays in one standalone iOS, iPadOS, or macOS Safari app.
 
+The terminal at `/term/` is ttyd serving a raise.sh-built custom frontend
+(clipboard/OSC 52, touch-friendly copy — see TERMINAL.md); the dashboard adds
+a per-session 📋 capture dialog as the copy path of last resort on devices
+where in-terminal selection is impossible.
+
 The dashboard is network-first because it controls a remote machine. API
 responses, machine state, file listings, and action output are always
 `no-store`. A service worker caches only a static connection-help page so a
