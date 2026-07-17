@@ -1,0 +1,15 @@
+# Overlay spec: base project + TailscaleKit (the in-app tailnet node).
+# Requires `make tailscale` first (builds the frameworks into Vendor/).
+# Generate with: xcodegen --spec project-embedded.yml
+include:
+  - project.yml
+
+targets:
+  Gravedecay-iOS:
+    dependencies:
+      - framework: Vendor/TailscaleKit.xcframework
+        embed: true
+  Gravedecay-macOS:
+    dependencies:
+      - framework: Vendor/macos/TailscaleKit.framework
+        embed: true

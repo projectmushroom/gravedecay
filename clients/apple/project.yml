@@ -1,0 +1,66 @@
+# XcodeGen spec — `make project` regenerates Gravedecay.xcodeproj.
+# The base project builds WITHOUT TailscaleKit (connectivity = Tailscale VPN
+# app); `make project-embedded` layers the in-app tailnet on top.
+name: Gravedecay
+options:
+  bundleIdPrefix: com.projectmushroom
+  deploymentTarget:
+    iOS: "17.0"
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+packages:
+  GravedecayKit:
+    path: GravedecayKit
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    from: "1.2.0"
+
+targets:
+  Gravedecay-iOS:
+    type: application
+    platform: iOS
+    sources: [App/Sources]
+    dependencies:
+      - package: GravedecayKit
+      - package: SwiftTerm
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.projectmushroom.gravedecay
+        TARGETED_DEVICE_FAMILY: "1,2"
+    info:
+      path: App/Generated/Info-iOS.plist
+      properties:
+        CFBundleDisplayName: Gravedecay
+        ITSAppUsesNonExemptEncryption: false
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+
+  Gravedecay-macOS:
+    type: application
+    platform: macOS
+    sources: [App/Sources]
+    dependencies:
+      - package: GravedecayKit
+      - package: SwiftTerm
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.projectmushroom.gravedecay
+    info:
+      path: App/Generated/Info-macOS.plist
+      properties:
+        CFBundleDisplayName: Gravedecay
+    entitlements:
+      path: App/Generated/Gravedecay-macOS.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
