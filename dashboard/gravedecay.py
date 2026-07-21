@@ -149,10 +149,24 @@ def save_settings(data):
 
 
 GRAVE = os.environ.get("GRAVEDECAY_GRAVE", "/usr/local/bin/grave")
-# t3 lives in the same durable-toolchain bin dir as grave (~/.local/bin on an
-# immutable rootfs). systemd's minimal PATH omits it, so resolve it absolutely
-# like GRAVE — deriving from GRAVE's dir keeps package-host / SteamOS parity.
-T3 = os.environ.get("GRAVEDECAY_T3", os.path.join(os.path.dirname(GRAVE), "t3"))
+# On a managed-toolchain host (SteamOS) t3 shares grave's durable bin dir
+# (~/.local/bin), but package hosts diverge: grave installs to /usr/local/bin
+# while npm puts t3 in /usr/bin, so grave's sibling alone is not enough.
+# Resolution order: explicit override, grave's sibling, then PATH (raise.sh
+# threads the toolchain bin dirs into every service's PATH).
+
+
+def _resolve_t3():
+    override = os.environ.get("GRAVEDECAY_T3")
+    if override:
+        return override
+    sibling = os.path.join(os.path.dirname(GRAVE), "t3")
+    if os.path.exists(sibling):
+        return sibling
+    return shutil.which("t3") or sibling
+
+
+T3 = _resolve_t3()
 # grave runs AS THE SERVICE USER (it sudo -n's internally where needed):
 # under sudo it would be root, whose tmux lives in /tmp/tmux-0 — freeze/kill
 # of agent sessions would silently no-op.
