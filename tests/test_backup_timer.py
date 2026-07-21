@@ -36,7 +36,11 @@ class BackupTimerContractTests(unittest.TestCase):
     def test_artifacts_are_verified_not_just_written(self):
         # Bundles must replay and tarballs must list back; a truncated write
         # (disk full mid-run) otherwise looks identical to a good backup.
-        self.assertIn("git bundle verify", GRAVE)
+        # verify must run -C the source repo: bare `git bundle verify` needs a
+        # repository and fails from the timer unit's cwd (/), which failed every
+        # nightly backup on a box whose shell wasn't sitting in a repo.
+        self.assertIn('git -C "$repo" bundle verify', GRAVE)
+        self.assertNotIn(" && git bundle verify", GRAVE)
         self.assertIn("tar -tzf", GRAVE)
 
     def test_marker_written_only_on_clean_verified_run(self):
