@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import pathlib
+import tempfile
 import threading
 import unittest
 import urllib.error
@@ -171,6 +172,45 @@ class DashboardContractTests(unittest.TestCase):
         self.assertEqual(ws.TMUX_SOCKET, "grave-alice")
         self.assertIn("/srv/dev/workspaces/alice/state/t3", ws.ACTIONS["t3-pair"])
         self.assertNotIn("/srv/dev/workspaces/alice/agents/t3code", ws.ACTIONS["t3-pair"])
+
+    def test_t3_resolution_covers_package_hosts_and_steamos(self):
+        # Regression: the pairing action execed dirname(GRAVE)/t3, which only
+        # exists on managed-toolchain hosts (SteamOS) where grave and t3 share
+        # ~/.local/bin. On package hosts npm installs t3 to /usr/bin while
+        # grave lives in /usr/local/bin, so the button died with ENOENT.
+        saved = os.environ.pop("GRAVEDECAY_T3", None)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                toolchain = pathlib.Path(tmp, "local-bin")
+                toolchain.mkdir()
+                for name in ("grave", "t3"):
+                    tool = toolchain / name
+                    tool.write_text("#!/bin/sh\n")
+                    tool.chmod(0o755)
+                # SteamOS shape: t3 sits next to grave — the sibling wins
+                # without consulting PATH.
+                steam = load_dashboard({"GRAVEDECAY_GRAVE": str(toolchain / "grave"),
+                                        "PATH": "/usr/bin"})
+                self.assertEqual(steam.T3, str(toolchain / "t3"))
+                # Package-host shape: no t3 next to grave — fall back to PATH,
+                # which raise.sh threads the toolchain bin dirs into.
+                pkg = load_dashboard({"GRAVEDECAY_GRAVE": str(pathlib.Path(tmp, "usr-local-bin", "grave")),
+                                      "PATH": str(toolchain)})
+                self.assertEqual(pkg.T3, str(toolchain / "t3"))
+                # Explicit override beats both.
+                forced = load_dashboard({"GRAVEDECAY_GRAVE": str(toolchain / "grave"),
+                                         "GRAVEDECAY_T3": "/opt/t3"})
+                self.assertEqual(forced.T3, "/opt/t3")
+        finally:
+            if saved is not None:
+                os.environ["GRAVEDECAY_T3"] = saved
+        # Wiring: raise.sh threads the resolved t3 into the single-user unit,
+        # grave-workspaces into every workspace dashboard's env file.
+        self.assertIn("Environment=GRAVEDECAY_T3=@T3@",
+                      (ROOT / "systemd/gravedecay.service.tmpl").read_text())
+        self.assertIn('"s|@T3@|$T3_BIN|g"', (ROOT / "raise.sh").read_text())
+        self.assertIn('"GRAVEDECAY_T3":os.environ.get("GRAVE_T3_BIN","/usr/bin/t3")',
+                      (ROOT / "bin/grave-workspaces").read_text())
 
     def test_workspace_dashboard_unit_wires_socket_dir_and_shares_tmp(self):
         dash = (ROOT / "systemd/gravedecay-dashboard@.service.tmpl").read_text()

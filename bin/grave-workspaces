@@ -141,7 +141,7 @@ def provision(w):
     env=service_env(w)
     values={"WORKSPACE_SLUG":w["slug"],"GRAVE_WORKSPACE_ID":w["id"],"WORKSPACE_ROLE":w["role"],"WORKSPACE_HOME":str(home),
             "T3_PORT":w["ports"]["t3"],"TERM_PORT":w["ports"]["term"],"DASH_PORT":w["ports"]["dash"],
-            "T3_BIN":os.environ.get("GRAVE_T3_BIN","/usr/bin/t3"),"TTYD_BIN":os.environ.get("GRAVE_TTYD_BIN","/usr/bin/ttyd"),"GRAVEDECAY_GRAVE":os.environ.get("GRAVE_BIN","/usr/local/bin/grave"),
+            "T3_BIN":os.environ.get("GRAVE_T3_BIN","/usr/bin/t3"),"GRAVEDECAY_T3":os.environ.get("GRAVE_T3_BIN","/usr/bin/t3"),"TTYD_BIN":os.environ.get("GRAVE_TTYD_BIN","/usr/bin/ttyd"),"GRAVEDECAY_GRAVE":os.environ.get("GRAVE_BIN","/usr/local/bin/grave"),
             "PATH":os.environ.get("GRAVE_TOOL_PATH","")+"/usr/local/bin:/usr/bin:/bin"}
     env.write_text("".join(f'{key}="{str(value).replace(chr(34), "")}"\n' for key,value in values.items()))
     env.chmod(0o600)
