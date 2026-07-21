@@ -1255,8 +1255,11 @@ cmd_backup() {
     # errors on it — skip it rather than page every night about a fresh clone.
     git -C "$repo" rev-parse --quiet --verify HEAD >/dev/null 2>&1 \
       || { say "  ${YLW}– repo $name has no commits — skipped${RST}"; continue; }
+    # verify needs a repository for context (bare `git bundle verify` dies with
+    # "need a repository" from the timer's cwd or any non-repo shell) — run it
+    # -C the source repo, same as create.
     if git -C "$repo" bundle create "$dest/repos/$name.bundle" --all 2>/dev/null \
-       && git bundle verify "$dest/repos/$name.bundle" >/dev/null 2>&1; then
+       && git -C "$repo" bundle verify "$dest/repos/$name.bundle" >/dev/null 2>&1; then
       ok "repo $name (git bundle, verified)"
     else
       bad "repo $name bundle failed"; failures=$((failures+1))
