@@ -5,131 +5,108 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>gravenet</title>
 <style>
-  /* dark-only by design — phosphor ops console */
-  :root {
-    color-scheme: dark;
-    --page:       #0a0c0a;
-    --surface:    #0e120f;   /* validated chart surface */
-    --surface-2:  #121712;
-    --ink:        #e9efe9;
-    --ink-2:      #a9b5aa;
-    --ink-mute:   #6f7a70;
-    --grid:       #1e2820;   /* hairline */
-    --baseline:   #2a362d;
-    --border:     rgba(233,239,233,0.08);
-    --rx:         #1aa566;   /* series 1 — validated */
-    --tx:         #c98500;   /* series 2 — validated */
-    --good:       #0ca30c;
-    --warn:       #fab219;
-    --crit:       #d03b3b;
-    --chrome:     #3d5546;   /* desaturated accent for UI chrome only */
-    font-size: 14px;
-  }
-  * { box-sizing: border-box; margin: 0; }
-  body {
-    background: var(--page); color: var(--ink);
-    font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
-    padding: 14px 16px 28px;
-  }
-  header {
-    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
-    padding-bottom: 10px; border-bottom: 1px solid var(--border); margin-bottom: 14px;
-  }
-  .brand { font-weight: 700; letter-spacing: .12em; }
-  .brand .g { color: var(--rx); text-shadow: 0 0 12px rgba(26,165,102,.35); }
-  .sub { color: var(--ink-mute); font-size: .85rem; }
-  .spacer { flex: 1; }
-  .pill {
-    display: inline-flex; align-items: center; gap: 6px;
-    border: 1px solid var(--border); border-radius: 4px;
-    padding: 3px 9px; font-size: .8rem; color: var(--ink-2); background: var(--surface);
-  }
-  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-  .dot.good { background: var(--good); box-shadow: 0 0 6px var(--good); }
-  .dot.crit { background: var(--crit); box-shadow: 0 0 6px var(--crit); }
-  .dot.warn { background: var(--warn); }
-  #clock { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+/* grave-term — the gravedecay terminal skin (see dashboard/gravedecay.py).
+   Same tokens, panels-with-border-titles, scanlines, status squares.
+   Series colors are darker steps of the skin's green/amber, validated for
+   CVD separation + contrast on this surface (dataviz gate). */
+:root{
+  --page:#070907; --surface:#0a0d0a; --inset:#050705;
+  --ink:#d6ffd0; --ink-2:#a8e6a3; --muted:#557a55; --hairline:#1c2b1c;
+  --ring:#2e4a2e; --title:#ffb000;
+  --accent:#ffb000; --accent-soft:#7dd87d;
+  --good:#39d353; --warn:#ffb000; --crit:#ff5f56;
+  --glow:0 0 7px rgba(120,255,120,.28);
+  --rx:#1aa566; --tx:#c98500;         /* chart series — validated pair */
+  --grid:#1c2b1c; --baseline:#2e4a2e; /* chart chrome, read by the JS */
+}
+*{box-sizing:border-box;margin:0;-webkit-tap-highlight-color:transparent}
+html{-webkit-text-size-adjust:100%}
+body{background:var(--page);color:var(--ink-2);
+  font:13.5px/1.5 ui-monospace,'JetBrains Mono','Fira Code',Menlo,Consolas,monospace;
+  padding:0 max(14px,env(safe-area-inset-left)) calc(24px + env(safe-area-inset-bottom))
+    max(14px,env(safe-area-inset-right));max-width:1120px;min-width:0;margin:0 auto}
+/* CRT: fixed scanlines + vignette, zero layout cost */
+body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:99;
+  background:repeating-linear-gradient(0deg,transparent 0 2px,rgba(0,0,0,.13) 2px 3px)}
+body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:98;
+  background:radial-gradient(ellipse at 50% 40%,transparent 60%,rgba(0,0,0,.32))}
+::selection{background:var(--accent);color:#000}
+h1{font-size:17px;font-weight:700;color:var(--ink);text-shadow:var(--glow);white-space:nowrap}
+.topbar{position:sticky;top:0;z-index:101;display:flex;flex-wrap:wrap;gap:10px;align-items:center;
+  background:var(--page);margin:0 -14px 18px;padding:16px 14px 12px;
+  border-bottom:1px solid var(--ring)}
+.topbar .meta{color:var(--muted);font-size:12px;min-width:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.spacer{flex:1}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;
+  border:1px solid var(--ring);font-size:12px;font-weight:700;color:var(--ink)}
+#clock{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+/* status squares (■), not dots */
+.dot{display:inline-block;width:8px;height:8px;flex:none}
+.dot.good{background:var(--good);box-shadow:0 0 5px var(--good)}
+.dot.crit{background:var(--crit);box-shadow:0 0 5px var(--crit)}
+.dot.warn{background:var(--warn);box-shadow:0 0 5px var(--warn)}
+/* legend */
+.legend{display:flex;gap:14px;align-items:center;color:var(--muted);font-size:12px}
+.swatch{display:inline-block;width:14px;height:3px;vertical-align:middle;margin-right:6px}
 
-  /* topology flow — same grid tracks as #cards so the columns align exactly;
-     flow arrows live in the grid gaps (absolutely positioned) so they cost
-     no layout space and can't nudge the columns out of alignment */
-  #topo {
-    display: grid; gap: 12px;
-    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-    margin-bottom: 12px; font-size: .82rem;
-  }
-  .node {
-    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
-    padding: 8px 12px; position: relative; min-width: 0; overflow: hidden;
-  }
-  .node .t { color: var(--ink-mute); font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; }
-  .node .v { margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .node .r { color: var(--ink-2); font-variant-numeric: tabular-nums; font-size: .78rem; margin-top: 2px; }
-  .cell { position: relative; min-width: 0; }
-  .cell > .node { height: 100%; }
-  .host { border-color: var(--chrome); }
-  .chipcol { display: flex; flex-direction: column; gap: 8px; }
-  .chipcol .node { height: auto; }
+/* topology strip — stat tiles on the card grid's tracks */
+#topo{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));
+  margin-bottom:18px;font-size:13px}
+.cell{position:relative;min-width:0}
+.cell>.node{height:100%}
+.node{background:var(--surface);border:1px solid var(--ring);padding:9px 12px;min-width:0;overflow:hidden}
+.node .t{color:var(--muted);font-size:11px;letter-spacing:.07em;text-transform:uppercase}
+.node .v{margin-top:3px;color:var(--ink);font-weight:700;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.node .r{color:var(--ink-2);font-variant-numeric:tabular-nums;font-size:12px;margin-top:2px}
+.host{border-color:var(--accent-soft)}
 
-  /* legend */
-  .legend { display: flex; gap: 16px; align-items: center; color: var(--ink-2); font-size: .8rem; }
-  .swatch { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+/* interface cards — TUI panels, title on the border */
+#cards{display:grid;gap:18px 12px;grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
+.card{position:relative;background:var(--surface);border:1px solid var(--ring);
+  padding:16px 12px 10px;min-width:0}
+.card h2{position:absolute;top:-8px;left:10px;background:var(--page);padding:0 7px;
+  max-width:calc(100% - 20px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  display:flex;gap:7px;align-items:center;
+  font-size:11px;font-weight:700;color:var(--title);letter-spacing:.08em;text-transform:uppercase}
+.card .role{color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0}
+.card .meta{color:var(--muted);font-size:11px;margin-top:-2px}
+.rates{display:flex;gap:18px;margin:8px 0 4px}
+.rate .lbl{font-size:11px;color:var(--muted);letter-spacing:.07em;text-transform:uppercase}
+.rate .val{font-size:23px;font-weight:700;color:var(--ink);text-shadow:var(--glow);
+  font-variant-numeric:tabular-nums}
+.rate .unit{font-size:11px;color:var(--muted);margin-left:3px}
+.chartwrap{position:relative;height:88px;margin-top:4px}
+canvas{width:100%;height:100%;display:block}
+.ymax{position:absolute;top:0;left:2px;font-size:11px;color:var(--muted);pointer-events:none}
+.tip{position:absolute;pointer-events:none;z-index:5;display:none;
+  background:var(--inset);border:1px solid var(--ring);
+  padding:6px 9px;font-size:12px;color:var(--ink);white-space:nowrap}
+.tip .row{display:flex;gap:10px;justify-content:space-between;font-variant-numeric:tabular-nums}
+.tip .k{color:var(--muted)}
 
-  /* interface cards */
-  #cards {
-    display: grid; gap: 12px;
-    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-  }
-  .card {
-    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-    padding: 12px 14px 10px; position: relative;
-  }
-  .card h2 { font-size: .95rem; font-weight: 700; display: flex; gap: 8px; align-items: center; }
-  .card .role { color: var(--ink-mute); font-size: .78rem; }
-  .card .meta { color: var(--ink-2); font-size: .76rem; margin-top: 2px; }
-  .rates { display: flex; gap: 18px; margin: 8px 0 4px; }
-  .rate .lbl { font-size: .72rem; color: var(--ink-2); letter-spacing: .06em; }
-  .rate .val { font-size: 1.25rem; font-variant-numeric: tabular-nums; }
-  .rate .unit { font-size: .78rem; color: var(--ink-2); margin-left: 3px; }
-  .chartwrap { position: relative; height: 88px; margin-top: 4px; }
-  canvas { width: 100%; height: 100%; display: block; }
-  .ymax { position: absolute; top: 0; left: 2px; font-size: .68rem; color: var(--ink-mute); pointer-events: none; }
-
-  .tip {
-    position: absolute; pointer-events: none; z-index: 5; display: none;
-    background: var(--surface-2); border: 1px solid var(--border); border-radius: 5px;
-    padding: 6px 9px; font-size: .74rem; color: var(--ink); white-space: nowrap;
-    box-shadow: 0 4px 16px rgba(0,0,0,.5);
-  }
-  .tip .row { display: flex; gap: 8px; justify-content: space-between; font-variant-numeric: tabular-nums; }
-  .tip .k { color: var(--ink-2); }
-
-  /* clients table */
-  section h3 {
-    font-size: .8rem; letter-spacing: .1em; text-transform: uppercase;
-    color: var(--ink-mute); margin: 22px 0 8px;
-  }
-  table { width: 100%; border-collapse: collapse; font-size: .82rem; }
-  th {
-    text-align: left; color: var(--ink-mute); font-weight: 400; font-size: .72rem;
-    letter-spacing: .08em; text-transform: uppercase; padding: 4px 10px;
-    border-bottom: 1px solid var(--grid);
-  }
-  td {
-    padding: 5px 10px; border-bottom: 1px solid var(--grid);
-    font-variant-numeric: tabular-nums; color: var(--ink-2);
-  }
-  td.hostn { color: var(--ink); }
-  footer { margin-top: 24px; color: var(--ink-mute); font-size: .72rem; }
+/* clients — a panel like the rest */
+.panel{position:relative;background:var(--surface);border:1px solid var(--ring);
+  padding:16px 12px 10px;min-width:0;margin-top:24px}
+.panel>h2{position:absolute;top:-8px;left:10px;background:var(--page);padding:0 7px;
+  font-size:11px;font-weight:700;color:var(--title);letter-spacing:.08em;text-transform:uppercase}
+table{width:100%;max-width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;color:var(--muted);font-weight:400;font-size:11px;
+  letter-spacing:.07em;text-transform:uppercase;padding:2px 8px 4px 0}
+td{min-width:0;padding:4px 8px 4px 0;border-top:1px dashed var(--hairline);
+  vertical-align:top;font-variant-numeric:tabular-nums;color:var(--ink-2);overflow-wrap:anywhere}
+td.hostn{color:var(--ink);font-weight:700;white-space:nowrap;padding-right:14px}
+footer{margin-top:22px;color:var(--muted);font-size:11px;text-align:center}
 </style>
 </head>
 <body>
-<header>
-  <span class="brand"><span class="g">▚</span> GRAVENET</span>
-  <span class="sub" id="hostname">—</span>
-  <span class="pill" id="upstream"><span class="dot warn"></span>upstream —</span>
-  <span class="pill" id="conntrack">flows —</span>
-  <span class="pill" id="tspill">tailnet —</span>
+<header class="topbar">
+  <h1>▚ gravenet</h1>
+  <span class="meta" id="hostname">—</span>
+  <span class="badge" id="upstream"><span class="dot warn"></span>upstream —</span>
+  <span class="badge" id="conntrack">flows —</span>
+  <span class="badge" id="tspill">tailnet —</span>
   <span class="spacer"></span>
   <span class="legend">
     <span><span class="swatch" style="background:var(--rx)"></span>RX in</span>
@@ -141,22 +118,21 @@
 <div id="topo"></div>
 <div id="cards"></div>
 
-<section>
-  <h3>clients</h3>
+<div class="panel">
+  <h2>dhcp clients</h2>
   <table>
     <thead><tr><th>host</th><th>ip</th><th>mac</th><th>iface</th><th>neigh</th><th>lease left</th></tr></thead>
     <tbody id="clientrows"><tr><td colspan="6">waiting for data…</td></tr></tbody>
   </table>
-</section>
+</div>
 
 <footer id="foot">gravenet · sse: connecting…</footer>
 
 <script>
 "use strict";
-const RX = getComputedStyle(document.documentElement).getPropertyValue("--rx").trim();
-const TX = getComputedStyle(document.documentElement).getPropertyValue("--tx").trim();
-const GRID = getComputedStyle(document.documentElement).getPropertyValue("--grid").trim();
-const INK2 = getComputedStyle(document.documentElement).getPropertyValue("--ink-2").trim();
+const css = k => getComputedStyle(document.documentElement).getPropertyValue(k).trim();
+const RX = css("--rx"), TX = css("--tx"), GRID = css("--grid"),
+      INK2 = css("--ink-2"), SURFACE = css("--surface");
 const WINDOW = 180;
 
 const hist = [];            // ring of snapshots
@@ -242,7 +218,7 @@ function drawCard(name, c) {
   // recessive grid: mid + baseline
   ctx.strokeStyle = GRID; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(0, h / 2 + .5); ctx.lineTo(w, h / 2 + .5); ctx.stroke();
-  ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue("--baseline").trim();
+  ctx.strokeStyle = css("--baseline");
   ctx.beginPath(); ctx.moveTo(0, h - .5); ctx.lineTo(w, h - .5); ctx.stroke();
 
   const x = i => (i / (n - 1)) * w;
@@ -294,7 +270,7 @@ function drawCard(name, c) {
       for (const [si, color] of [[0, RX], [1, TX]]) {
         ctx.beginPath(); ctx.arc(px, y(view[idx][si]), 3.5, 0, 7);
         ctx.fillStyle = color; ctx.fill();
-        ctx.lineWidth = 2; ctx.strokeStyle = "#0e120f"; ctx.stroke();
+        ctx.lineWidth = 2; ctx.strokeStyle = SURFACE; ctx.stroke();
       }
       const snap = hist[start + idx];
       const when = new Date(snap.t * 1000).toLocaleTimeString();
@@ -318,6 +294,7 @@ function renderTopo(s) {
   const ts = s.tailscale || {};
   const clientsBy = {};
   (s.clients || []).forEach(c => (clientsBy[c.iface] = clientsBy[c.iface] || []).push(c));
+
   let html = `
     <div class="cell">
       <div class="node"><div class="t">wan</div><div class="v">${up.gw || "?"}</div>
@@ -328,16 +305,14 @@ function renderTopo(s) {
         <div class="r">↓${fmt2(upIf.rx_bps || 0)} ↑${fmt2(upIf.tx_bps || 0)}</div></div></div>
     <div class="cell">
       <div class="node host"><div class="t">host</div><div class="v" id="topohost">${s.host || "grave"}</div>
-        <div class="r">${(s.thunderbolt || []).map(d => d.device).join(" · ") || ""}</div></div></div>
-    <div class="cell chipcol">`;
+        <div class="r">${(s.thunderbolt || []).map(d => d.device).join(" · ") || ""}</div></div></div>`;
   for (const [name, i] of shares) {
     const cl = (clientsBy[name] || []).map(c => c.host || c.ip).join(", ") || "no lease";
-    html += `<div class="node"><div class="t">${name}</div><div class="v">${cl}</div>
-      <div class="r">↓${fmt2(i.tx_bps)} ↑${fmt2(i.rx_bps)}</div></div>`;
+    html += `<div class="cell"><div class="node"><div class="t">${name}</div><div class="v">${cl}</div>
+      <div class="r">↓${fmt2(i.tx_bps)} ↑${fmt2(i.rx_bps)}</div></div></div>`;
   }
   if (s.tailscale)
-    html += `<div class="node"><div class="t">tailnet</div><div class="v">${ts.online}/${ts.total} peers</div></div>`;
-  html += `</div>`;
+    html += `<div class="cell"><div class="node"><div class="t">tailnet</div><div class="v">${ts.online}/${ts.total} peers</div></div></div>`;
   document.getElementById("topo").innerHTML = html;
 }
 
