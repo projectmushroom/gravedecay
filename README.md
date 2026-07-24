@@ -248,6 +248,27 @@ on the HTTPS tailnet). If a drag doesn't land on your clipboard, hold
 that always works. (Existing boxes: `raise.sh` won't clobber an existing
 `config/tmux.conf`; re-copy it from the repo to pick up the clipboard config.)
 
+## Network flow monitor
+
+`/net/` is **gravenet** — a realtime ops view of the box's networking: one
+card per interface with live RX/TX sparklines (1 s samples, 3 min window),
+a topology strip from the upstream gateway through the box to whatever it's
+sharing a connection to, the DHCP client table (lease + neighbour state),
+conntrack flow count, and tailnet peer status. One root read-only Python
+daemon (SSE, stdlib only, port 4714) + one self-contained page — no build
+step, no dependencies.
+
+Interface roles (upstream / shared subnet / wifi / overlay) are auto-detected
+from the routing table, dnsmasq lease files, and sysfs. A box with more
+exotic wiring (say, internet shared over a Thunderbolt bridge to a Mac) can
+label its interfaces with a drop-in:
+
+```sh
+sudo systemctl edit gravedecay-net
+# [Service]
+# Environment="GRAVENET_ROLES=thunderbolt0=share:tb-share → Mac;enp69s0=upstream:10GbE"
+```
+
 ## Optional game mode
 
 gravedecay does not assume every development box is a console. The watcher

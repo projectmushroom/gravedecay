@@ -76,6 +76,7 @@ UPGRADE_CHANNEL=release
 T3_PORT=4711
 DASH_PORT=4712
 TERM_PORT=4713
+NET_PORT=4714
 
 # Opt-in isolated workspaces. `grave users add` prepares records; issue #27's
 # migration command enables this only after validating and backing up owner state.

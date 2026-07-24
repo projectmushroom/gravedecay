@@ -1,0 +1,33 @@
+[Unit]
+Description=gravedecay network flow monitor (gravenet)
+After=network-online.target
+Wants=network-online.target
+OnFailure=gravedecay-notify@%n.service
+
+[Service]
+Type=simple
+# Root, deliberately: NetworkManager shared-mode lease files are 0600 root and
+# conntrack counters are root-only. The daemon is read-only end to end — it
+# never writes to disk and never executes request-derived input — and binds
+# loopback by default (reachable via `tailscale serve /net`). Widen with a
+# drop-in (GRAVENET_BIND=0.0.0.0) only if LAN clients should load the page
+# directly.
+ExecStart=@PYTHON@ @GRAVE_ROOT@/scripts/gravenet.py
+Restart=always
+RestartSec=3
+SyslogIdentifier=gravedecay-net
+Environment=GRAVE_ROOT=@GRAVE_ROOT@
+Environment=GRAVENET_PORT=@NET_PORT@
+Environment=PATH=@TOOLPATH@/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+# Per-box interface labels, e.g.
+#   GRAVENET_ROLES=thunderbolt0=share:tb-share → Mac;enp69s0=upstream:10GbE
+# (kinds: upstream|share|uplink|overlay — unset = auto-detect)
+Environment=GRAVENET_ROLES=
+
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gravenet</title>
+<style>
+  /* dark-only by design — phosphor ops console */
+  :root {
+    color-scheme: dark;
+    --page:       #0a0c0a;
+    --surface:    #0e120f;   /* validated chart surface */
+    --surface-2:  #121712;
+    --ink:        #e9efe9;
+    --ink-2:      #a9b5aa;
+    --ink-mute:   #6f7a70;
+    --grid:       #1e2820;   /* hairline */
+    --baseline:   #2a362d;
+    --border:     rgba(233,239,233,0.08);
+    --rx:         #1aa566;   /* series 1 — validated */
+    --tx:         #c98500;   /* series 2 — validated */
+    --good:       #0ca30c;
+    --warn:       #fab219;
+    --crit:       #d03b3b;
+    --chrome:     #3d5546;   /* desaturated accent for UI chrome only */
+    font-size: 14px;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--page); color: var(--ink);
+    font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
+    padding: 14px 16px 28px;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+    padding-bottom: 10px; border-bottom: 1px solid var(--border); margin-bottom: 14px;
+  }
+  .brand { font-weight: 700; letter-spacing: .12em; }
+  .brand .g { color: var(--rx); text-shadow: 0 0 12px rgba(26,165,102,.35); }
+  .sub { color: var(--ink-mute); font-size: .85rem; }
+  .spacer { flex: 1; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 3px 9px; font-size: .8rem; color: var(--ink-2); background: var(--surface);
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .dot.good { background: var(--good); box-shadow: 0 0 6px var(--good); }
+  .dot.crit { background: var(--crit); box-shadow: 0 0 6px var(--crit); }
+  .dot.warn { background: var(--warn); }
+  #clock { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+  /* topology flow */
+  #topo {
+    display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap;
+    margin-bottom: 16px; font-size: .82rem;
+  }
+  .node {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 12px; min-width: 130px;
+  }
+  .node .t { color: var(--ink-mute); font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; }
+  .node .v { margin-top: 3px; }
+  .node .r { color: var(--ink-2); font-variant-numeric: tabular-nums; font-size: .78rem; margin-top: 2px; }
+  .link {
+    color: var(--ink-mute); padding: 24px 2px 0; white-space: nowrap;
+  }
+  .link.active { color: var(--chrome); }
+  .host { border-color: var(--chrome); }
+  .chipcol { display: flex; flex-direction: column; gap: 8px; }
+
+  /* legend */
+  .legend { display: flex; gap: 16px; align-items: center; color: var(--ink-2); font-size: .8rem; }
+  .swatch { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+
+  /* interface cards */
+  #cards {
+    display: grid; gap: 12px;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px 10px; position: relative;
+  }
+  .card h2 { font-size: .95rem; font-weight: 700; display: flex; gap: 8px; align-items: center; }
+  .card .role { color: var(--ink-mute); font-size: .78rem; }
+  .card .meta { color: var(--ink-2); font-size: .76rem; margin-top: 2px; }
+  .rates { display: flex; gap: 18px; margin: 8px 0 4px; }
+  .rate .lbl { font-size: .72rem; color: var(--ink-2); letter-spacing: .06em; }
+  .rate .val { font-size: 1.25rem; font-variant-numeric: tabular-nums; }
+  .rate .unit { font-size: .78rem; color: var(--ink-2); margin-left: 3px; }
+  .chartwrap { position: relative; height: 88px; margin-top: 4px; }
+  canvas { width: 100%; height: 100%; display: block; }
+  .ymax { position: absolute; top: 0; left: 2px; font-size: .68rem; color: var(--ink-mute); pointer-events: none; }
+
+  .tip {
+    position: absolute; pointer-events: none; z-index: 5; display: none;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 5px;
+    padding: 6px 9px; font-size: .74rem; color: var(--ink); white-space: nowrap;
+    box-shadow: 0 4px 16px rgba(0,0,0,.5);
+  }
+  .tip .row { display: flex; gap: 8px; justify-content: space-between; font-variant-numeric: tabular-nums; }
+  .tip .k { color: var(--ink-2); }
+
+  /* clients table */
+  section h3 {
+    font-size: .8rem; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--ink-mute); margin: 22px 0 8px;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+  th {
+    text-align: left; color: var(--ink-mute); font-weight: 400; font-size: .72rem;
+    letter-spacing: .08em; text-transform: uppercase; padding: 4px 10px;
+    border-bottom: 1px solid var(--grid);
+  }
+  td {
+    padding: 5px 10px; border-bottom: 1px solid var(--grid);
+    font-variant-numeric: tabular-nums; color: var(--ink-2);
+  }
+  td.hostn { color: var(--ink); }
+  footer { margin-top: 24px; color: var(--ink-mute); font-size: .72rem; }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand"><span class="g">▚</span> GRAVENET</span>
+  <span class="sub" id="hostname">—</span>
+  <span class="pill" id="upstream"><span class="dot warn"></span>upstream —</span>
+  <span class="pill" id="conntrack">flows —</span>
+  <span class="pill" id="tspill">tailnet —</span>
+  <span class="spacer"></span>
+  <span class="legend">
+    <span><span class="swatch" style="background:var(--rx)"></span>RX in</span>
+    <span><span class="swatch" style="background:var(--tx)"></span>TX out</span>
+  </span>
+  <span id="clock">--:--:--</span>
+</header>
+
+<div id="topo"></div>
+<div id="cards"></div>
+
+<section>
+  <h3>clients</h3>
+  <table>
+    <thead><tr><th>host</th><th>ip</th><th>mac</th><th>iface</th><th>neigh</th><th>lease left</th></tr></thead>
+    <tbody id="clientrows"><tr><td colspan="6">waiting for data…</td></tr></tbody>
+  </table>
+</section>
+
+<footer id="foot">gravenet · sse: connecting…</footer>
+
+<script>
+"use strict";
+const RX = getComputedStyle(document.documentElement).getPropertyValue("--rx").trim();
+const TX = getComputedStyle(document.documentElement).getPropertyValue("--tx").trim();
+const GRID = getComputedStyle(document.documentElement).getPropertyValue("--grid").trim();
+const INK2 = getComputedStyle(document.documentElement).getPropertyValue("--ink-2").trim();
+const WINDOW = 180;
+
+const hist = [];            // ring of snapshots
+const cards = new Map();    // iface -> {el, canvas, ctx, tip, ymaxEl, hoverX}
+
+function fmtBps(b) {
+  if (b == null) return ["—", ""];
+  if (b < 1e3)  return [b.toFixed(0), "bit/s"];
+  if (b < 1e6)  return [(b/1e3).toFixed(1), "Kbit/s"];
+  if (b < 1e9)  return [(b/1e6).toFixed(b < 1e7 ? 2 : 1), "Mbit/s"];
+  return [(b/1e9).toFixed(2), "Gbit/s"];
+}
+function fmtBytes(n) {
+  if (n < 1e9)  return (n/1e6).toFixed(0) + " MB";
+  if (n < 1e12) return (n/1e9).toFixed(1) + " GB";
+  return (n/1e12).toFixed(2) + " TB";
+}
+const fmt2 = b => { const [v,u] = fmtBps(b); return v + " " + u; };
+
+/* ---- interface cards ---- */
+const ORDER = { upstream: 0, share: 1, uplink: 2, overlay: 3, other: 4 };
+
+function ensureCard(name, info) {
+  if (cards.has(name)) return cards.get(name);
+  const el = document.createElement("div");
+  el.className = "card";
+  el.innerHTML = `
+    <h2><span class="dot"></span>${name}<span class="role"></span></h2>
+    <div class="meta"></div>
+    <div class="rates">
+      <div class="rate"><div class="lbl"><span class="swatch" style="background:${RX}"></span>RX</div>
+        <div><span class="val vrx">0</span><span class="unit urx"></span></div></div>
+      <div class="rate"><div class="lbl"><span class="swatch" style="background:${TX}"></span>TX</div>
+        <div><span class="val vtx">0</span><span class="unit utx"></span></div></div>
+    </div>
+    <div class="chartwrap"><span class="ymax"></span><canvas></canvas><div class="tip"></div></div>`;
+  el.dataset.order = ORDER[info.kind] ?? 4;
+  const c = {
+    el, canvas: el.querySelector("canvas"), tip: el.querySelector(".tip"),
+    ymaxEl: el.querySelector(".ymax"), hoverX: null,
+  };
+  c.ctx = c.canvas.getContext("2d");
+  c.canvas.addEventListener("mousemove", e => {
+    const r = c.canvas.getBoundingClientRect();
+    c.hoverX = (e.clientX - r.left) / r.width;
+    drawCard(name, c);
+  });
+  c.canvas.addEventListener("mouseleave", () => { c.hoverX = null; c.tip.style.display = "none"; drawCard(name, c); });
+  cards.set(name, c);
+  // insert keeping order
+  const parent = document.getElementById("cards");
+  const sibs = [...parent.children];
+  const after = sibs.find(s => +s.dataset.order > +el.dataset.order);
+  parent.insertBefore(el, after || null);
+  return c;
+}
+
+function niceMax(v) {
+  if (v <= 0) return 1e6;                       // 1 Mbit floor so idle isn't noise
+  const p = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 2, 5, 10]) if (m * p >= v) return m * p;
+  return 10 * p;
+}
+
+function drawCard(name, c) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = c.canvas.clientWidth, h = c.canvas.clientHeight;
+  if (!w) return;
+  if (c.canvas.width !== w * dpr) { c.canvas.width = w * dpr; c.canvas.height = h * dpr; }
+  const ctx = c.ctx;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const pts = hist.map(s => s.ifaces[name]).map(i => i ? [i.rx_bps, i.tx_bps] : [null, null]);
+  const n = WINDOW;
+  const start = Math.max(0, pts.length - n);
+  const view = pts.slice(start);
+  let max = 0;
+  for (const [a, b] of view) { if (a > max) max = a; if (b > max) max = b; }
+  max = niceMax(max * 1.05);
+  c.ymaxEl.textContent = fmt2(max);
+
+  // recessive grid: mid + baseline
+  ctx.strokeStyle = GRID; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, h / 2 + .5); ctx.lineTo(w, h / 2 + .5); ctx.stroke();
+  ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue("--baseline").trim();
+  ctx.beginPath(); ctx.moveTo(0, h - .5); ctx.lineTo(w, h - .5); ctx.stroke();
+
+  const x = i => (i / (n - 1)) * w;
+  const y = v => h - 1 - (Math.min(v, max) / max) * (h - 6);
+  const off = n - view.length;   // right-align sparse history
+
+  for (const [si, color] of [[0, RX], [1, TX]]) {
+    // soft area fill
+    ctx.beginPath();
+    let began = false;
+    view.forEach((p, i) => {
+      if (p[si] == null) return;
+      const px = x(off + i), py = y(p[si]);
+      if (!began) { ctx.moveTo(px, h - 1); ctx.lineTo(px, py); began = true; }
+      else ctx.lineTo(px, py);
+    });
+    if (began) {
+      ctx.lineTo(w, h - 1); ctx.closePath();
+      ctx.globalAlpha = 0.10; ctx.fillStyle = color; ctx.fill(); ctx.globalAlpha = 1;
+    }
+    // line
+    ctx.beginPath(); began = false;
+    view.forEach((p, i) => {
+      if (p[si] == null) return;
+      const px = x(off + i), py = y(p[si]);
+      began ? ctx.lineTo(px, py) : ctx.moveTo(px, py); began = true;
+    });
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.stroke();
+  }
+
+  // direct labels at line ends (ink text + colored tick already in legend/readouts)
+  const last = view[view.length - 1];
+  if (last && last[0] != null) {
+    ctx.font = "9px ui-monospace, monospace"; ctx.fillStyle = INK2;
+    const yr = y(last[0]), yt = y(last[1]);
+    ctx.textAlign = "right";
+    ctx.fillText("RX", w - 3, Math.min(yr - 3, h - 12));
+    ctx.fillText("TX", w - 3, Math.max(Math.min(yt - 3, h - 3), Math.min(yr - 3, h - 12) + 10));
+  }
+
+  // hover crosshair + tooltip
+  if (c.hoverX != null && view.length > 1) {
+    const idx = Math.round(c.hoverX * (n - 1)) - off;
+    if (idx >= 0 && idx < view.length && view[idx][0] != null) {
+      const px = x(off + idx);
+      ctx.strokeStyle = INK2; ctx.globalAlpha = .4;
+      ctx.beginPath(); ctx.moveTo(px + .5, 0); ctx.lineTo(px + .5, h); ctx.stroke();
+      ctx.globalAlpha = 1;
+      for (const [si, color] of [[0, RX], [1, TX]]) {
+        ctx.beginPath(); ctx.arc(px, y(view[idx][si]), 3.5, 0, 7);
+        ctx.fillStyle = color; ctx.fill();
+        ctx.lineWidth = 2; ctx.strokeStyle = "#0e120f"; ctx.stroke();
+      }
+      const snap = hist[start + idx];
+      const when = new Date(snap.t * 1000).toLocaleTimeString();
+      c.tip.innerHTML =
+        `<div class="row"><span class="k">${when}</span></div>` +
+        `<div class="row"><span class="k"><span class="swatch" style="background:${RX}"></span>RX</span><span>${fmt2(view[idx][0])}</span></div>` +
+        `<div class="row"><span class="k"><span class="swatch" style="background:${TX}"></span>TX</span><span>${fmt2(view[idx][1])}</span></div>`;
+      c.tip.style.display = "block";
+      const wrapW = c.canvas.clientWidth;
+      c.tip.style.left = (px > wrapW - 130 ? px - 130 : px + 10) + "px";
+      c.tip.style.top = "6px";
+    }
+  }
+}
+
+/* ---- topology ---- */
+function arrow(active) { return `<span class="link${active ? " active" : ""}">⇄</span>`; }
+
+function renderTopo(s) {
+  const up = s.upstream || {};
+  const upIf = s.ifaces[up.dev] || {};
+  const shares = Object.entries(s.ifaces).filter(([, i]) => i.kind === "share");
+  const ts = s.tailscale || {};
+  const clientsBy = {};
+  (s.clients || []).forEach(c => (clientsBy[c.iface] = clientsBy[c.iface] || []).push(c));
+
+  let html = `
+    <div class="node"><div class="t">wan</div><div class="v">${up.gw || "?"}</div>
+      <div class="r">${up.ok ? (up.rtt != null ? up.rtt.toFixed(1) + " ms" : "ok") : "unreachable"}</div></div>
+    ${arrow(upIf.rx_bps > 1e5)}
+    <div class="node"><div class="t">${up.dev || "uplink"}</div>
+      <div class="v">${upIf.speed ? (upIf.speed >= 1000 ? upIf.speed / 1000 + " GbE" : upIf.speed + " MbE") : "link"}</div>
+      <div class="r">↓${fmt2(upIf.rx_bps || 0)} ↑${fmt2(upIf.tx_bps || 0)}</div></div>
+    ${arrow(true)}
+    <div class="node host"><div class="t">host</div><div class="v" id="topohost">${s.host || "grave"}</div>
+      <div class="r">${(s.thunderbolt || []).map(d => d.device).join(" · ") || ""}</div></div>
+    ${arrow(true)}
+    <div class="chipcol">`;
+  for (const [name, i] of shares) {
+    const cl = (clientsBy[name] || []).map(c => c.host || c.ip).join(", ") || "no lease";
+    html += `<div class="node"><div class="t">${name}</div><div class="v">${cl}</div>
+      <div class="r">↓${fmt2(i.tx_bps)} ↑${fmt2(i.rx_bps)}</div></div>`;
+  }
+  if (s.tailscale)
+    html += `<div class="node"><div class="t">tailnet</div><div class="v">${ts.online}/${ts.total} peers</div></div>`;
+  html += `</div>`;
+  document.getElementById("topo").innerHTML = html;
+}
+
+/* ---- header + clients ---- */
+function renderHeader(s) {
+  document.getElementById("hostname").textContent = s.host || "";
+  const up = s.upstream || {};
+  const el = document.getElementById("upstream");
+  el.innerHTML = `<span class="dot ${up.ok ? "good" : "crit"}"></span>upstream ${up.ok ? "OK" + (up.rtt != null ? " · " + up.rtt.toFixed(1) + "ms" : "") : "DOWN"}`;
+  const ct = document.getElementById("conntrack");
+  ct.style.display = s.conntrack == null ? "none" : "";
+  ct.textContent = "flows " + (s.conntrack ?? "");
+  const tp = document.getElementById("tspill");
+  tp.style.display = s.tailscale == null ? "none" : "";
+  if (s.tailscale) tp.textContent = `tailnet ${s.tailscale.online}/${s.tailscale.total}`;
+}
+
+function renderClients(s) {
+  const rows = (s.clients || []).map(c => {
+    const left = Math.max(0, c.expiry - s.t);
+    const leftS = left > 3600 ? (left / 3600).toFixed(1) + " h" : Math.round(left / 60) + " min";
+    return `<tr><td class="hostn">${c.host || "—"}</td><td>${c.ip}</td><td>${c.mac}</td>
+      <td>${c.iface}</td><td>${c.neigh}</td><td>${leftS}</td></tr>`;
+  });
+  document.getElementById("clientrows").innerHTML =
+    rows.join("") || `<tr><td colspan="6">no dhcp clients</td></tr>`;
+}
+
+function renderCards(s) {
+  for (const [name, info] of Object.entries(s.ifaces)) {
+    const c = ensureCard(name, info);
+    const h2 = c.el.querySelector("h2 .dot");
+    h2.className = "dot " + (info.state === "up" ? "good" : "crit");
+    c.el.querySelector(".role").textContent =
+      (info.role || "") + (info.state !== "up" ? " · " + info.state : "");
+    c.el.querySelector(".meta").textContent =
+      [info.addrs.join(" "), info.speed ? info.speed + " Mb/s link" : "",
+       "Σ↓" + fmtBytes(info.rx_total) + " Σ↑" + fmtBytes(info.tx_total)]
+        .filter(Boolean).join(" · ");
+    const [rv, ru] = fmtBps(info.rx_bps), [tv, tu] = fmtBps(info.tx_bps);
+    c.el.querySelector(".vrx").textContent = rv; c.el.querySelector(".urx").textContent = ru;
+    c.el.querySelector(".vtx").textContent = tv; c.el.querySelector(".utx").textContent = tu;
+    drawCard(name, c);
+  }
+  // drop cards for interfaces that vanished
+  for (const [name, c] of cards) {
+    if (!(name in s.ifaces)) { c.el.remove(); cards.delete(name); }
+  }
+}
+
+function apply(s) {
+  hist.push(s);
+  if (hist.length > WINDOW) hist.shift();
+  renderHeader(s); renderTopo(s); renderCards(s); renderClients(s);
+}
+
+/* ---- clock ---- */
+setInterval(() => {
+  document.getElementById("clock").textContent = new Date().toLocaleTimeString();
+}, 1000);
+
+/* ---- SSE (works at :4714/ and behind tailscale serve /net) ---- */
+const base = location.pathname.endsWith("/") ? location.pathname : location.pathname + "/";
+function connect() {
+  const es = new EventSource(base + "events");
+  es.addEventListener("history", e => {
+    hist.length = 0;
+    for (const s of JSON.parse(e.data)) hist.push(s);
+    if (hist.length) apply(hist.pop());
+    document.getElementById("foot").textContent = "gravenet · sse: live · window " + WINDOW + "s";
+  });
+  es.onmessage = e => apply(JSON.parse(e.data));
+  es.onerror = () => {
+    document.getElementById("foot").textContent = "gravenet · sse: reconnecting…";
+    es.close(); setTimeout(connect, 2000);
+  };
+}
+connect();
+window.addEventListener("resize", () => { for (const [n, c] of cards) drawCard(n, c); });
+</script>
+</body>
+</html>
