@@ -16,6 +16,7 @@ HOME_DIR=$(getent passwd "$RUN_USER" | cut -d: -f6)
 T3_PORT=4711
 DASH_PORT=4712
 TERM_PORT=4713
+NET_PORT=4714
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -231,9 +232,9 @@ systemctl list-unit-files ssh.service >/dev/null 2>&1 \
 # System units the dashboard reports. Rootless docker is a --user unit, so it's
 # dropped from the system list (the Docker panel still shows it via `docker ps`).
 if [[ "$DOCKER_ROOTLESS" == 1 ]]; then
-  UNITS="t3code,gravedecay,gravedecay-term,tailscaled,$SSHD_UNIT"
+  UNITS="t3code,gravedecay,gravedecay-term,gravedecay-net,tailscaled,$SSHD_UNIT"
 else
-  UNITS="t3code,gravedecay,gravedecay-term,tailscaled,$SSHD_UNIT,docker"
+  UNITS="t3code,gravedecay,gravedecay-term,gravedecay-net,tailscaled,$SSHD_UNIT,docker"
 fi
 
 # ------------------------------------------------------------ 1. packages ----
@@ -601,6 +602,21 @@ sudo systemctl daemon-reload
 enable_restart gravedecay-keepalive >/dev/null 2>&1 || true
 ok "tailnet keepalive installed (turn on with: grave keepalive on)"
 
+# Network flow monitor (gravenet): realtime per-interface throughput, DHCP
+# clients, upstream health — one SSE daemon + one self-contained page at /net.
+# Roles are auto-detected; boxes with exotic wiring label interfaces via a
+# GRAVENET_ROLES drop-in (see systemd/gravedecay-net.service.tmpl).
+step "Network flow monitor"
+install -m 755 "$REPO_DIR/dashboard/gravenet.py" "$GRAVE_ROOT/scripts/gravenet.py"
+install -d "$GRAVE_ROOT/web/net"
+install -m 644 "$REPO_DIR/web/net/index.html" "$GRAVE_ROOT/web/net/index.html"
+sed -e "s|@PYTHON@|$PYTHON_BIN|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
+    -e "s|@NET_PORT@|$NET_PORT|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
+    "$REPO_DIR/systemd/gravedecay-net.service.tmpl" | install_unit gravedecay-net.service
+sudo systemctl daemon-reload
+enable_restart gravedecay-net
+wait_http "http://127.0.0.1:$NET_PORT/healthz" "gravenet answering on :$NET_PORT"
+
 # Nightly verified backup (#112). Installed and enabled on every box: an
 # always-on appliance holding the repos must not depend on a human remembering
 # `grave backup`. The service pages via gravedecay-notify@ on failure and
@@ -753,6 +769,7 @@ EOF
   tailscale serve --bg --https=443 "http://127.0.0.1:$T3_PORT" >/dev/null && ok "T3 → https / on tailnet"
   tailscale serve --bg --https=443 --set-path=/grave "http://127.0.0.1:$DASH_PORT" >/dev/null && ok "gravedecay → https /grave on tailnet"
   command -v ttyd >/dev/null && tailscale serve --bg --https=443 --set-path=/term "http://127.0.0.1:$TERM_PORT" >/dev/null && ok "web terminal → https /term on tailnet"
+  tailscale serve --bg --https=443 --set-path=/net "http://127.0.0.1:$NET_PORT" >/dev/null && ok "gravenet → https /net on tailnet"
   fi
 fi
 

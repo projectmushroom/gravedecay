@@ -1147,6 +1147,13 @@ cmd_doctor() { # grave doctor [--no-page]
   else
     say "  ${YLW}– web terminal stopped${RST}"
   fi
+  if systemctl cat gravedecay-net.service >/dev/null 2>&1; then
+    if systemctl is-active --quiet gravedecay-net; then
+      check "gravenet answering"         curl -sf -o /dev/null "http://127.0.0.1:${NET_PORT:-4714}/healthz"
+    else
+      say "  ${YLW}– gravenet stopped${RST}"
+    fi
+  fi
   check "backups dir writable"          test -w "$BACKUP_DIR"
   # Backup freshness (#112): .last-verified is written only after every artifact
   # in a run was created AND verified, so "fresh marker" means "a restorable
