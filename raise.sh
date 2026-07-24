@@ -2,7 +2,7 @@
 # raise.sh — the gravedecay ritual. Idempotent bootstrap: run as your normal
 # user (sudo is used where needed), rerun freely after fixing any failure.
 #
-#   ./raise.sh [--profile <generic|t2-macbook|steam-machine|...>] [--root <dir>]
+#   ./raise.sh [--profile <generic|aws|t2-macbook|steam-machine|...>] [--root <dir>]
 #
 # Designed to be agent-supervised: it does the deterministic 90 %, prints
 # clearly what it skipped, and leaves distro oddities to you/your agent.
@@ -36,7 +36,10 @@ enable_restart() {
   # process untouched. Raise has just replaced scripts and unit files, so an
   # explicit restart is required for the running appliance to match disk.
   sudo systemctl enable "$@" >/dev/null
-  sudo systemctl restart "$@"
+  # --no-block avoids a hang on some distros (Amazon Linux 2023) where systemd
+  # waits for the restarted unit's notification; wait_http polls the HTTP
+  # endpoint next, so readiness is still verified without blocking on systemd.
+  sudo systemctl restart --no-block "$@"
 }
 wait_http() {
   # wait_http <url> <label> — poll a freshly (re)started service for readiness,
@@ -282,9 +285,46 @@ elif command -v apt-get >/dev/null; then
     nodejs npm ufw lm-sensors python3-pil python3-cryptography ttyd || skip "some packages failed — fix names for your distro and rerun"
   ok "packages present"
 elif command -v dnf >/dev/null; then
-  sudo dnf install -y git tmux curl jq python3 docker docker-compose nodejs npm \
-    lm_sensors python3-pillow python3-cryptography || skip "some packages failed — fix names for your distro and rerun"
-  command -v ttyd >/dev/null || skip "ttyd not in Fedora repos — build/install it manually for the web terminal"
+  # Amazon Linux 2023 (ID=amzn) is dnf-based but not Fedora: no `docker-compose`
+  # package at all, the default `nodejs` is v18 (T3 Code needs 22+), and the
+  # base AMI ships no C++ toolchain for node-pty's native build. Plain Fedora
+  # doesn't have these particular gaps, so scope the extra packages to amzn.
+  AMZN_LINUX=0
+  grep -qE '^ID="?amzn"?$' /etc/os-release 2>/dev/null && AMZN_LINUX=1
+  if [[ "$AMZN_LINUX" == 1 ]]; then
+    sudo dnf install -y git tmux curl jq python3 docker nodejs22 nodejs22-npm \
+      gcc-c++ make lm_sensors python3-pillow python3-cryptography \
+      || skip "some packages failed — fix names for your distro and rerun"
+    sudo alternatives --set node /usr/bin/node-22 >/dev/null 2>&1 || true
+  else
+    sudo dnf install -y git tmux curl jq python3 docker docker-compose nodejs npm \
+      lm_sensors python3-pillow python3-cryptography || skip "some packages failed — fix names for your distro and rerun"
+  fi
+
+  # docker-compose isn't a real dnf package on Amazon Linux 2023 (and dnf's
+  # partial-failure behavior means the install above silently drops it) —
+  # fetch the official Compose plugin binary instead.
+  if ! docker compose version >/dev/null 2>&1; then
+    sudo mkdir -p /usr/libexec/docker/cli-plugins
+    if sudo curl -fsSL "https://github.com/docker/compose/releases/download/v2.30.3/docker-compose-linux-x86_64" \
+        -o /usr/libexec/docker/cli-plugins/docker-compose \
+        && sudo chmod +x /usr/libexec/docker/cli-plugins/docker-compose; then
+      ok "docker compose plugin installed (no dnf package on this distro)"
+    else
+      skip "docker compose plugin fetch failed — install it manually"
+    fi
+  fi
+
+  if ! command -v ttyd >/dev/null; then
+    # ttyd isn't packaged for Fedora-family dnf repos (Amazon Linux included);
+    # fetch the static release binary instead of skipping the web terminal.
+    if sudo curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64" \
+        -o /usr/local/bin/ttyd && sudo chmod +x /usr/local/bin/ttyd; then
+      ok "ttyd installed from upstream release (not packaged for dnf)"
+    else
+      skip "ttyd not in dnf repos and release fetch failed — install it manually for the web terminal"
+    fi
+  fi
   ok "packages present"
 else
   skip "unknown package manager — install git tmux curl jq python3 docker nodejs npm manually"
@@ -395,7 +435,7 @@ if [[ -z "$SUDOERS_FILE" ]]; then
   fi
 fi
 sudoers_content="# gravedecay: let $RUN_USER (and gravedecay action buttons) drive the platform
-$RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker, $GRAVE_BIN, /usr/bin/journalctl, /usr/bin/ufw, /usr/sbin/ufw, /usr/bin/snapper, /usr/sbin/sshd -T, /usr/bin/sshd -T, /usr/bin/tee /etc/systemd/system/*, /usr/bin/tee /sys/fs/cgroup/grave-torpor/*, /usr/bin/mkdir -p /sys/fs/cgroup/grave-torpor, /usr/bin/npm update -g *"
+$RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker, $GRAVE_BIN, /usr/bin/journalctl, /usr/bin/ufw, /usr/sbin/ufw, /usr/bin/firewall-cmd, /usr/bin/snapper, /usr/sbin/sshd -T, /usr/bin/sshd -T, /usr/bin/tee /etc/systemd/system/*, /usr/bin/tee /sys/fs/cgroup/grave-torpor/*, /usr/bin/mkdir -p /sys/fs/cgroup/grave-torpor, /usr/bin/npm update -g *"
 # /etc/sudoers.d entries are 440 — unreadable to us — so the unchanged-skip
 # (#89: headless upgrades must not need out-of-scope sudo) compares against a
 # user-side stamp of what the last successful install wrote instead.
@@ -687,12 +727,27 @@ if command -v ufw >/dev/null; then
 elif command -v firewall-cmd >/dev/null; then
   # A gaming box (steam-machine profile) needs LAN reachable for Steam Remote
   # Play / local multiplayer / discovery, so we do NOT impose a host-wide
-  # default-deny here. The security boundary is: every gravedecay service binds
-  # 127.0.0.1 and is reachable only via `tailscale serve`; sshd is key-only.
-  # The steam-machine profile sets CHECK_FIREWALL=0 so doctor reflects this.
-  # If you don't use LAN gaming, harden with firewalld: default zone drop,
-  # allow ssh + trust tailscale0.
-  skip "firewalld present — leaving LAN open for Steam; boundary is 127.0.0.1 + tailnet (see profiles/steam-machine.sh)"
+  # default-deny there. The steam-machine profile sets CHECK_FIREWALL=0 so
+  # doctor reflects this. For every other profile, harden with firewalld:
+  # default zone drop, allow ssh, and trust tailscale0.
+  if [[ "$PROFILE" == steam-machine ]]; then
+    skip "firewalld present — leaving LAN open for Steam; boundary is 127.0.0.1 + tailnet (see profiles/steam-machine.sh)"
+  else
+    sudo systemctl enable --now firewalld >/dev/null
+    default_zone=$(firewall-cmd --get-default-zone 2>/dev/null || echo public)
+    if [[ "$default_zone" != drop ]]; then
+      sudo firewall-cmd --set-default-zone=drop >/dev/null
+    fi
+    sudo firewall-cmd --permanent --zone=drop --add-service=ssh >/dev/null 2>&1 || true
+    sudo firewall-cmd --permanent --zone=drop --add-interface=tailscale0 >/dev/null 2>&1 || true
+    # Bind the primary non-loopback interface to the drop zone too, so the
+    # default-deny applies to the public NIC on headless cloud boxes.
+    for iface in $(ip -o link show up | awk -F': ' '{print $2}' | grep -vE '^(lo|tailscale0|docker[0-9]|br-[0-9a-f]+|veth)'); do
+      sudo firewall-cmd --permanent --zone=drop --add-interface="$iface" >/dev/null 2>&1 || true
+    done
+    sudo firewall-cmd --reload >/dev/null
+    ok "firewalld active (default drop, allow ssh + tailscale0)"
+  fi
 else
   skip "no firewall tool found — services still bind 127.0.0.1 + tailnet only"
 fi
@@ -734,9 +789,12 @@ if ! command -v tailscale >/dev/null; then
 elif ! tailscale status --peers=false >/dev/null 2>&1; then
   skip "tailscale not logged in — run 'sudo tailscale up --ssh', rerun raise.sh"
 else
-  # Operator already effective ⇔ serve status works unprivileged — skip the
-  # out-of-scope `sudo tailscale set` on a steady-state (headless, #89) run.
-  tailscale serve status >/dev/null 2>&1 || sudo tailscale set --operator="$RUN_USER" 2>/dev/null || true
+  # Ensure the appliance owner can manage serve/funnel without root on every
+  # raise. `tailscale serve status` can succeed without operator rights (it
+  # just reports no config), so the old "status works ⇒ operator set" probe
+  # skipped the set on fresh logins and serve config later failed with
+  # "Access denied" on distros where the package does not pre-set operator.
+  sudo tailscale set --operator="$RUN_USER" >/dev/null 2>&1 || true
   # The gateway's random Serve backend path is a local trust capability.
   # Hide Serve configuration from workspace users by restricting LocalAPI to
   # root and the appliance owner's existing primary group, including restarts.

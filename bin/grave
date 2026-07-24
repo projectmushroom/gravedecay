@@ -995,10 +995,17 @@ firewall_active() {
     local s; s=$(sudo ufw status verbose 2>/dev/null) || return 1
     grep -q "Status: active" <<<"$s" && grep -qE "Default: (deny|reject) \(incoming\)" <<<"$s"
   elif command -v firewall-cmd >/dev/null; then
-    firewall-cmd --state >/dev/null 2>&1 || return 1
-    local zone; zone=$(firewall-cmd --get-default-zone 2>/dev/null) || return 1
+    # On firewalld systems the doctor runs unprivileged; passwordless sudo for
+    # /usr/bin/firewall-cmd is granted by raise.sh so the default-deny invariant
+    # can be verified without a polkit agent on headless boxes.
+    local fc
+    if sudo -n firewall-cmd --state >/dev/null 2>&1; then fc="sudo -n firewall-cmd"
+    elif firewall-cmd --state >/dev/null 2>&1; then fc="firewall-cmd"
+    else return 1; fi
+    $fc --state >/dev/null 2>&1 || return 1
+    local zone; zone=$($fc --get-default-zone 2>/dev/null) || return 1
     # the default zone must not blanket-accept inbound (trusted, or target ACCEPT)
-    [[ "$zone" != trusted ]] && ! firewall-cmd --info-zone="$zone" 2>/dev/null | grep -q 'target: ACCEPT'
+    [[ "$zone" != trusted ]] && ! $fc --info-zone="$zone" 2>/dev/null | grep -q 'target: ACCEPT'
   else return 1; fi
 }
 cmd_doctor() { # grave doctor [--no-page]

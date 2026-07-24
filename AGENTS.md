@@ -19,7 +19,7 @@ running `./raise.sh` and fixing what breaks over doing steps by hand.
 ## 1. Run the ritual
 
 ```sh
-./raise.sh --profile <generic|t2-macbook|steam-machine>
+./raise.sh --profile <generic|aws|t2-macbook|steam-machine>
 ```
 
 It is idempotent — rerun after fixing any failure. Typical distro quirks you

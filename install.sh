@@ -14,7 +14,17 @@ REPO_URL="${GRAVEDECAY_REPO:-https://github.com/projectmushroom/gravedecay}"
 GRAVE_ROOT="${GRAVE_ROOT:-/srv/dev}"
 
 [[ $EUID -eq 0 ]] && { echo "Run as your normal user (sudo is used internally)."; exit 1; }
-command -v git >/dev/null || { echo "Install git first, then re-run."; exit 1; }
+if ! command -v git >/dev/null; then
+  echo "🪦 git not found — installing it"
+  if command -v dnf >/dev/null; then
+    sudo dnf install -y git
+  elif command -v apt-get >/dev/null; then
+    sudo apt-get update -qq && sudo apt-get install -y git
+  elif command -v pacman >/dev/null; then
+    sudo pacman -S --needed --noconfirm git
+  fi
+  command -v git >/dev/null || { echo "Install git first, then re-run."; exit 1; }
+fi
 
 # Immutable rootfs (stock SteamOS, Silverblue): /srv rides the read-only root
 # image — `mkdir /srv/dev` fails, and anything there is erased by the next OS
