@@ -66,11 +66,6 @@
   .node .v { margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .node .r { color: var(--ink-2); font-variant-numeric: tabular-nums; font-size: .78rem; margin-top: 2px; }
   .cell { position: relative; min-width: 0; }
-  .cell.flow::after {
-    content: "⇄"; position: absolute; top: 24px; right: -13px;
-    color: var(--ink-mute); font-size: .82rem; pointer-events: none;
-  }
-  .cell.flow.active::after { color: var(--chrome); }
   .cell > .node { height: 100%; }
   .host { border-color: var(--chrome); }
   .chipcol { display: flex; flex-direction: column; gap: 8px; }
@@ -323,17 +318,15 @@ function renderTopo(s) {
   const ts = s.tailscale || {};
   const clientsBy = {};
   (s.clients || []).forEach(c => (clientsBy[c.iface] = clientsBy[c.iface] || []).push(c));
-  const busy = (upIf.rx_bps || 0) + (upIf.tx_bps || 0) > 1e5;
-
   let html = `
-    <div class="cell flow${busy ? " active" : ""}">
+    <div class="cell">
       <div class="node"><div class="t">wan</div><div class="v">${up.gw || "?"}</div>
         <div class="r">${up.ok ? (up.rtt != null ? up.rtt.toFixed(1) + " ms" : "ok") : "unreachable"}</div></div></div>
-    <div class="cell flow${busy ? " active" : ""}">
+    <div class="cell">
       <div class="node"><div class="t">${up.dev || "uplink"}</div>
         <div class="v">${upIf.speed ? (upIf.speed >= 1000 ? upIf.speed / 1000 + " GbE" : upIf.speed + " MbE") : "link"}</div>
         <div class="r">↓${fmt2(upIf.rx_bps || 0)} ↑${fmt2(upIf.tx_bps || 0)}</div></div></div>
-    <div class="cell flow active">
+    <div class="cell">
       <div class="node host"><div class="t">host</div><div class="v" id="topohost">${s.host || "grave"}</div>
         <div class="r">${(s.thunderbolt || []).map(d => d.device).join(" · ") || ""}</div></div></div>
     <div class="cell chipcol">`;
