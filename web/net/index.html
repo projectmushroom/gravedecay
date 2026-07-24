@@ -58,7 +58,10 @@
   .node {
     background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
     padding: 8px 12px; min-width: 130px;
+    flex: 1 1 0; overflow: hidden;   /* equal columns pinned across the row — no reflow as numbers change */
   }
+  .chipcol { flex: 1.2 1 0; }
+  .chipcol .node { flex: 0 0 auto; width: 100%; }
   .node .t { color: var(--ink-mute); font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; }
   .node .v { margin-top: 3px; }
   .node .r { color: var(--ink-2); font-variant-numeric: tabular-nums; font-size: .78rem; margin-top: 2px; }
@@ -67,7 +70,7 @@
   }
   .link.active { color: var(--chrome); }
   .host { border-color: var(--chrome); }
-  .chipcol { display: flex; flex-direction: column; gap: 8px; }
+  .chipcol { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 
   /* legend */
   .legend { display: flex; gap: 16px; align-items: center; color: var(--ink-2); font-size: .8rem; }
