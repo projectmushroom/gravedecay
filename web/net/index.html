@@ -50,27 +50,31 @@
   .dot.warn { background: var(--warn); }
   #clock { color: var(--ink-2); font-variant-numeric: tabular-nums; }
 
-  /* topology flow */
+  /* topology flow — same grid tracks as #cards so the columns align exactly;
+     flow arrows live in the grid gaps (absolutely positioned) so they cost
+     no layout space and can't nudge the columns out of alignment */
   #topo {
-    display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap;
-    margin-bottom: 16px; font-size: .82rem;
+    display: grid; gap: 12px;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    margin-bottom: 12px; font-size: .82rem;
   }
   .node {
     background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
-    padding: 8px 12px; min-width: 130px;
-    flex: 1 1 0; overflow: hidden;   /* equal columns pinned across the row — no reflow as numbers change */
+    padding: 8px 12px; position: relative; min-width: 0; overflow: hidden;
   }
-  .chipcol { flex: 1.2 1 0; }
-  .chipcol .node { flex: 0 0 auto; width: 100%; }
   .node .t { color: var(--ink-mute); font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; }
-  .node .v { margin-top: 3px; }
+  .node .v { margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .node .r { color: var(--ink-2); font-variant-numeric: tabular-nums; font-size: .78rem; margin-top: 2px; }
-  .link {
-    color: var(--ink-mute); padding: 24px 2px 0; white-space: nowrap;
+  .cell { position: relative; min-width: 0; }
+  .cell.flow::after {
+    content: "⇄"; position: absolute; top: 24px; right: -13px;
+    color: var(--ink-mute); font-size: .82rem; pointer-events: none;
   }
-  .link.active { color: var(--chrome); }
+  .cell.flow.active::after { color: var(--chrome); }
+  .cell > .node { height: 100%; }
   .host { border-color: var(--chrome); }
-  .chipcol { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .chipcol { display: flex; flex-direction: column; gap: 8px; }
+  .chipcol .node { height: auto; }
 
   /* legend */
   .legend { display: flex; gap: 16px; align-items: center; color: var(--ink-2); font-size: .8rem; }
@@ -312,8 +316,6 @@ function drawCard(name, c) {
 }
 
 /* ---- topology ---- */
-function arrow(active) { return `<span class="link${active ? " active" : ""}">⇄</span>`; }
-
 function renderTopo(s) {
   const up = s.upstream || {};
   const upIf = s.ifaces[up.dev] || {};
@@ -321,19 +323,20 @@ function renderTopo(s) {
   const ts = s.tailscale || {};
   const clientsBy = {};
   (s.clients || []).forEach(c => (clientsBy[c.iface] = clientsBy[c.iface] || []).push(c));
+  const busy = (upIf.rx_bps || 0) + (upIf.tx_bps || 0) > 1e5;
 
   let html = `
-    <div class="node"><div class="t">wan</div><div class="v">${up.gw || "?"}</div>
-      <div class="r">${up.ok ? (up.rtt != null ? up.rtt.toFixed(1) + " ms" : "ok") : "unreachable"}</div></div>
-    ${arrow(upIf.rx_bps > 1e5)}
-    <div class="node"><div class="t">${up.dev || "uplink"}</div>
-      <div class="v">${upIf.speed ? (upIf.speed >= 1000 ? upIf.speed / 1000 + " GbE" : upIf.speed + " MbE") : "link"}</div>
-      <div class="r">↓${fmt2(upIf.rx_bps || 0)} ↑${fmt2(upIf.tx_bps || 0)}</div></div>
-    ${arrow(true)}
-    <div class="node host"><div class="t">host</div><div class="v" id="topohost">${s.host || "grave"}</div>
-      <div class="r">${(s.thunderbolt || []).map(d => d.device).join(" · ") || ""}</div></div>
-    ${arrow(true)}
-    <div class="chipcol">`;
+    <div class="cell flow${busy ? " active" : ""}">
+      <div class="node"><div class="t">wan</div><div class="v">${up.gw || "?"}</div>
+        <div class="r">${up.ok ? (up.rtt != null ? up.rtt.toFixed(1) + " ms" : "ok") : "unreachable"}</div></div></div>
+    <div class="cell flow${busy ? " active" : ""}">
+      <div class="node"><div class="t">${up.dev || "uplink"}</div>
+        <div class="v">${upIf.speed ? (upIf.speed >= 1000 ? upIf.speed / 1000 + " GbE" : upIf.speed + " MbE") : "link"}</div>
+        <div class="r">↓${fmt2(upIf.rx_bps || 0)} ↑${fmt2(upIf.tx_bps || 0)}</div></div></div>
+    <div class="cell flow active">
+      <div class="node host"><div class="t">host</div><div class="v" id="topohost">${s.host || "grave"}</div>
+        <div class="r">${(s.thunderbolt || []).map(d => d.device).join(" · ") || ""}</div></div></div>
+    <div class="cell chipcol">`;
   for (const [name, i] of shares) {
     const cl = (clientsBy[name] || []).map(c => c.host || c.ip).join(", ") || "no lease";
     html += `<div class="node"><div class="t">${name}</div><div class="v">${cl}</div>
