@@ -18,19 +18,10 @@
 #
 # STATUS: stock-SteamOS support. Refine on real hardware (sensor names for the
 # dashboard, controller-wake behavior, HDMI-CEC, VRAM pressure in game mode).
-conf_set() {
-  # Rewrite the key if present, else append it. A plain `sed s|^K=.*|` silently
-  # no-ops when the key is missing (an older grave.conf preserved across upgrade),
-  # so a CHECK_* invariant the profile sets would never reach `grave doctor`.
-  # Exact value already present -> skip entirely: keeps a steady-state re-raise
-  # sudo-free (#89); grave.conf is world-readable so neither check needs sudo.
-  grep -qxF "$1=$2" /etc/gravedecay/grave.conf 2>/dev/null && return 0
-  if grep -q "^$1=" /etc/gravedecay/grave.conf; then
-    sudo sed -i "s|^$1=.*|$1=$2|" /etc/gravedecay/grave.conf
-  else
-    printf '%s=%s\n' "$1" "$2" | sudo tee -a /etc/gravedecay/grave.conf >/dev/null
-  fi
-}
+# Shared helpers (conf_set). Sourced relative to THIS file: raise.sh sources
+# the profile by path, so BASH_SOURCE[0] is always the profile's own path.
+# shellcheck disable=SC1091
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 profile_apply() {
   # the appliance never sleeps; Steam's own suspend UI is bypassed by this

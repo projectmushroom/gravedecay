@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# firewall-status — read-only firewall-cmd proxy for `grave doctor`, run via
+# the scoped NOPASSWD sudoers grant. raise.sh deliberately does NOT grant raw
+# /usr/bin/firewall-cmd (see firewall-harden): this wrapper accepts exactly the
+# three read-only queries doctor needs, validates them, and rejects anything
+# else — no argument ever reaches a state-changing firewall-cmd verb.
+set -euo pipefail
+
+case "${1:-}" in
+  --state|--get-default-zone)
+    exec /usr/bin/firewall-cmd "$1" ;;
+  --info-zone=*)
+    zone=${1#--info-zone=}
+    # A zone name is the only free-form part; keep it free of option-like or
+    # shell-meaningful characters so it can never smuggle a second argument.
+    [[ "$zone" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "firewall-status: bad zone name" >&2; exit 2; }
+    exec /usr/bin/firewall-cmd --info-zone="$zone" ;;
+  *)
+    echo "firewall-status: only --state, --get-default-zone, --info-zone=<zone> are allowed" >&2
+    exit 2 ;;
+esac

@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# firewall-harden — fixed-logic firewalld default-deny setup, run via the
+# scoped NOPASSWD sudoers grant. raise.sh deliberately does NOT grant raw
+# /usr/bin/firewall-cmd: that binary can rewrite ANY firewall rule, so a grant
+# would hand the dashboard user (and anything driving it) full control of the
+# host firewall. This wrapper takes no arguments and performs exactly one
+# policy: default zone drop, allow the ssh port actually in use, trust
+# tailscale0, drop the public NICs.
+set -euo pipefail
+
+GRN=$'\e[32m'; YLW=$'\e[33m'; RST=$'\e[0m'
+ok()   { printf '  %b✓%b %s\n' "$GRN" "$RST" "$*"; }
+skip() { printf '  %b–%b %s\n' "$YLW" "$RST" "$*"; }
+
+systemctl enable --now firewalld >/dev/null
+
+# The ssh rule is load-bearing: on EC2 there is no console, so a default-deny
+# reload without the CORRECT ssh port allowed locks the box permanently.
+# `--add-service=ssh` only covers port 22 — an sshd listening elsewhere (an
+# allowed gravedecay tweak) would be firewalled out. Derive the ground truth
+# from sshd itself (`sshd -T` is the running config, already in the NOPASSWD
+# set) instead of trusting the service name.
+ssh_port=$(sshd -T 2>/dev/null | awk '$1 == "port" { print $2; exit }')
+ssh_port=${ssh_port:-22}
+
+if [[ "$(firewall-cmd --get-default-zone 2>/dev/null)" != drop ]]; then
+  firewall-cmd --set-default-zone=drop >/dev/null
+fi
+firewall-cmd --permanent --zone=drop --add-port="$ssh_port/tcp" >/dev/null
+firewall-cmd --permanent --zone=drop --add-interface=tailscale0 >/dev/null 2>&1 || true
+# Bind every non-loopback, non-docker up interface to the drop zone too, so
+# the default-deny applies to the public NIC on headless cloud boxes.
+for iface in $(ip -o link show up | awk -F': ' '{print $2}' | grep -vE '^(lo|tailscale0|docker[0-9]|br-[0-9a-f]+|veth)'); do
+  firewall-cmd --permanent --zone=drop --add-interface="$iface" >/dev/null 2>&1 || true
+done
+
+# Verify BEFORE reloading: --reload applies the permanent config in one shot,
+# so a rule that didn't take (typo, firewalld error swallowed above) must be
+# caught while the runtime config is untouched and ssh is still reachable.
+if ! firewall-cmd --permanent --zone=drop --query-port="$ssh_port/tcp" >/dev/null 2>&1; then
+  skip "firewalld: could not verify port $ssh_port/tcp in drop zone — NOT reloading (ssh left reachable)"
+  exit 1
+fi
+firewall-cmd --reload >/dev/null
+
+# `--reload` can flush iptables rules Docker installed for published container
+# ports; bounce the daemon so it re-programs them (only if it's actually in
+# use — a stopped docker stays stopped).
+if systemctl is-active --quiet docker; then
+  systemctl restart docker
+fi
+
+ok "firewalld active (default drop, allow $ssh_port/tcp + tailscale0)"

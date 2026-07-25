@@ -21,7 +21,8 @@ base image ships without it.
 these gaps before the generic ritual continues:
 
 - **Docker Compose** — there is no `docker-compose` dnf package on AL2023.
-  raise.sh fetches the official Compose plugin binary into
+  raise.sh fetches the official Compose plugin binary (arch-matched,
+  sha256-verified against the release's checksums.txt) into
   `/usr/libexec/docker/cli-plugins` instead.
 - **Node.js version** — the default `nodejs` package is v18; T3 Code needs
   `^22.16 || ^23.11 || >=24.10`. raise.sh installs `nodejs22`/`nodejs22-npm`
@@ -29,12 +30,17 @@ these gaps before the generic ritual continues:
 - **C++ toolchain** — `t3` depends on `node-pty`, a native addon; the base
   AMI has no compiler. raise.sh installs `gcc-c++` and `make`.
 - **ttyd** — not packaged for any Fedora-family dnf repo, AL2023 included.
-  raise.sh fetches the static release binary into `/usr/local/bin/ttyd`.
+  raise.sh fetches the static release binary (arch-matched, sha256-verified
+  against the release's SHA256SUMS) into `/usr/local/bin/ttyd`.
 - **firewalld** — not installed by default. raise.sh enables it, sets the
-  default zone to `drop`, and allows `ssh` + `tailscale0` + the primary NIC
-  (`ens5` on most EC2 instance types). `grave doctor`'s firewall check runs
-  through a scoped `sudo -n firewall-cmd`, since the doctor itself runs
-  unprivileged.
+  default zone to `drop`, and allows the ssh port `sshd` actually listens on
+  (derived from `sshd -T`, verified before `--reload` so a failure can't lock
+  out a console-less box) + `tailscale0` + the primary NIC (`ens5` on most EC2
+  instance types). If Docker is running, raise.sh restarts it after the reload
+  so published container ports keep working. The privileged steps run through
+  fixed-logic wrappers in `/usr/libexec/gravedecay/` (`firewall-harden` for
+  setup, read-only `firewall-status` for `grave doctor`) — raw `firewall-cmd`
+  is never in the NOPASSWD sudoers set, since it could rewrite any rule.
 - **`systemctl restart` hangs** — occasionally blocks for minutes on AL2023
   when raise.sh runs from certain remote/agent environments. raise.sh uses
   `systemctl restart --no-block` and polls the service's HTTP endpoint for
