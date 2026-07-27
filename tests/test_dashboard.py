@@ -5,6 +5,7 @@ import os
 import pathlib
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -290,6 +291,44 @@ class DashboardContractTests(unittest.TestCase):
         first = DASHBOARD.collect_repos()
         self.assertIn("repos", DASHBOARD._ttl_cache)
         self.assertIs(DASHBOARD.collect_repos(), first)
+
+    def _stub_proc_stat(self, samples):
+        """Feed collect_cpu canned /proc/stat snapshots, restoring the real
+        reader and the module's sampling state afterwards."""
+        state = (DASHBOARD._cpu_prev, DASHBOARD._cpu_prev_t, DASHBOARD._cpu_last,
+                 DASHBOARD._read_proc_stat)
+
+        def restore():
+            (DASHBOARD._cpu_prev, DASHBOARD._cpu_prev_t,
+             DASHBOARD._cpu_last, DASHBOARD._read_proc_stat) = state
+        self.addCleanup(restore)
+        calls = []
+        DASHBOARD._read_proc_stat = lambda: (calls.append(1), samples.pop(0))[1]
+        return calls
+
+    def test_cpu_usage_reports_one_percentage_per_logical_core(self):
+        # The CPU tile draws every core, so /api/state carries a percentage per
+        # logical cpu in index order (cpu10 after cpu1, not next to it). Ticks
+        # are (idle, total): cpu0 goes fully idle, cpu1 pegs, cpu10 sits at half.
+        self._stub_proc_stat([
+            {"cpu": (100, 200), "cpu0": (50, 100), "cpu1": (50, 100), "cpu10": (50, 100)},
+            {"cpu": (250, 600), "cpu0": (150, 200), "cpu1": (50, 200), "cpu10": (100, 200)},
+        ])
+        DASHBOARD._cpu_prev_t = 0.0      # first call primes the previous sample
+        DASHBOARD.collect_cpu()
+        DASHBOARD._cpu_prev_t = 0.0      # second one measures the window
+        cpu = DASHBOARD.collect_cpu()
+        self.assertEqual(cpu["cores"], [0.0, 100.0, 50.0])
+        self.assertEqual(cpu["pct"], 62.5)
+
+    def test_cpu_usage_replays_the_last_reading_inside_the_sample_window(self):
+        # Utilisation is a rate: two clients polling at once would otherwise
+        # diff a ~0 ms window and read pure noise.
+        calls = self._stub_proc_stat([{"cpu": (1, 2)}])
+        DASHBOARD._cpu_last = {"pct": 12.5, "cores": [12.5]}
+        DASHBOARD._cpu_prev_t = time.monotonic()
+        self.assertEqual(DASHBOARD.collect_cpu(), {"pct": 12.5, "cores": [12.5]})
+        self.assertEqual(calls, [])
 
     def _send_with_site(self, path, method, site, data=None):
         body = json.dumps(data).encode() if data is not None else None

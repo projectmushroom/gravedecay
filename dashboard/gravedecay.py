@@ -443,6 +443,68 @@ def collect_temps():
     return temps
 
 
+def _read_proc_stat():
+    """{"cpu": (idle_ticks, total_ticks), "cpu0": …} — the aggregate plus one
+    entry per logical cpu. Ticks are monotonic counters since boot."""
+    stats = {}
+    with open("/proc/stat") as f:
+        for line in f:
+            if not line.startswith("cpu"):
+                break            # cpu lines come first; intr/ctxt/… follow
+            parts = line.split()
+            vals = [int(x) for x in parts[1:]]
+            if len(vals) < 4:
+                continue
+            idle = vals[3] + (vals[4] if len(vals) > 4 else 0)  # idle + iowait
+            stats[parts[0]] = (idle, sum(vals))
+    return stats
+
+
+# Utilisation is a rate, so it only exists between two samples: keep the
+# previous /proc/stat snapshot module-wide and diff against it. Primed at
+# import so the first poll already reports something.
+try:
+    _cpu_prev = _read_proc_stat()
+except OSError:
+    _cpu_prev = {}
+_cpu_prev_t = time.monotonic()
+_cpu_last = {"pct": None, "cores": []}
+
+CPU_MIN_WINDOW = 1.0   # s
+
+
+def collect_cpu():
+    """Busy percentage for the whole package and for every logical cpu, over
+    the window since the last call (the dashboard polls every 5 s). Two
+    clients polling at once would otherwise race to a ~0 ms window and read
+    pure noise, so anything inside CPU_MIN_WINDOW replays the last reading."""
+    global _cpu_prev, _cpu_prev_t, _cpu_last
+    now = time.monotonic()
+    if now - _cpu_prev_t < CPU_MIN_WINDOW:
+        return _cpu_last
+    try:
+        cur = _read_proc_stat()
+    except OSError:
+        return _cpu_last
+    prev, _cpu_prev, _cpu_prev_t = _cpu_prev, cur, now
+
+    def busy(key):
+        if key not in prev or key not in cur:
+            return None
+        d_idle = cur[key][0] - prev[key][0]
+        d_total = cur[key][1] - prev[key][1]
+        if d_total <= 0:
+            return None
+        return round(min(100.0, max(0.0, (1 - d_idle / d_total) * 100)), 1)
+
+    # sorted by cpu index, not by string, so cpu10 doesn't land next to cpu1
+    keys = sorted((k for k in cur if k != "cpu" and k[3:].isdigit()),
+                  key=lambda k: int(k[3:]))
+    cores = [busy(k) for k in keys]
+    _cpu_last = {"pct": busy("cpu"), "cores": [c for c in cores if c is not None]}
+    return _cpu_last
+
+
 def collect_system():
     with open("/proc/loadavg") as f:
         load1, load5, load15 = f.read().split()[:3]
@@ -462,7 +524,7 @@ def collect_system():
     mem_avail = mem.get("MemAvailable", 0)
     return {
         "load": [float(load1), float(load5), float(load15)],
-        "ncpu": os.cpu_count(),
+        "ncpu": os.cpu_count(), "cpu": collect_cpu(),
         "mem": {"total_kb": mem_total, "used_kb": mem_total - mem_avail,
                 "pct": round((mem_total - mem_avail) / mem_total * 100, 1)},
         "disks": disks, "uptime_s": int(uptime), "temps": collect_temps(),
@@ -1939,6 +2001,13 @@ button.busy{opacity:.6;cursor:wait}
 .meter.warn i{background:repeating-linear-gradient(90deg,var(--warn) 0 5px,transparent 5px 7px)}
 .meter.crit{background:var(--track-crit)}
 .meter.crit i{background:repeating-linear-gradient(90deg,var(--crit) 0 5px,transparent 5px 7px)}
+/* per-core cpu: one column per logical cpu, each a meter stood on its end */
+.cores{display:flex;align-items:flex-end;gap:2px;height:24px;margin-top:8px}
+.cores i{flex:1 1 0;min-width:2px;height:100%;background:var(--track-blue);
+  border:1px solid var(--hairline);display:flex;align-items:flex-end}
+.cores b{display:block;width:100%;background:var(--good);box-shadow:0 0 4px var(--good)}
+.cores b.warn{background:var(--warn);box-shadow:0 0 4px var(--warn)}
+.cores b.crit{background:var(--crit);box-shadow:0 0 4px var(--crit)}
 /* tables */
 table{width:100%;max-width:100%;border-collapse:collapse;font-size:13px}
 td{min-width:0;padding:4px 8px 4px 0;border-top:1px dashed var(--hairline);
@@ -2383,7 +2452,7 @@ $('epitaph').textContent=[
   'buried, not broken.',
 ][Math.floor(Math.random()*8)];
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const hist={load:[],cpu:[]};   // client-side sparkline history (last 60 polls)
+const hist={cpu:[]};   // client-side sparkline history (last 60 polls)
 function push(k,v){if(v==null)return;hist[k].push(v);if(hist[k].length>60)hist[k].shift();}
 function spark(k){
   const d=hist[k]; if(d.length<2) return '';
@@ -2398,6 +2467,14 @@ function spark(k){
   </svg>`;
 }
 function meterClass(p){return p>92?'crit':p>80?'warn':''}
+// one bar per logical cpu — a pegged core is visible even when the package
+// average looks calm. Empty until the second poll (a rate needs two samples).
+function cores(list){
+  if(!list||!list.length) return '';
+  return `<div class="cores" role="img" aria-label="per-core cpu usage">`+list.map((p,i)=>
+    `<i title="cpu${i} — ${p}%"><b class="${meterClass(p)}" style="height:${Math.max(4,Math.round(p))}%"></b></i>`
+  ).join('')+`</div>`;
+}
 function meter(p){return `<div class="meter ${meterClass(p)}"><i style="width:${Math.min(p,100)}%"></i></div>`}
 function tile(label,value,sub,extra){return `<div class="tile"><div class="label">${label}</div>
   <div class="value">${value}</div>${sub?`<div class="sub">${sub}</div>`:''}${extra||''}</div>`}
@@ -2546,9 +2623,12 @@ function render(s){
   document.querySelector('[data-act="gaming"]').disabled=(s.mode==='gaming');
   document.querySelector('[data-act="developer"]').disabled=(s.mode==='developer');
   const sys=s.system,t=sys.temps;
-  push('load',sys.load[0]); push('cpu',t.cpu);
+  const cpu=sys.cpu||{pct:null,cores:[]};
+  push('cpu',t.cpu);
   $('tiles').innerHTML=
-    tile('Load (1 m)',sys.load[0].toFixed(2),`${sys.load[1].toFixed(2)} / ${sys.load[2].toFixed(2)} · ${sys.ncpu} cores`,spark('load'))+
+    tile('CPU',cpu.pct!=null?Math.round(cpu.pct)+'%':'—',
+      `load ${sys.load[0].toFixed(2)} / ${sys.load[1].toFixed(2)} / ${sys.load[2].toFixed(2)} · ${sys.ncpu} cores`,
+      cores(cpu.cores))+
     tile('CPU temp',t.cpu!=null?Math.round(t.cpu)+'°':'—','package',spark('cpu'))+
     tile('GPU temp',t.gpu!=null?Math.round(t.gpu)+'°':'—',
       t.gpu_mhz?`sclk ${t.gpu_mhz} MHz`:(t.gpu_state==='suspended'?'runtime suspended':esc(t.gpu_state||'')))+
