@@ -296,22 +296,26 @@ elif command -v dnf >/dev/null; then
   # doesn't have these particular gaps, so scope the extra packages to amzn.
   AMZN_LINUX=0
   grep -qE '^ID="?amzn"?$' /etc/os-release 2>/dev/null && AMZN_LINUX=1
+  DNF_PKGS=(git tmux curl jq python3 docker lm_sensors python3-pillow python3-cryptography)
+  DNF_FLAGS=()
   if [[ "$AMZN_LINUX" == 1 ]]; then
+    DNF_PKGS+=(nodejs22 nodejs22-npm gcc-c++ make firewalld)
     # AL2023's base AMI ships curl-minimal, which dnf treats as conflicting
     # with the full curl package — without --allowerasing the whole install
     # transaction fails and nothing gets installed.
-    sudo dnf install -y --allowerasing git tmux curl jq python3 docker nodejs22 nodejs22-npm \
-      gcc-c++ make lm_sensors python3-pillow python3-cryptography firewalld \
-      || skip "some packages failed — fix names for your distro and rerun"
+    DNF_FLAGS+=(--allowerasing)
+  else
+    DNF_PKGS+=(docker-compose nodejs npm)
+  fi
+  sudo dnf install -y "${DNF_FLAGS[@]}" "${DNF_PKGS[@]}" \
+    || skip "some packages failed — fix names for your distro and rerun"
+  if [[ "$AMZN_LINUX" == 1 ]]; then
     sudo alternatives --set node /usr/bin/node-22 >/dev/null 2>&1 || true
     # `|| true` above swallows a failed alternatives switch — and T3 Code hard
     # requires node ^22.16 || ^23.11 || >=24.10, so verify the ACTIVE node
     # rather than trusting the command ran.
     node_major=$(node -v 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')
     [[ "${node_major:-0}" -ge 22 ]] || skip "node 22 not active (node -v: $(node -v 2>/dev/null || echo missing)) — run: sudo alternatives --set node /usr/bin/node-22"
-  else
-    sudo dnf install -y git tmux curl jq python3 docker docker-compose nodejs npm \
-      lm_sensors python3-pillow python3-cryptography || skip "some packages failed — fix names for your distro and rerun"
   fi
 
   # docker-compose isn't a real dnf package on Amazon Linux 2023 (and dnf's
