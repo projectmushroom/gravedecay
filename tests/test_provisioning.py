@@ -8,7 +8,8 @@ GRAVE = (ROOT / "bin/grave").read_text()
 INSTALL = (ROOT / "install.sh").read_text()
 TOOLCHAIN = (ROOT / "steamos-toolchain.sh").read_text()
 T2 = (ROOT / "profiles/t2-macbook.sh").read_text()
-PROFILES = [ROOT / "profiles" / f"{n}.sh" for n in ("generic", "t2-macbook", "steam-machine")]
+PROFILES = [ROOT / "profiles" / f"{n}.sh" for n in ("generic", "aws", "t2-macbook", "steam-machine")]
+PROFILES_LIB = (ROOT / "profiles/lib.sh").read_text()
 
 
 class ProvisioningSafetyTests(unittest.TestCase):
@@ -71,7 +72,7 @@ class ProvisioningSafetyTests(unittest.TestCase):
         self.assertIn('[[ "$SUDOERS_FILE" == /etc/sudoers.d/* ]] || SUDOERS_FILE=""', RAISE)
         self.assertIn("sudo -n ls /etc/sudoers.d/", RAISE)
         self.assertIn('printf \'%s\\n%s\\n\' "$SUDOERS_FILE" "$sudoers_hash" >"$sudoers_stamp"', RAISE)
-        self.assertIn("tailscale serve status >/dev/null 2>&1 || sudo tailscale set", RAISE)
+        self.assertIn("sudo -n tailscale set --operator", RAISE)
         self.assertIn("stat -c '%G %a' /run/tailscale/tailscaled.sock", RAISE)
         # the classic offenders must be gone from raise.sh entirely
         self.assertNotIn("sudo sed -i", RAISE)
@@ -84,24 +85,25 @@ class ProvisioningSafetyTests(unittest.TestCase):
 
     def test_profile_conf_set_skips_when_value_already_set(self):
         # Regression #89: profiles run on every raise; conf_set must be a
-        # sudo-free no-op when the key already holds the exact value.
+        # sudo-free no-op when the key already holds the exact value. conf_set
+        # lives in profiles/lib.sh, sourced by every profile.
+        self.assertIn(
+            'grep -qxF "$1=$2" /etc/gravedecay/grave.conf 2>/dev/null && return 0',
+            PROFILES_LIB, "lib.sh: conf_set rewrites (and sudos) unconditionally")
         for profile in PROFILES:
             text = profile.read_text()
-            self.assertIn(
-                'grep -qxF "$1=$2" /etc/gravedecay/grave.conf 2>/dev/null && return 0',
-                text, f"{profile.name}: conf_set rewrites (and sudos) unconditionally")
+            self.assertIn('source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"', text,
+                          f"{profile.name}: does not source profiles/lib.sh")
 
     def test_conf_set_appends_a_missing_key(self):
         # Regression #52: a plain `sed s|^K=.*|` no-ops when the key is absent, so
         # a CHECK_* invariant never reaches doctor on an upgraded box with an older
         # grave.conf. conf_set must append when the key is missing.
-        for profile in PROFILES:
-            text = profile.read_text()
-            self.assertIn('sudo tee -a /etc/gravedecay/grave.conf', text,
-                          f"{profile.name}: conf_set does not append missing keys")
-            self.assertNotIn(
-                'conf_set() { sudo sed -i "s|^$1=.*|$1=$2|" /etc/gravedecay/grave.conf; }',
-                text, f"{profile.name}: still uses the no-op-on-missing conf_set")
+        self.assertIn('sudo tee -a /etc/gravedecay/grave.conf', PROFILES_LIB,
+                      "lib.sh: conf_set does not append missing keys")
+        self.assertNotIn(
+            'conf_set() { sudo sed -i "s|^$1=.*|$1=$2|" /etc/gravedecay/grave.conf; }',
+            PROFILES_LIB, "lib.sh: still uses the no-op-on-missing conf_set")
 
 
     def test_raise_is_idempotent_on_rerun(self):

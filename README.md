@@ -67,7 +67,7 @@ on first raise; every other system leaves it off unless you opt in.
 SSH into the fresh box, install your coding agent, and say:
 
 > Clone `https://github.com/projectmushroom/gravedecay`, read `AGENTS.md`,
-> and raise this box. Host profile: `<generic | t2-macbook | steam-machine>`.
+> and raise this box. Host profile: `<generic | aws | t2-macbook | steam-machine>`.
 
 The agent runs the ritual, fixes distro quirks, walks you through the two
 interactive steps (Tailscale login, T3 pairing), and hands you a passing
@@ -368,6 +368,11 @@ Machine-specific quirks live in `profiles/*.sh`, applied once by
 
 - **generic** — any always-on dev box; masks suspend by default. Gaming stays
   out of the main UI unless you opt in with `grave gamewatch on`.
+- **aws** — an EC2 instance (tested: t3.medium, Amazon Linux 2023). Same
+  always-on shape as `generic`, with `CHECK_FIREWALL` set explicitly since a
+  cloud box has a real public IP. `raise.sh`'s `dnf` branch auto-detects
+  Amazon Linux 2023 (no `docker-compose` package, `nodejs` too old for T3,
+  `ttyd` unpackaged) and fills the gaps; see [docs/AWS.md](docs/AWS.md).
 - **t2-macbook** — Intel T2 Macs: sleep masked, lid ignored, amdgpu pinned to
   a fixed DPM state (dGPU crash workaround).
 - **steam-machine** — stock SteamOS (immutable rootfs). Durable toolchain under
@@ -400,6 +405,7 @@ is in `docs/SECRETS.md`.
 |---|---|
 | [AGENTS.md](AGENTS.md) | Playbook for the coding agent doing the install |
 | [docs/STEAMOS.md](docs/STEAMOS.md) | Raising on stock SteamOS (immutable rootfs): durable toolchain, update-survival |
+| [docs/AWS.md](docs/AWS.md) | Raising on EC2 (Amazon Linux 2023): package gaps, `--profile aws`, security group |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Why native-first, layout, mode model |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, tailnet-only, sudoers scope, terminal trust |
 | [docs/SECRETS.md](docs/SECRETS.md) | Secrets + MCP wiring for agent CLIs |

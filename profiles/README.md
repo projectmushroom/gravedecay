@@ -6,14 +6,15 @@ is a bash file defining `profile_apply()`. Rules:
 - Idempotent — applying twice changes nothing.
 - Every invariant a profile establishes gets a matching `CHECK_*=1` flag in
   `/etc/gravedecay/grave.conf` so `grave doctor` enforces it forever. Use the
-  `conf_set` helper.
+  `conf_set` helper from `profiles/lib.sh`.
 - Comment the *why* (the crash, the errata link), not just the what.
 
 Template:
 
 ```bash
 # profiles/myhost.sh — <one line: what hardware, what quirk>
-conf_set() { sudo sed -i "s|^$1=.*|$1=$2|" /etc/gravedecay/grave.conf; }
+# shellcheck disable=SC1091
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 profile_apply() {
   # ... drop-ins, masks, services ...

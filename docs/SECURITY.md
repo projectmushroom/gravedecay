@@ -37,8 +37,11 @@ people—not mutually hostile or public tenants.
 ## The sudoers file
 
 `raise.sh` installs `/etc/sudoers.d/50-gravedecay`: NOPASSWD for your user on
-`systemctl`, `docker`, `grave`, `journalctl`, `ufw`, `snapper`, `sshd -T` —
-what `grave` and gravedecay's action buttons need. The authorized `grave` root
+`systemctl`, `docker`, `grave`, `journalctl`, `ufw`, `snapper`, `sshd -T`, and
+the fixed-logic firewall wrappers `/usr/libexec/gravedecay/firewall-harden`
+(no-argument default-deny setup) and `firewall-status` (read-only queries for
+`grave doctor`) — raw `firewall-cmd` is deliberately never granted, since it
+can rewrite any firewall rule. The authorized `grave` root
 helper creates the transient gaming auto-thaw timer without granting direct
 `systemd-run` access. This is effectively
 root-equivalent for *your* user (systemctl alone gets you there); the point is
