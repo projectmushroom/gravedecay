@@ -61,6 +61,47 @@ default `~/.t3` profile, which is a second relay identity this contract does
 not cover. All `grave` tooling pins `--base-dir` to the appliance instance
 for exactly that reason.
 
+### Freeing a managed-tunnel slot
+
+A `full` link can be refused with `403 POST
+https://relay.t3.codes/v1/client/environment-links` while everything local
+looks correct — authorized, link desired, relay client installed. Upstream's
+contract (`packages/contracts/src/relay.ts`) maps exactly two codes to 403 on
+that endpoint: `environment_connect_not_authorized` and
+`environment_link_limit_exceeded` ("this account allows at most N tunnels").
+T3 Code logs the status but **discards the response body**, so the code never
+reaches the journal — the limit is the usual culprit, and the desktop app is
+the usual holder (it links the default `~/.t3` profile).
+
+Two facts make this harder than it should be:
+
+- `t3 connect unlink` does attempt the server-side revoke, but **degrades to
+  local-only when that profile holds no CLI credential** — which is exactly
+  the desktop app's state (`authenticated: false`, `linked: true`). It prints
+  "T3 Connect is disabled locally" and the slot stays taken.
+- The relay exposes **no list endpoint and no web UI** for environment links —
+  only `DELETE /v1/client/environment-links/:environmentId`. There is no page
+  to go and tidy this up on.
+
+So release the slot by id. The id and a bearer both survive on disk:
+
+```sh
+ENV=$(cat ~/.t3/userdata/environment-id)          # the stray profile's id
+TOK=$(jq -r .accessToken \
+  "$GRAVE_ROOT/agents/t3code/userdata/secrets/cloud-cli-oauth-token.bin")
+curl -fsS -X DELETE -H "Authorization: Bearer $TOK" \
+  "https://relay.t3.codes/v1/client/environment-links/$ENV"   # -> {"ok":true}
+sudo systemctl restart t3code
+grave t3 connect status                            # linked: yes, relay: https://…
+```
+
+Any valid bearer for the account authorizes the delete, so the appliance's own
+token works on another environment's link. Deleting is reversible — relinking
+the desktop app re-registers it, and takes the slot back.
+
+`publish` mode consumes no tunnel slot, so it stays available when the limit
+is genuinely full.
+
 ## The sudoers file
 
 `raise.sh` installs `/etc/sudoers.d/50-gravedecay`: NOPASSWD for your user on
