@@ -3,6 +3,19 @@
 The box serves web UIs only (docs/PORTS.md); native clients are thin shells
 over the same origins and never require new listening ports on the box.
 
+- **The official T3 Code apps** (iOS / Android / desktop) are first-class
+  clients for the *T3 half* of the appliance and usually the nicest way to
+  drive agents from a phone. Two ways to hook them up:
+  1. **Pairing token over the tailnet** — Tailscale on the device, then
+     ⚙️ settings → 🔑 New T3 pairing token, same as any browser. No Connect
+     account needed.
+  2. **T3 Connect** — `grave t3 connect publish` (notifications/Live
+     Activities while transport stays the tailnet) or `full` (managed relay,
+     no VPN needed on the device). See the trust note in SECURITY.md; doctor
+     enforces the declared mode.
+  The official apps drive T3 only — the dashboard (system overview, controls,
+  files, terminal, gravenet) stays on the tailnet origin / PWA.
+
 - **iOS / macOS** — `clients/apple/`. SwiftUI app with webview panes for T3
   and the dashboard, a native SwiftTerm terminal speaking the ttyd protocol
   (the same one `web/term/app.js` documents), and an optional embedded

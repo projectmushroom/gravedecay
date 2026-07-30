@@ -34,6 +34,33 @@ people—not mutually hostile or public tenants.
    git-ignored, delivered via systemd `EnvironmentFile=` — never in unit
    files, shell configs, or agent JSON configs (use `${VAR}` expansion).
 
+## T3 Connect (the one sanctioned exception to tailnet-only)
+
+T3 Code's official apps (iOS/Android/desktop) can reach the box through
+upstream's managed relay instead of the tailnet. This is **off by default**
+and opt-in per box via `grave t3 connect <mode>`:
+
+- **`publish`** keeps the tailnet as the only transport and only pushes agent
+  *activity* (notifications, Live Activities) to your signed-in apps — no
+  tunnel, no inbound path. This is the recommended mode.
+- **`full`** lets the appliance's T3 server run a managed outbound tunnel
+  (`cloudflared` → `relay.t3.codes`), making it reachable from the official
+  apps without Tailscale. Understand the trade before enabling: your agent
+  sessions, terminals, and diffs transit T3's relay infrastructure, access is
+  gated by their Clerk account auth (scoped capability tokens), and upstream
+  does not document end-to-end encryption across the relay — assume the relay
+  operator is in the traffic path. Nothing new *listens* (the tunnel is
+  outbound-only) and the firewall posture is unchanged, but the trust boundary
+  now includes a third party.
+
+The declared mode lives in `config/t3-connect.mode` and **doctor enforces
+it**: link state must match the declaration, `publish` must not have a tunnel
+process, `off` must have neither. Doctor also warns about Connect identities
+outside the appliance instance — a bare `t3` run or the desktop app links the
+default `~/.t3` profile, which is a second relay identity this contract does
+not cover. All `grave` tooling pins `--base-dir` to the appliance instance
+for exactly that reason.
+
 ## The sudoers file
 
 `raise.sh` installs `/etc/sudoers.d/50-gravedecay`: NOPASSWD for your user on

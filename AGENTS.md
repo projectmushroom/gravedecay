@@ -37,6 +37,13 @@ are expected to solve yourself: package name differences (`docker` vs
    equivalent: `t3 auth pairing create --base-dir $GRAVE_ROOT/agents/t3code`.
    The human opens the link on the device to enroll it. Agent provider logins (Claude/OpenAI) happen inside the T3 UI or
    via `claude` / `codex login` in a `grave agents new setup` tmux session.
+3. **T3 Connect** (optional): if the human wants the official T3 apps —
+   `grave t3 connect publish` (phone notifications, transport stays tailnet;
+   recommended) or `full` (managed relay tunnel, no VPN needed on devices;
+   read the trust note in `docs/SECURITY.md` first). Both print an auth URL +
+   code prompt for the human. Never run bare `t3 connect …` — it links the
+   default `~/.t3` profile instead of the appliance instance and doctor will
+   flag it as a stray identity.
 
 ## 3. Verify
 

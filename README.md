@@ -26,12 +26,17 @@ on first raise; every other system leaves it off unless you opt in.
         │                                                                         │
         │  /srv/dev/{repos,agents,docker,config,logs,scripts,backups,docs}        │
         │  grave <cmd> — one CLI to rule the box                                  │
-        └────────────────────────────┬────────────────────────────────────────────┘
-                                     │ tailscale serve — ONE https origin:
-                                     │   /grave = gravedecay  / = T3  /term = terminal  /net = gravenet
-                     ┌───────────────┼───────────────┐
-                  laptop           iPhone          iPad
-                     └── gravedecay PWA (/grave/) — THE entry point ──┘
+        └──────────────┬─────────────────────────────┬────────────────────────────┘
+                       │ tailscale serve —           │ T3 Connect (opt-in) —
+                       │ ONE https origin:           │ outbound relay tunnel or
+                       │   /grave = gravedecay       │ notifications-only publish
+                       │   /      = T3               │
+                       │   /term  = terminal         │
+                       │   /net   = gravenet         │
+             ┌─────────┴─────────┐             ┌─────┴──────┐
+          laptop    iPhone     iPad         official T3 apps
+             └─ gravedecay PWA (/grave/) ─┘   (iOS/Android/desktop)
+                the system overview & controller      drive the agents
 ```
 
 ![the gravedecay dashboard — Work tab](assets/dashboard.png)
@@ -45,7 +50,9 @@ on first raise; every other system leaves it off unless you opt in.
 2. **Tailnet-only.** Everything binds `127.0.0.1`; the only ways in are
    Tailscale (`tailscale serve` for the HTTPS origin, Tailscale SSH as
    fallback) and key-only sshd. Firewall is default-deny. No port
-   forwarding, ever.
+   forwarding, ever. One sanctioned, off-by-default exception: `grave t3
+   connect` can let the official T3 apps in via upstream's managed relay —
+   an *outbound* tunnel, doctor-enforced, trade-offs in `docs/SECURITY.md`.
 3. **Dev box first; gaming when needed.** Non-SteamOS hosts default to a clean
    dev-only dashboard. `grave gamewatch on` adds the gaming switches and
    automatic detection on any supported host. `grave gaming` then frees
@@ -153,9 +160,14 @@ for stability, or ride main if the box is also where you hack on gravedecay.
 
 ## Connecting a device (phone, laptop, tablet)
 
-The box is reachable **only** over your Tailscale network — there is no
-public URL and no port forwarding. Every device you want to use it from
-needs Tailscale installed and switched on:
+Two routes. They compose — most boxes want the tailnet for the appliance
+plus the official T3 apps for driving agents.
+
+### Route A — the tailnet (the appliance)
+
+The box's own UIs are reachable **only** over your Tailscale network — no
+public URL, no port forwarding. Every device you want the *dashboard,
+terminal, files, or gravenet* from needs Tailscale installed and on:
 
 1. **Install the Tailscale app** on the client:
    [iOS](https://apps.apple.com/app/tailscale/id1470499037) ·
@@ -174,14 +186,42 @@ needs Tailscale installed and switched on:
    check the [Tailscale admin console](https://login.tailscale.com/admin/machines).
    Add it to your Home Screen (iOS: Share → Add to Home Screen) or Dock
    (macOS Safari: File → Add to Dock).
-5. **Pair T3 Code**: first time you open T3 on a new device it asks for a
-   token — mint one from ⚙️ settings → **🔑 New T3 pairing token** on any
-   already-paired device, and tap the printed `/pair` link on the new one.
+5. **Pair T3's web UI** (optional if you use the official apps): mint a token
+   from ⚙️ settings → **🔑 New T3 pairing token** on any already-paired
+   device, and tap the printed `/pair` link on the new one.
 
-That's it — the device now reaches the dashboard, T3, and the terminal from
-anywhere (cellular included), end-to-end encrypted by the tailnet.
+Everything over this route is end-to-end encrypted by the tailnet.
 
-## The dashboard — gravedecay is the front door
+### Route B — the official T3 apps (driving the agents)
+
+T3 Code ships real clients —
+[iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824) ·
+[Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code) ·
+desktop — and they're usually the nicest way to run agents from a phone or a
+second computer. Hook them to the box either way:
+
+- **Over the tailnet** (no extra account): device runs Tailscale, then mint a
+  pairing token — the token console also prints a `t3code://pair?…` link that
+  opens the app pre-filled.
+- **Over T3 Connect** (no VPN on the device): `grave t3 connect full` links
+  the box's T3 instance to your T3 Connect account through upstream's managed
+  relay. Or keep the tailnet as the only transport and still get phone push +
+  Live Activities with `grave t3 connect publish`. Doctor enforces whichever
+  mode you declare; the trust trade-offs live in `docs/SECURITY.md`.
+  (Connect's free tier allows 3 managed tunnels per account; a publish-only
+  link doesn't use one.)
+
+The official apps drive T3 only. The dashboard — the system overview and
+controller — stays on Route A, and its T3 tile can be pointed at either the
+web UI or the official app (⚙️ settings → "T3 tile opens").
+
+## The dashboard — the system overview & controller
+
+gravedecay's own UI is the *appliance* surface: what the box is doing
+(vitals, services, agents, spend, PRs, CI), and the levers to control it
+(modes, updates, doctor, notifications, Connect). Driving the agents
+themselves is T3's job — via the official T3 apps or the bundled T3 web UI,
+whichever you set the tile to.
 
 Install the PWA / macOS web app from `https://<box>.<tailnet>.ts.net/grave/`.
 Everything on the box is one tap from there, all same-origin so navigation
@@ -227,8 +267,9 @@ permission/approval gates off; power-tool for this single-human box, see
 `docs/SECURITY.md`), refresh rate, **one-tap T3 pairing tokens** (mints a
 15-minute token + ready `/pair` link for enrolling a new phone/laptop),
 re-auth Claude/Codex/GitHub (opens the terminal running the real login flow),
-Linear API key, and **🔔 notifications** — enroll this device for Web Push,
-set the ntfy channel, choose which events page you, send a test.
+**T3 Connect** (link/unlink the official-apps route and pick what the T3 tile
+opens), Linear API key, and **🔔 notifications** — enroll this device for Web
+Push, set the ntfy channel, choose which events page you, send a test.
 
 Mode flips and doctor runs stream their real output live into a
 terminal-styled **boot console** — burial and startup sequences, line by line.
@@ -346,6 +387,9 @@ grave agents new mybot [dir]     # persistent tmux agent session
 grave agents attach mybot        # detach: Ctrl-b d — session survives
 grave docker ps|up|down|logs     # stack management
 grave preview 3000               # expose a dev server at https://<box>.ts.net:3000
+grave t3 connect publish|full|off  # official T3 apps: notifications-only or
+                                 # managed relay (docs/SECURITY.md); doctor
+                                 # enforces the declared mode
 grave logs t3|dash|term|<unit>   # follow logs
 grave update                     # snapshot (if snapper), update pkgs/npm/images
 grave backup / restore           # git bundles + configs + docker volumes
@@ -407,7 +451,8 @@ is in `docs/SECRETS.md`.
 | [docs/STEAMOS.md](docs/STEAMOS.md) | Raising on stock SteamOS (immutable rootfs): durable toolchain, update-survival |
 | [docs/AWS.md](docs/AWS.md) | Raising on EC2 (Amazon Linux 2023): package gaps, `--profile aws`, security group |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Why native-first, layout, mode model |
-| [docs/SECURITY.md](docs/SECURITY.md) | Threat model, tailnet-only, sudoers scope, terminal trust |
+| [docs/SECURITY.md](docs/SECURITY.md) | Threat model, tailnet-only, T3 Connect trade-offs, sudoers scope, terminal trust |
+| [docs/CLIENTS.md](docs/CLIENTS.md) | Clients: official T3 apps (tailnet or T3 Connect), the native Apple shell |
 | [docs/SECRETS.md](docs/SECRETS.md) | Secrets + MCP wiring for agent CLIs |
 | [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md) | Notifications: Web Push to the PWA + ntfy — agents, failing units, and doctor page your phone |
 | [docs/PORTS.md](docs/PORTS.md) | Every port, documented or it doesn't exist |

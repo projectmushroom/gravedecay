@@ -29,5 +29,11 @@ Dev servers still bind loopback; `grave preview <port>` runs `tailscale serve
 served at the port root, not a path, so HMR/websockets/absolute URLs work with
 no per-project config. Previews persist until `grave preview off <port>`.
 
+T3 Connect (`grave t3 connect full`) adds **no listener**: the T3 server
+opens an outbound `cloudflared` tunnel to upstream's relay. It widens the
+box's reachability without touching this table — the invariant for it lives
+in `grave doctor` (declared mode vs. link/tunnel state), and the trust trade
+is documented in SECURITY.md.
+
 Audit: `sudo ss -tlnp` and `sudo docker ps --format '{{.Names}} {{.Ports}}'`;
 `grave preview list` for what's currently exposed.
