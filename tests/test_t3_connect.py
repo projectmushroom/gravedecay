@@ -7,6 +7,7 @@ GRAVE = (ROOT / "bin/grave").read_text()
 WEBTERM = (ROOT / "bin/webterm").read_text()
 DASHBOARD = (ROOT / "dashboard/gravedecay.py").read_text()
 GATEWAY = (ROOT / "dashboard/gateway.py").read_text()
+TERM_APP = (ROOT / "web/term/app.js").read_text()
 
 
 class T3ConnectContractTests(unittest.TestCase):
@@ -55,6 +56,35 @@ class T3ConnectContractTests(unittest.TestCase):
             self.assertIn(arg, DASHBOARD)
         self.assertIn('auth-t3publish) [[ "$WORKSPACE_ROLE" == admin ]]', WEBTERM)
         self.assertIn('auth-t3full)    [[ "$WORKSPACE_ROLE" == admin ]]', WEBTERM)
+
+    def test_one_shot_flows_do_not_reconnect_and_re_run(self):
+        # Regression: a finished `auth-*` flow closes the socket,
+        # the frontend reconnected in 300 ms, and ttyd re-ran webterm — so
+        # `grave t3 connect full` relinked and restarted t3code every ~3 s,
+        # killing every agent session. A one-shot that OPENED then closed is
+        # finished; only a socket that never opened may retry.
+        self.assertIn("arg=auth-", TERM_APP)
+        self.assertIn("if (oneShot && opened) {", TERM_APP)
+
+    def test_one_shot_prefix_is_documented_where_sessions_are_declared(self):
+        # The frontend keys off the name, so the coupling has to be visible in
+        # webterm or the next run-once session quietly loops.
+        self.assertIn("auth-", WEBTERM)
+        self.assertIn("one-shot", WEBTERM)
+
+    def test_status_checks_the_relay_link_not_just_local_intent(self):
+        # `.desired` restates the mode file; the relay can refuse the link
+        # (403) and leave `.linked` false. Reporting "matches declared mode"
+        # off intent alone printed a green tick over an unreachable box.
+        self.assertIn("elif ! t3c_is '.linked' \"$json\"; then", GRAVE)
+        self.assertNotIn(
+            'publish|full) t3c_is \'.desired\' "$json" && ok "matches declared mode"', GRAVE)
+
+    def test_stray_profile_warning_tests_linked_state(self):
+        # The desktop app links WITHOUT setting the CLI desired flag, so a
+        # `.desired`-only probe never fired on the profile actually holding
+        # the account's environment.
+        self.assertIn("t3c_is '.desired or .linked'", GRAVE)
 
     def test_headless_flag_is_used_for_linking(self):
         # The box has no browser: without --headless the CLI attempts a
