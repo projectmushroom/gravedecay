@@ -214,9 +214,11 @@ cmd_t3_connect() { # grave t3 connect [status|publish|full|off]
               bad "drift: mode is $desired but no link desired — 'grave t3 connect $desired'"
             elif ! t3c_is '.linked' "$json"; then
               bad "mode is $desired and a link is desired, but the relay has NOT linked this environment"
-              say "     the official apps cannot reach this box. Check for another"
-              say "     environment holding the account's link (the desktop app, ~/.t3)"
-              say "     and remove it in your T3 Connect account, then restart t3code."
+              say "     the official apps cannot reach this box. The usual cause is the"
+              say "     account's managed-tunnel limit, held by another environment (the"
+              say "     desktop app links ~/.t3). The relay has no list endpoint and no web"
+              say "     UI — free a slot by deleting that environment BY ID, then restart"
+              say "     t3code. See 'Freeing a managed-tunnel slot' in docs/SECURITY.md."
             elif [[ "$desired" == full ]] && ! t3c_is '.relayUrl' "$json"; then
               bad "linked but no relay provisioned — mode full expects a relay URL"
             else
@@ -1303,7 +1305,7 @@ cmd_doctor() { # grave doctor [--no-page]
   # while the stray profile held the account's environment — the appliance's
   # own link then 403s with nothing pointing at the cause.
   if [[ -d "$HOME/.t3" ]] && t3c_is '.desired or .linked' "$(t3 connect status --json 2>/dev/null)"; then
-    say "  ${YLW}– stray T3 Connect link on the default t3 profile (~/.t3) — not this appliance's instance. It may hold the account's environment link and make this box's link fail; 't3 connect unlink' it (and remove the environment in your T3 account) if unintended${RST}"
+    say "  ${YLW}– stray T3 Connect link on the default t3 profile (~/.t3) — not this appliance's instance. It may hold a managed-tunnel slot and make this box's link 403; 't3 connect unlink' it if unintended, and check the slot was really released (unlink degrades to local-only when that profile holds no CLI credential — see docs/SECURITY.md)${RST}"
   fi
   if pgrep -af 'cloudflared.*tunnel run' 2>/dev/null | grep -v "$T3_BASE_DIR" | grep -q .; then
     say "  ${YLW}– a relay tunnel is running outside the appliance T3 instance (desktop app?) — the box is exposed beyond the declared Connect mode${RST}"

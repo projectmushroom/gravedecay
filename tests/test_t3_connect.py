@@ -8,6 +8,7 @@ WEBTERM = (ROOT / "bin/webterm").read_text()
 DASHBOARD = (ROOT / "dashboard/gravedecay.py").read_text()
 GATEWAY = (ROOT / "dashboard/gateway.py").read_text()
 TERM_APP = (ROOT / "web/term/app.js").read_text()
+SECURITY_DOC = (ROOT / "docs/SECURITY.md").read_text()
 
 
 class T3ConnectContractTests(unittest.TestCase):
@@ -85,6 +86,19 @@ class T3ConnectContractTests(unittest.TestCase):
         # `.desired`-only probe never fired on the profile actually holding
         # the account's environment.
         self.assertIn("t3c_is '.desired or .linked'", GRAVE)
+
+    def test_403_guidance_points_at_the_real_remedy(self):
+        # The first cut of this message sent operators to a "T3 Connect
+        # account" page that does not exist: the relay has no list endpoint
+        # and no web UI, only DELETE by environment id. It must not invent a
+        # destination, and the documented procedure has to be reachable.
+        self.assertNotIn("remove it in your T3 Connect account", GRAVE)
+        self.assertNotIn("remove the environment in your T3 account", GRAVE)
+        self.assertIn("managed-tunnel", GRAVE)
+        self.assertIn("Freeing a managed-tunnel slot", GRAVE)
+        self.assertIn("### Freeing a managed-tunnel slot", SECURITY_DOC)
+        self.assertIn("/v1/client/environment-links/", SECURITY_DOC)
+        self.assertIn("~/.t3/userdata/environment-id", SECURITY_DOC)
 
     def test_headless_flag_is_used_for_linking(self):
         # The box has no browser: without --headless the CLI attempts a
