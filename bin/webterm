@@ -23,7 +23,12 @@ case "$name" in
   claude-yolo) [[ "$WORKSPACE_ROLE" == admin ]] || { echo "skip-permissions sessions are disabled for developers"; exit 126; }; cmd=(claude --dangerously-skip-permissions) ;;
   codex-yolo)  [[ "$WORKSPACE_ROLE" == admin ]] || { echo "skip-permissions sessions are disabled for developers"; exit 126; }; cmd=(codex --dangerously-bypass-approvals-and-sandbox) ;;
   # auth shortcuts (⚙️ settings → opens a terminal running the login flow;
-  # session ends when the flow exits)
+  # session ends when the flow exits).
+  # The `auth-` PREFIX IS LOAD-BEARING: web/term/app.js treats `?arg=auth-*`
+  # as one-shot and stops reconnecting once the flow ends. Without it a
+  # finished flow closes the socket, the frontend reconnects, and ttyd runs
+  # this script again — re-running the command forever. Any new
+  # run-once session must keep the prefix.
   auth-claude) cmd=(claude /login) ;;
   auth-codex)  cmd=(codex login) ;;
   auth-github) cmd=(gh auth login) ;;

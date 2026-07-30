@@ -132,6 +132,13 @@
     '//' + window.location.host + path + '/ws' + window.location.search;
   const tokenUrl = window.location.protocol + '//' + window.location.host + path + '/token';
 
+  // One-shot sessions (bin/webterm's `auth-*` flows) run a command that ENDS.
+  // Their tmux session dies with it, so a reconnect does not reattach — ttyd
+  // spawns webterm again and the command RE-RUNS. `grave t3 connect full`
+  // restarts t3code on every run, so the 300 ms reconnect turned one link
+  // attempt into a restart loop that killed every agent session.
+  const oneShot = /(?:^|[?&])arg=auth-/.test(window.location.search);
+
   let ws = null, opened = false, retry = 0;
   let written = 0, pending = 0, paused = false;
 
@@ -189,6 +196,14 @@
       };
       ws.onclose = () => {
         ws = null;
+        // A one-shot flow that actually started and then closed is FINISHED —
+        // reconnecting would re-run it. (Closing before it ever opened is a
+        // real connection failure, so that still retries below.)
+        if (oneShot && opened) {
+          opened = false;
+          status('flow finished — reopen it from ⚙️ settings to run it again');
+          return;
+        }
         // the session survives in tmux — reconnect forever, backing off to 10s
         const delay = opened && !retry ? 300 : Math.min(1000 * 2 ** retry, 10000);
         opened = false; retry++;

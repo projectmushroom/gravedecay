@@ -57,6 +57,25 @@ rerun it after changing anything under `web/term/`. Never edit the installed
 Paste: 📥 button or Ctrl/Cmd+Shift+V. Firefox blocks programmatic clipboard
 reads — the 📥 button falls back to a paste-here textarea.
 
+## Persistent sessions vs one-shot flows
+
+Reconnecting is the default and it reconnects forever: normal sessions live in
+tmux, so dropping the tab (or the tailnet) and coming back reattaches to the
+same shell.
+
+The `auth-*` sessions are different — they run a command that **ends**, and
+the tmux session ends with it. There is nothing left to reattach to, so a
+reconnect makes ttyd run `bin/webterm` again and the command runs a *second*
+time. `grave t3 connect full` restarts t3code on every run, which turned one
+link attempt into a ~3 s restart loop that killed every agent session.
+
+So `web/term/app.js` treats `?arg=auth-*` as one-shot: once such a session has
+opened and then closed, it stops and says so instead of reconnecting. A socket
+that never opened is a genuine connection failure and still retries.
+
+**The `auth-` prefix is the contract.** Any new run-once session must keep it,
+or it will loop.
+
 Scrollback stays tmux's job (`history-limit 100000` in `config/tmux.conf`);
 the frontend runs xterm.js with `scrollback: 0` so the mouse wheel scrolls
 tmux copy-mode, not a second divergent buffer.
