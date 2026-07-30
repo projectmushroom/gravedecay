@@ -27,6 +27,10 @@ case "$name" in
   auth-claude) cmd=(claude /login) ;;
   auth-codex)  cmd=(codex login) ;;
   auth-github) cmd=(gh auth login) ;;
+  # T3 Connect links are interactive (out-of-band OAuth code + relay client
+  # install confirm), so they run here rather than as dashboard stream actions.
+  auth-t3publish) [[ "$WORKSPACE_ROLE" == admin ]] || { echo "T3 Connect is admin-only"; exit 126; }; cmd=(grave t3 connect publish) ;;
+  auth-t3full)    [[ "$WORKSPACE_ROLE" == admin ]] || { echo "T3 Connect is admin-only"; exit 126; }; cmd=(grave t3 connect full) ;;
   *)      cmd=() ;;         # plain login shell
 esac
 

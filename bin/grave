@@ -147,8 +147,113 @@ t3_latest_version() {
   npm view t3 dist-tags.latest --silent 2>/dev/null | tail -1
 }
 
-cmd_t3() { # grave t3 [status|update] — inspect/update the stable T3 Code CLI
+# ------------------------------------------------------------- t3 connect ----
+# T3 Connect (upstream's managed relay) state is scoped per T3 data dir, so
+# everything here pins --base-dir to the appliance instance: a bare `t3` run
+# or the desktop app links the DEFAULT profile (~/.t3) instead — a second
+# Connect identity this box's contract doesn't cover (doctor warns on those).
+T3_BASE_DIR="${T3_BASE_DIR:-$GRAVE_ROOT/agents/t3code}"
+# Operator's declared mode, same file-flag pattern as gamewatch/keepalive.
+#   off      — no Connect link (tailnet-only box; absent file means this)
+#   publish  — link WITHOUT the managed tunnel: agent activity (push, Live
+#              Activities) reaches the official mobile apps, transport stays
+#              the tailnet
+#   full     — managed relay tunnel; official apps reach the box with no VPN
+T3_CONNECT_MODE_FILE="$GRAVE_ROOT/config/t3-connect.mode"
+
+t3_connect_mode() {
+  local m=off
+  [[ -r "$T3_CONNECT_MODE_FILE" ]] && m="$(tr -d '[:space:]' <"$T3_CONNECT_MODE_FILE")"
+  case "$m" in publish|full) printf '%s\n' "$m" ;; *) printf 'off\n' ;; esac
+}
+
+t3_connect_json() { # persisted Connect state of the appliance instance
+  t3 connect status --json --base-dir "$T3_BASE_DIR" 2>/dev/null
+}
+
+t3c_is() { # t3c_is <jq bool expr> <json> — predicate for doctor checks
+  jq -e "$1" <<<"$2" >/dev/null 2>&1
+}
+
+t3_connect_restart() { # apply a link-state change to the running service
+  if systemctl is-active --quiet t3code; then
+    need_root_helper
+    sudo -n systemctl restart t3code
+    if curl -sf --retry 10 --retry-delay 1 -o /dev/null "http://127.0.0.1:$T3_PORT/"; then
+      ok "t3code restarted — Connect link state applies from this start"
+    else
+      bad "t3code did not answer after restart"; exit 1
+    fi
+  else
+    say "  t3code is stopped (gaming mode?) — the change applies on its next start"
+  fi
+}
+
+cmd_t3_connect() { # grave t3 connect [status|publish|full|off]
+  local want="${1:-status}" desired json
+  command -v t3 >/dev/null 2>&1 || { bad "t3 is not installed"; exit 1; }
+  case "$want" in
+    status)
+      desired="$(t3_connect_mode)"
+      say "T3 Connect — declared mode: ${BLD}$desired${RST} ($T3_CONNECT_MODE_FILE)"
+      if json="$(t3_connect_json)" && [[ -n "$json" ]]; then
+        say "  exposure:  $(jq -r 'if .desired then "enabled" else "disabled" end' <<<"$json")"
+        say "  authorized: $(jq -r 'if .authenticated then "yes" else "no" end' <<<"$json")"
+        say "  linked:    $(jq -r 'if .linked then "yes (" + (.cloudUserId // "?") + ")" else "no" end' <<<"$json")"
+        say "  relay:     $(jq -r '.relayUrl // "not provisioned"' <<<"$json")"
+        say "  publish agent activity: $(jq -r 'if .publishAgentActivity then "on" else "off" end' <<<"$json")"
+        case "$desired" in
+          off)     t3c_is '.desired|not' "$json" && ok "matches declared mode" || bad "drift: link desired but mode is off — 'grave t3 connect off' (or declare a mode)" ;;
+          publish|full) t3c_is '.desired' "$json" && ok "matches declared mode" || bad "drift: mode is $desired but no link desired — 'grave t3 connect $desired'" ;;
+        esac
+      else
+        bad "could not read t3 connect status for $T3_BASE_DIR"
+      fi
+      ;;
+    publish|full)
+      hdr "T3 Connect — $want"
+      if [[ "$want" == publish ]]; then
+        say "publish-only: pushes agent activity (notifications, Live Activities) to"
+        say "your signed-in official T3 apps. No relay tunnel — the box stays"
+        say "reachable over the tailnet only."
+      else
+        say "full: opens a managed relay tunnel (relay.t3.codes) so the official T3"
+        say "apps reach this box WITHOUT Tailscale. Session traffic transits T3's"
+        say "relay — read the trust note in docs/SECURITY.md before enabling."
+      fi
+      say ""
+      # --headless: the box has no browser; t3 prints an URL to open on your
+      # phone/laptop and prompts for the code shown after sign-in.
+      local args=(connect link --headless --base-dir "$T3_BASE_DIR")
+      [[ "$want" == publish ]] && args+=(--publish-only)
+      t3 "${args[@]}" || { bad "t3 connect link failed"; exit 1; }
+      # publish-only sets the publish flag itself; a full link does not, and
+      # phone notifications are half the point of enabling Connect on this box.
+      [[ "$want" == full ]] && t3 connect publish --base-dir "$T3_BASE_DIR"
+      mkdir -p "$GRAVE_ROOT/config"; printf '%s\n' "$want" >"$T3_CONNECT_MODE_FILE"
+      t3_connect_restart
+      log "t3 connect: mode $want"
+      ok "T3 Connect mode: $want — 'grave doctor' now enforces it"
+      ;;
+    off)
+      hdr "T3 Connect — off"
+      # unlink keeps the stored authorization (relinking later skips sign-in);
+      # `t3 connect logout --base-dir $T3_BASE_DIR` clears that too.
+      t3 connect unlink --base-dir "$T3_BASE_DIR" || true
+      mkdir -p "$GRAVE_ROOT/config"; printf 'off\n' >"$T3_CONNECT_MODE_FILE"
+      t3_connect_restart
+      log "t3 connect: mode off"
+      ok "T3 Connect disabled — the box is tailnet-only again"
+      ;;
+    *) say "usage: grave t3 connect [status|publish|full|off]"; exit 1 ;;
+  esac
+}
+
+cmd_t3() { # grave t3 [status|update|connect …] — manage the stable T3 Code CLI
   local sub="${1:-status}" installed latest t3_bin npm_bin
+  # connect dispatches before the version lookups: it must not depend on npm
+  # or the network being up.
+  if [[ "$sub" == connect ]]; then shift; cmd_t3_connect "$@"; return; fi
   command -v t3 >/dev/null 2>&1 || { bad "t3 is not installed"; exit 1; }
   command -v npm >/dev/null 2>&1 || { bad "npm is not installed"; exit 1; }
   installed=$(t3_version)
@@ -213,7 +318,7 @@ cmd_t3() { # grave t3 [status|update] — inspect/update the stable T3 Code CLI
       log "t3: updated v$installed to v$updated"
       ok "T3 Code updated to v$updated"
       ;;
-    *) say "usage: grave t3 [status|update]"; exit 1 ;;
+    *) say "usage: grave t3 [status|update|connect [status|publish|full|off]]"; exit 1 ;;
   esac
 }
 
@@ -1137,6 +1242,51 @@ cmd_doctor() { # grave doctor [--no-page]
   else
     say "  ${YLW}– t3code stopped (gaming mode?)${RST}"
   fi
+  # --- T3 Connect: the mode file is the operator's declared intent; the CLI's
+  # persisted state must match it, or a relay tunnel is running (or silently
+  # dead) without anyone having decided that. See docs/SECURITY.md.
+  local tc_mode tc_json
+  tc_mode="$(t3_connect_mode)"
+  if tc_json="$(t3_connect_json)" && [[ -n "$tc_json" ]]; then
+    case "$tc_mode" in
+      off)
+        check "t3 connect disabled (mode: off)"       t3c_is '.desired|not' "$tc_json"
+        # [c] defeats pgrep's self-match: the pattern is in bash -c's own argv
+        check "no relay tunnel process (mode: off)"   bash -c "! pgrep -f '$T3_BASE_DIR/.*[c]loudflared' >/dev/null"
+        ;;
+      publish)
+        check "t3 connect link desired (mode: publish)"   t3c_is '.desired' "$tc_json"
+        check "t3 connect publishes agent activity"       t3c_is '.publishAgentActivity' "$tc_json"
+        # publish-only explicitly runs NO managed tunnel — transport stays tailnet
+        check "no relay tunnel process (publish-only)"    bash -c "! pgrep -f '$T3_BASE_DIR/.*[c]loudflared' >/dev/null"
+        if systemctl is-active --quiet t3code; then
+          check "t3 connect environment linked"           t3c_is '.linked' "$tc_json"
+        fi
+        ;;
+      full)
+        check "t3 connect link desired (mode: full)"      t3c_is '.desired' "$tc_json"
+        check "t3 connect publishes agent activity"       t3c_is '.publishAgentActivity' "$tc_json"
+        check "relay client installed"                    t3c_is '.relayClient.status == "available"' "$tc_json"
+        if systemctl is-active --quiet t3code; then
+          check "t3 connect environment linked"           t3c_is '.linked' "$tc_json"
+          check "relay tunnel process running"            pgrep -f "$T3_BASE_DIR/.*[c]loudflared"
+        fi
+        ;;
+    esac
+  elif [[ "$tc_mode" != off ]]; then
+    bad "t3 connect mode is $tc_mode but its status is unreadable — run 'grave t3 connect status'"
+    FAILURES=$((FAILURES+1))
+  fi
+  # Stray Connect identities: a bare `t3` run or the desktop app links the
+  # DEFAULT profile (~/.t3) — a second relay identity outside this contract.
+  # A warning, not a failure: transient desktop-app use on the box is legal,
+  # but it should never be the way this appliance is exposed.
+  if [[ -d "$HOME/.t3" ]] && t3c_is '.desired' "$(t3 connect status --json 2>/dev/null)"; then
+    say "  ${YLW}– stray T3 Connect link on the default t3 profile (~/.t3) — not this appliance's instance; 't3 connect unlink' it if unintended${RST}"
+  fi
+  if pgrep -af 'cloudflared.*tunnel run' 2>/dev/null | grep -v "$T3_BASE_DIR" | grep -q .; then
+    say "  ${YLW}– a relay tunnel is running outside the appliance T3 instance (desktop app?) — the box is exposed beyond the declared Connect mode${RST}"
+  fi
   if systemctl is-active --quiet gravedecay; then
     check "gravedecay answering"         curl -sf -o /dev/null "http://127.0.0.1:$DASH_PORT/healthz"
     check "dashboard running installed build" bash -c \
@@ -1470,6 +1620,10 @@ grave — gravedecay appliance control 🪦
   grave preview off <port>   stop a preview
 
   grave t3 [status|update]   show versions or install npm's stable T3 release
+  grave t3 connect <mode>    T3 Connect for the official T3 apps — status,
+                             publish (phone notifications, transport stays
+                             tailnet), full (managed relay tunnel, no VPN
+                             needed), off. Doctor enforces the declared mode
   grave releases            list selectable stable gravedecay releases
   grave update               snapshot (if snapper), update pkgs/npm/images
   grave upgrade              update gravedecay itself: pull latest release

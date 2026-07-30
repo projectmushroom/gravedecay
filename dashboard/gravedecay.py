@@ -89,6 +89,8 @@ DEFAULT_SETTINGS = {
     "modal_apps": [],      # tile names that open in an iframe modal on the dashboard
     "yolo_apps": [],       # claude/codex tiles launched with permission gates OFF
     "custom_apps": [],     # extra tiles: [{"name": ..., "url": ...}]
+    "t3_tile": "pwa",      # T3 tile opens: "pwa" (web UI in-app) | "app"
+                           # (hand off to the official T3 Code app, t3code://)
     "poll_ms": 5000,       # dashboard refresh interval
 }
 
@@ -131,6 +133,8 @@ def load_settings():
             s[k] = data[k]
     s["poll_ms"] = max(2000, min(60000, int(s["poll_ms"])))
     s["custom_apps"] = _sanitize_custom_apps(s["custom_apps"])  # neutralize a poisoned file
+    if s["t3_tile"] not in ("pwa", "app"):
+        s["t3_tile"] = "pwa"
     return s
 
 
@@ -141,6 +145,8 @@ def save_settings(data):
             merged[k] = data[k]
     merged["poll_ms"] = max(2000, min(60000, int(merged["poll_ms"])))
     merged["custom_apps"] = _sanitize_custom_apps(merged["custom_apps"])
+    if merged["t3_tile"] not in ("pwa", "app"):
+        merged["t3_tile"] = "pwa"
     tmp = SETTINGS_PATH + ".tmp"
     with open(tmp, "w") as f:
         json.dump(merged, f, indent=2)
@@ -187,6 +193,9 @@ ACTIONS = {
     "t3-pair": [T3, "auth", "pairing", "create",
                 "--base-dir", T3_BASE_DIR,
                 "--ttl", "15m", "--label", "gravedecay-dashboard"],
+    # non-interactive Connect teardown; enabling (publish/full) is an OAuth
+    # flow, so those run in the web terminal (auth-t3publish / auth-t3full)
+    "t3connect-off": [GRAVE, "t3", "connect", "off"],
     "reboot": ["sudo", "-n", "systemctl", "reboot"],
     "bootmode-developer": [GRAVE, "bootmode", "developer"],
     "bootmode-gaming": [GRAVE, "bootmode", "gaming"],
@@ -1246,6 +1255,36 @@ def keepalive_state():
     return {"installed": installed, "on": on, "running": running}
 
 
+def t3_connect_state():
+    """T3 Connect: the declared mode (config/t3-connect.mode, the operator's
+    intent — read fresh) plus the T3 CLI's persisted link state for the
+    appliance instance (a ~1 s node spawn, so cached). Doctor enforces the
+    match; this only paints it in settings."""
+    mode = "off"
+    try:
+        with open(os.path.join(GRAVE_ROOT, "config", "t3-connect.mode")) as f:
+            m = f.read().strip()
+        if m in ("publish", "full"):
+            mode = m
+    except OSError:
+        pass
+
+    def fetch():
+        rc, out, _ = sh([T3, "connect", "status", "--json",
+                         "--base-dir", T3_BASE_DIR], timeout=20)
+        if rc != 0:
+            return None
+        try:
+            return json.loads(out)
+        except ValueError:
+            return None
+    st = cached("t3connect", 20, fetch)
+    return {"mode": mode, "ok": st is not None,
+            "desired": bool(st and st.get("desired")),
+            "linked": bool(st and st.get("linked")),
+            "publish": bool(st and st.get("publishAgentActivity"))}
+
+
 def state(headers):
     t3 = unit_state("t3code")
     mode = "developer" if t3["active"] == "active" else "gaming"
@@ -1316,6 +1355,7 @@ def state(headers):
         "usage": collect_agent_usage(),
         "settings": load_settings(),
         "notify": notify_state(),
+        "t3_connect": t3_connect_state(),
         "services": collect_services(),
         "docker": collect_docker(),
         "tmux": tmux,
@@ -2254,6 +2294,20 @@ body.gaming #foot{display:none}
     <a class="mini abtn" data-auth="auth-github">🐙 Re-auth GitHub</a>
   </div>
 
+  <div class="sethead">T3 Connect — official T3 apps<span class="dim2" title="Links this box's T3 instance to your T3 Connect account so the official T3 Code apps (iOS/Android/desktop) can reach it. 📱 notifications-only keeps the tailnet as the transport and only publishes agent activity (push + Live Activities). 🌐 full relay opens a managed tunnel via relay.t3.codes so the apps connect without Tailscale — session traffic transits T3's relay (see docs/SECURITY.md). Both open a terminal running the sign-in; grave doctor enforces whichever mode you declare." style="margin-left:7px;border:1px solid var(--ring);border-radius:50%;padding:0 5px;cursor:help">ⓘ</span></div>
+  <div class="setrow"><span class="setlabel dim2" id="t3c-state">…</span></div>
+  <div class="setrow">
+    <a class="mini abtn" data-auth="auth-t3publish">📱 notifications only</a>
+    <a class="mini abtn" data-auth="auth-t3full">🌐 full relay</a>
+    <button class="mini" id="t3c-off">⏸ off</button>
+  </div>
+  <div class="setrow"><span class="setlabel">T3 tile opens<span class="dim2" title="'official T3 app' hands the launcher tile off to the installed T3 Code app via its t3code:// scheme — pair the app first (pairing tokens print an app link too). Devices without the app should stay on the web UI." style="margin-left:7px;border:1px solid var(--ring);border-radius:50%;padding:0 5px;cursor:help">ⓘ</span></span>
+    <select id="set-t3tile">
+      <option value="pwa">the web UI (in-PWA)</option>
+      <option value="app">the official T3 app</option>
+    </select>
+  </div>
+
   <div class="sethead">Integrations</div>
   <div class="setrow"><span class="setlabel">Linear API key <span id="linear-state"></span></span>
     <input type="password" id="set-linear" placeholder="lin_api_… (leave empty to keep)" size="24">
@@ -2577,6 +2631,7 @@ function render(s){
   if(s.boot_mode){bootMode=s.boot_mode;paintBoot();}
   if(s.gamewatch){applyGamewatch(s.gamewatch);}
   if(s.keepalive){applyKeepalive(s.keepalive);}
+  if(s.t3_connect){t3cInfo=s.t3_connect;paintT3Connect();}
   // notify prefs are owner-only state; keep them out of a mid-edit modal
   if(s.notify&&$('settings-panel').style.display!=='block')notifyInfo=s.notify;
   // adopt settings saved elsewhere (another device/tab) — but never while
@@ -2603,6 +2658,12 @@ function render(s){
   $('apps').innerHTML=tiles.filter(a=>!cfg.hidden_apps.includes(a.name)).map(a=>{
     if(a.url===FILES_URL)
       return `<a class="app" href="#files" data-files="1">${esc(a.name)}</a>`;
+    // T3 tile in official-app mode: hand off to the installed T3 Code app via
+    // its registered t3code:// scheme (no env-specific deeplink exists
+    // upstream, so this opens the app itself; it holds the pairing). The href
+    // is a constant, never user input — the _safe_tile_url jail is untouched.
+    if(a.url==='/'&&(cfg.t3_tile||'pwa')==='app')
+      return `<a class="app" href="t3code://">${esc(a.name)} ↗</a>`;
     // ⚡ skip-perms: a claude/codex /term tile launched with gates off routes
     // to the -yolo webterm session (which adds the dangerous flag).
     let url=a.url;
@@ -2775,6 +2836,17 @@ async function runStream(act,title){
       d.innerHTML=esc(m[1])+': '
         +(isUrl?`<a href="${esc(v)}">${esc(v)}</a>`:`<b>${esc(v)}</b>`)
         +` <button class="mini copybtn" data-copy="${esc(v)}">📋 copy</button>`;
+      out.appendChild(d);
+      if(isUrl){
+        // the official T3 app registers t3code://pair?pairingUrl=… — tapping
+        // this on a phone with the app installed enrolls it in one step
+        const app='t3code://pair?pairingUrl='+encodeURIComponent(v);
+        const d2=document.createElement('div');
+        d2.innerHTML=`Official app: <a href="${esc(app)}">${esc(app)}</a>`
+          +` <button class="mini copybtn" data-copy="${esc(app)}">📋 copy</button>`;
+        out.appendChild(d2);
+      }
+      out.scrollTop=out.scrollHeight;return;
     }else d.textContent=t||' ';
     out.appendChild(d);out.scrollTop=out.scrollHeight;};
   let gotData=false,okDone=false;
@@ -2979,6 +3051,8 @@ function buildSettings(existing){
   ap.querySelectorAll('[data-del-app]').forEach(b=>b.onclick=()=>{
     syncVis();draft.custom_apps.splice(+b.dataset.delApp,1);buildSettings(draft);});
   $('set-poll').value=String(draft.poll_ms);
+  $('set-t3tile').value=draft.t3_tile||'pwa';
+  paintT3Connect();
   $('linear-state').textContent=linearConfigured?'✓ configured':'(not set)';
   document.querySelectorAll('[data-auth]').forEach(a=>
     a.href=appUrl(`/term/?arg=${a.dataset.auth}`));
@@ -3091,6 +3165,7 @@ function syncVis(){
   draft.newtab_apps=[...document.querySelectorAll('[data-app-newtab]')]
     .filter(c=>c.checked).map(c=>c.dataset.appNewtab);
   draft.poll_ms=+$('set-poll').value;
+  draft.t3_tile=$('set-t3tile').value;
 }
 // body scroll-lock while any overlay is open — without this, iOS scrolls
 // the page underneath the modal ("intermixed" scrolling)
@@ -3175,6 +3250,21 @@ $('kill-all').onclick=async()=>{
   lastTmux=[];buildKillList();poll();
 };
 $('t3-pair-btn').onclick=()=>runStream('t3-pair','t3 pairing token — enter it on the new device (15 min)');
+// ---------- T3 Connect (official T3 apps) ----------
+let t3cInfo=null;
+function paintT3Connect(){
+  const el=$('t3c-state');if(!el||!t3cInfo)return;
+  const t=t3cInfo;
+  if(!t.ok){el.textContent='state unreadable — run `grave t3 connect status` on the box';return;}
+  const MODE={off:'off — tailnet-only (PWA + pairing tokens)',
+    publish:'📱 notifications-only — transport stays the tailnet',
+    full:'🌐 full relay — official apps connect without a VPN'};
+  let s=MODE[t.mode]||t.mode;
+  if((t.mode==='off')!==!t.desired)s+=' · ⚠️ drift — doctor will flag it';
+  else if(t.mode!=='off')s+=t.linked?' · linked ✓':' · link pending (starts with T3)';
+  el.textContent=s;
+}
+$('t3c-off').onclick=()=>runStream('t3connect-off','disabling T3 Connect — box returns to tailnet-only');
 // boot mode toggle (quick POST, not a console stream)
 let bootMode=null;
 function paintBoot(){

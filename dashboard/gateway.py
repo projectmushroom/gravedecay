@@ -15,7 +15,7 @@ MAX_HEADER=65536
 MAX_PEEK=65536
 MAX_BODY=2*1024*1024*1024   # match the dashboard's MAX_UPLOAD
 ADMIN_PREFIXES=("/grave/api/admin/",)
-ADMIN_ACTIONS={"gaming","gaming-kill","developer","restart-t3","update-t3","update-grave","reboot","bootmode-developer","bootmode-gaming","gamewatch-on","gamewatch-off","doctor"}
+ADMIN_ACTIONS={"gaming","gaming-kill","developer","restart-t3","update-t3","update-grave","reboot","bootmode-developer","bootmode-gaming","gamewatch-on","gamewatch-off","doctor","t3connect-off"}
 
 def audit(event, actor=None, target=None, result="ok"):
     AUDIT.parent.mkdir(parents=True,exist_ok=True)
