@@ -1603,6 +1603,340 @@ cmd_multiuser() {
   esac
 }
 
+# ------------------------------------------------------------- uninstall ----
+# The inverse of raise.sh. Two rules shape every step below:
+#
+#  1. Remove what gravedecay installed; leave what it merely USED. Docker,
+#     Homebrew, node, ttyd, t3 and the distro packages predate (or outlive) the
+#     appliance and other things on the box may depend on them. Tailscale is the
+#     sharpest case: we drop OUR serve mounts and the LocalAPI drop-in, but never
+#     log the node out — on a remote box (the Steam Machine) that is the link the
+#     operator is watching the uninstall through.
+#  2. Data is not platform. $GRAVE_ROOT holds repos, agent history, secrets and
+#     backups; it survives unless --purge says otherwise. A wrong uninstall
+#     should cost a re-raise, not the work.
+#
+# Anything we deliberately leave behind is REPORTED at the end, so "what is
+# still on this box" is never a guess.
+UNINSTALL_UNITS=(
+  gravedecay-backup.timer gravedecay-digest.timer
+  gravedecay-auto-thaw.timer gravedecay-auto-thaw.service
+  gravedecay-backup.service gravedecay-digest.service
+  gravedecay-upgrade.service gravedecay-upgrade@.service
+  gravedecay-gamewatch.service gravedecay-keepalive.service
+  gravedecay-selfheal.service gravedecay-net.service
+  gravedecay-term.service t3code.service
+  gravedecay-gateway.service gravedecay.service
+  gravedecay-notify@.service
+  gravedecay-t3@.service gravedecay-term@.service gravedecay-dashboard@.service
+)
+
+# Descriptions are written as completed results ("units stopped"), so the ✓ line
+# and the dry-run line are the same sentence — the ○ marker, not the wording,
+# says whether it happened.
+uninst_do() { # uninst_do <description> <cmd...> — must succeed; honors --dry-run
+  local what="$1"; shift
+  if (( UNINSTALL_DRY )); then printf '  %b○%b %s\n' "$YLW" "$RST" "$what"; return 0; fi
+  if "$@"; then ok "$what"; else bad "$what — failed (continuing)"; UNINSTALL_FAILED=1; fi
+}
+uninst_try() { # same, but a failure is expected-and-fine (nothing there to undo)
+  local what="$1"; shift
+  if (( UNINSTALL_DRY )); then printf '  %b○%b %s\n' "$YLW" "$RST" "$what"; return 0; fi
+  if "$@" >/dev/null 2>&1; then ok "$what"; else say "  ${YLW}– $what — nothing to do${RST}"; fi
+}
+
+uninstall_strip_agent_hooks() { # drop the grave-agent-notify hooks from agent CLIs
+  local settings="$HOME/.claude/settings.json" codex="$HOME/.codex/config.toml" tmp found=0
+  grep -q 'grave-agent-notify' "$settings" 2>/dev/null && found=1
+  grep -q 'grave-agent-notify' "$codex"    2>/dev/null && found=1
+  (( found )) || { say "  ${YLW}– no gravedecay hooks in the agent CLI configs${RST}"; return 0; }
+  # Left in place these become a Stop hook pointing at a deleted script, so every
+  # Claude turn ends in a "command not found" error on a box with no gravedecay.
+  if [[ -s "$settings" ]] && grep -q 'grave-agent-notify' "$settings" 2>/dev/null; then
+    if (( UNINSTALL_DRY )); then
+      printf '  %b○%b %s\n' "$YLW" "$RST" "gravedecay hooks removed from $settings"
+    else
+      tmp=$(mktemp)
+      # Drop only OUR hook entries, then prune the arrays/keys they leave empty —
+      # a hand-added hook in the same event survives untouched.
+      if jq '
+        def clean: map(.hooks |= map(select(.command | test("grave-agent-notify") | not)))
+                 | map(select(.hooks | length > 0));
+        if .hooks then .hooks |= (with_entries(.value |= clean) | with_entries(select(.value | length > 0))) else . end
+        | if (.hooks // {}) == {} then del(.hooks) else . end
+      ' "$settings" >"$tmp" 2>/dev/null; then
+        mv "$tmp" "$settings"; chmod 600 "$settings"; ok "gravedecay hooks removed from $settings"
+      else
+        # Not cosmetic: the hooks stay, pointing at a script this run deletes,
+        # so every future agent turn errors. Fail the run so it gets fixed.
+        rm -f "$tmp"; bad "$settings is not valid JSON — remove the grave-agent-notify hooks by hand"
+        UNINSTALL_FAILED=1
+      fi
+    fi
+  fi
+  if [[ -f "$codex" ]] && grep -q 'grave-agent-notify' "$codex" 2>/dev/null; then
+    # Rewrite through a temp file rather than `sed -i`: the in-place flag takes
+    # an argument on BSD sed and none on GNU, and this runs on both.
+    uninst_do "gravedecay notify line removed from $codex" \
+      uninstall_drop_lines "$codex" 'grave-agent-notify'
+  fi
+}
+
+uninstall_drop_lines() { # uninstall_drop_lines <file> <fixed-string> — delete matching lines
+  local file="$1" needle="$2" tmp
+  tmp=$(mktemp) || return 1
+  grep -vF -- "$needle" "$file" >"$tmp" || true   # grep exits 1 when nothing remains
+  cat "$tmp" >"$file" && rm -f "$tmp"             # preserve the original mode (600)
+}
+
+uninstall_tailscale_serve() { # drop only the mounts raise.sh created
+  command -v tailscale >/dev/null 2>&1 || return 0
+  tailscale status --peers=false >/dev/null 2>&1 || { say "  ${YLW}– tailscale not logged in — no serve config to clear${RST}"; return 0; }
+  # A path that was never mounted makes `serve off` exit non-zero — expected on
+  # a box that never finished its raise, so these are best-effort throughout.
+  local path
+  for path in /grave /term /net; do
+    uninst_try "tailnet mount $path removed" \
+      tailscale serve --https=443 --set-path="$path" off
+  done
+  uninst_try "tailnet mount / removed" tailscale serve --https=443 off
+  # `grave preview` tunnels live on their own ports and would otherwise outlive
+  # the CLI that knows how to stop them.
+  local line port
+  while IFS= read -r line; do
+    port=$(sed -n 's#^https://[^ :]*:\([0-9]\{1,\}\).*#\1#p' <<<"$line")
+    [[ -n "$port" ]] && preview_in_range "$port" \
+      && uninst_try "preview tunnel on :$port removed" tailscale serve --https="$port" off
+  done < <(tailscale serve status 2>/dev/null)
+}
+
+cmd_uninstall() { # grave uninstall [--purge] [--yes] [--dry-run]
+  local purge=0 assume_yes=0
+  UNINSTALL_DRY=0 UNINSTALL_FAILED=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --purge)          purge=1 ;;
+      --yes|-y)         assume_yes=1 ;;
+      --dry-run|-n)     UNINSTALL_DRY=1 ;;
+      *) say "usage: grave uninstall [--purge] [--yes] [--dry-run]"; exit 1 ;;
+    esac
+    shift
+  done
+
+  local grave_bin grave_dir grave_needs_root=1
+  grave_bin="$(readlink -f "$0")"; grave_dir="$(dirname "$grave_bin")"
+  # Immutable hosts install the CLI into ~/.local/bin, which needs no root to
+  # remove. Decide on writability of the containing directory rather than a
+  # $HOME path prefix — that is the question actually being asked, and it
+  # survives a symlinked home.
+  [[ -w "$grave_dir" ]] && grave_needs_root=0
+
+  hdr "🪦 Uninstall gravedecay$( (( purge )) && printf ' — PURGE' )$( (( UNINSTALL_DRY )) && printf ' (dry run)' )"
+  say "Removes:"
+  say "  • platform systemd units (dashboard, t3code, term, net, timers, watchers)"
+  say "  • the grave CLIs ($grave_bin, $grave_dir/grave-workspaces)"
+  say "  • /etc/gravedecay, the scoped sudoers drop-in, /usr/libexec/gravedecay"
+  say "  • the gravedecay tailnet serve mounts (/, /grave, /term, /net) + previews"
+  say "  • the ${DEV_STACKS[*]} containers and the devnet docker network"
+  if (( purge )); then
+    say "  • ${RED}$GRAVE_ROOT entirely — repos, agent history, secrets, backups${RST}"
+    say "  • ${RED}all docker volumes (databases included)${RST}"
+  else
+    say "Keeps:"
+    say "  • $GRAVE_ROOT — repos, agent history, secrets, backups, docker volumes"
+    say "  • docker, tailscale (still logged in), the toolchain and distro packages"
+  fi
+  say ""
+
+  if (( ! assume_yes && ! UNINSTALL_DRY )); then
+    local want="uninstall" answer
+    (( purge )) && want="purge $(hostname 2>/dev/null || echo box)"
+    [[ -t 0 ]] || { bad "uninstall needs a terminal to confirm — pass --yes to run headless"; exit 1; }
+    printf 'Type %b%s%b to continue: ' "$BLD" "$want" "$RST"
+    read -r answer
+    [[ "$answer" == "$want" ]] || { say "Aborted — nothing was changed."; exit 1; }
+  fi
+  # Removing unit files and /etc entries is outside the scoped NOPASSWD grant
+  # (which only allows `tee` INTO /etc/systemd/system), so cache a credential up
+  # front rather than dying at a prompt halfway through a teardown.
+  # Even a user-installed CLI needs root for the unit files and /etc entries, so
+  # this is not gated on grave_needs_root.
+  if [[ $EUID != 0 ]]; then
+    (( UNINSTALL_DRY )) || sudo -v || { bad "sudo access required to remove system files"; exit 1; }
+  fi
+  log "uninstall: started (purge=$purge dry=$UNINSTALL_DRY)"
+
+  # ---- 1. T3 Connect: drop the relay link before the box stops existing ----
+  local connect_mode; connect_mode="$(t3_connect_mode 2>/dev/null || echo off)"
+  if [[ "$connect_mode" != off ]]; then
+    hdr "T3 Connect"
+    # A live relay link that outlives the appliance leaves the official apps
+    # pointed at a box that no longer answers — and holds the account's
+    # managed-tunnel slot hostage (see docs/SECURITY.md).
+    if command -v t3 >/dev/null 2>&1; then
+      uninst_try "T3 Connect unlinked (mode was $connect_mode)" \
+        t3 connect unlink --base-dir "$T3_BASE_DIR"
+    else
+      bad "T3 Connect mode is '$connect_mode' but the t3 CLI is gone — this box"
+      say "     may still hold a relay link and a managed-tunnel slot. Unlink from"
+      say "     another environment before deleting $T3_BASE_DIR (docs/SECURITY.md)."
+    fi
+  fi
+
+  # ---- 2. services ----
+  hdr "Services"
+  # Templates (name@.service) are not runnable units — `systemctl stop` on one
+  # fails with "missing the instance name". Only their INSTANCES can be stopped,
+  # and only the template FILE gets removed below.
+  local unit present=()
+  for unit in "${UNINSTALL_UNITS[@]}"; do
+    [[ "$unit" == *@.service ]] && continue
+    systemctl cat "$unit" >/dev/null 2>&1 && present+=("$unit")
+  done
+  # Workspace instances: an enabled gravedecay-t3@slug keeps its template
+  # referenced, and a stopped-but-enabled instance reappears on the next boot.
+  # Read them from systemd rather than the registry so instances for workspaces
+  # already removed from workspaces.json are still caught.
+  local svc
+  while IFS= read -r svc; do [[ -n "$svc" ]] && present+=("$svc"); done < <(
+    systemctl list-units --all --no-legend --plain 'gravedecay-*@*.service' 2>/dev/null | awk '{print $1}')
+  if ((${#present[@]})); then
+    # These were filtered to units systemd knows, and stopping an already-dead
+    # unit succeeds — so a failure here is real and worth surfacing.
+    uninst_do "${#present[@]} platform unit(s) stopped" sudo systemctl stop "${present[@]}"
+    # `disable` exits non-zero on a unit with no [Install] section (static) —
+    # nothing to undo there, so a miss is not a failure.
+    uninst_try "platform units disabled" sudo systemctl disable "${present[@]}"
+  else
+    say "  ${YLW}– no gravedecay units are running${RST}"
+  fi
+  local f files=()
+  for unit in "${UNINSTALL_UNITS[@]}"; do
+    f="/etc/systemd/system/$unit"; [[ -e "$f" ]] && files+=("$f")
+  done
+  [[ -e /etc/systemd/system/tailscaled.service.d/gravedecay-localapi.conf ]] \
+    && files+=(/etc/systemd/system/tailscaled.service.d/gravedecay-localapi.conf)
+  ((${#files[@]})) && uninst_do "${#files[@]} unit file(s) removed from /etc/systemd/system" \
+    sudo rm -f "${files[@]}"
+  # The drop-in dir is ours only when empty — tailscaled may carry others.
+  (( UNINSTALL_DRY )) || sudo rmdir /etc/systemd/system/tailscaled.service.d 2>/dev/null || true
+  uninst_do "systemd daemon reloaded" sudo systemctl daemon-reload
+  (( UNINSTALL_DRY )) || sudo systemctl reset-failed 2>/dev/null || true
+  # tailscaled loses the LocalAPI drop-in with the file above; restart so the
+  # socket returns to root-only ownership instead of keeping our group grant.
+  systemctl is-active --quiet tailscaled 2>/dev/null \
+    && uninst_try "tailscaled restarted without the gravedecay drop-in" \
+         sudo systemctl restart tailscaled
+
+  # ---- 3. tailnet exposure ----
+  hdr "Tailnet"
+  uninstall_tailscale_serve
+
+  # ---- 4. containers ----
+  hdr "Docker"
+  if dkctl is-active --quiet docker 2>/dev/null || dk info >/dev/null 2>&1; then
+    local stack
+    for stack in "${DEV_STACKS[@]}"; do
+      [[ -d "$GRAVE_ROOT/docker/$stack" ]] || continue
+      # --volumes only under --purge: a `down -v` on the core stack destroys the
+      # postgres data directory, which is exactly the "cost a re-raise, not the
+      # work" line this command is not allowed to cross by default.
+      if (( purge )); then
+        uninst_do "stack $stack removed (containers + volumes)" compose "$stack" down --volumes --remove-orphans
+      else
+        uninst_do "stack $stack removed (containers only — volumes kept)" compose "$stack" down --remove-orphans
+      fi
+    done
+    dk network inspect devnet >/dev/null 2>&1 \
+      && uninst_do "docker network devnet removed" dk network rm devnet
+    if (( purge )); then
+      # Anonymous volumes (64-hex names) went with `down --volumes` above; these
+      # are the named ones, which outlive their stack by design.
+      local vol
+      while IFS= read -r vol; do
+        [[ -n "$vol" ]] && uninst_do "docker volume $vol removed" dk volume rm "$vol"
+      done < <(dk volume ls -q 2>/dev/null | grep -vE '^[0-9a-f]{64}$' || true)
+    fi
+  else
+    say "  ${YLW}– docker is not running — containers and networks left as they are${RST}"
+  fi
+
+  # ---- 5. agent CLI hooks ----
+  hdr "Agent CLI hooks"
+  uninstall_strip_agent_hooks
+
+  # ---- 6. system config ----
+  hdr "System configuration"
+  # /etc/sudoers.d is 0440 inside a 0750 dir on stock Arch — we usually cannot
+  # even stat our own drop-in, so remove both possible names unconditionally
+  # (raise.sh picks 50- or zz- depending on whether a wheel rule outranks it)
+  # rather than testing for them. The stamp is the record of which one landed.
+  local sudoers_file="" stamp="$GRAVE_ROOT/config/.sudoers.stamp"
+  [[ -r "$stamp" ]] && sudoers_file="$(head -1 "$stamp")"
+  [[ "$sudoers_file" == /etc/sudoers.d/* ]] || sudoers_file="(unrecorded)"
+  uninst_do "sudoers drop-in removed — installed as $sudoers_file" \
+    sudo rm -f /etc/sudoers.d/50-gravedecay /etc/sudoers.d/zz-gravedecay
+  [[ -d /etc/gravedecay ]] && uninst_do "/etc/gravedecay removed" sudo rm -rf /etc/gravedecay
+  [[ -d /usr/libexec/gravedecay ]] && uninst_do "/usr/libexec/gravedecay removed" sudo rm -rf /usr/libexec/gravedecay
+  # The sleep/suspend masks are a gravedecay policy (profile_apply on always-on
+  # boxes), not a pre-existing system setting — leaving them would silently keep
+  # a Steam Machine from ever suspending again after the appliance is gone.
+  if [[ "${CHECK_SLEEP_MASKED:-0}" == 1 ]]; then
+    uninst_do "sleep/suspend targets unmasked" \
+      sudo systemctl unmask sleep.target suspend.target hibernate.target hybrid-sleep.target
+  fi
+
+  # ---- 7. data ----
+  hdr "Data"
+  if (( purge )); then
+    # ~/Projects is raise.sh's symlink into the tree we are about to delete.
+    if [[ -L "$HOME/Projects" && "$(readlink "$HOME/Projects")" == "$GRAVE_ROOT/repos" ]]; then
+      uninst_do "~/Projects symlink removed" rm -f "$HOME/Projects"
+    fi
+    if [[ -d "$GRAVE_ROOT" ]]; then
+      # Owner-writable on a single-user box; the multi-user subtrees are not.
+      if (( UNINSTALL_DRY )); then
+        say "  would delete $GRAVE_ROOT ($(du -sh "$GRAVE_ROOT" 2>/dev/null | cut -f1 || echo '?') on disk)"
+      else
+        rm -rf "$GRAVE_ROOT" 2>/dev/null || sudo rm -rf "$GRAVE_ROOT"
+        [[ -d "$GRAVE_ROOT" ]] && { bad "$GRAVE_ROOT could not be fully removed"; UNINSTALL_FAILED=1; } || ok "$GRAVE_ROOT deleted"
+      fi
+    fi
+  else
+    say "  ${GRN}✓${RST} $GRAVE_ROOT kept — repos, agent history, secrets, backups"
+    say "    re-raise onto it any time: $GRAVE_ROOT/repos/gravedecay/raise.sh"
+  fi
+
+  # ---- 8. the CLIs, last: everything above needed them ----
+  hdr "CLI"
+  local rm_cmd=(sudo rm -f); (( grave_needs_root )) || rm_cmd=(rm -f)
+  [[ -e "$grave_dir/grave-workspaces" ]] \
+    && uninst_do "$grave_dir/grave-workspaces removed" "${rm_cmd[@]}" "$grave_dir/grave-workspaces"
+  # Unlinking the running script is safe: the kernel keeps the inode alive for
+  # the shell's open fd until this process exits.
+  uninst_do "$grave_bin removed" "${rm_cmd[@]}" "$grave_bin"
+
+  # ---- 9. what is still here ----
+  hdr "Left on this box (by design)"
+  say "  • docker, tailscale, node/npm, ttyd, t3 and distro packages — remove them yourself if unwanted"
+  command -v tailscale >/dev/null 2>&1 && say "  • this node is still on the tailnet — 'sudo tailscale logout' to leave"
+  (( purge )) || say "  • $GRAVE_ROOT and every docker volume"
+  if [[ "${MULTI_USER:-0}" == 1 ]]; then
+    local slugs; slugs=$(getent passwd 2>/dev/null | cut -d: -f1 | grep '^grave-' | tr '\n' ' ' || true)
+    [[ -n "$slugs" ]] && say "  • ${YLW}workspace unix users: $slugs${RST} — collaborator credentials live in their homes; delete deliberately with 'userdel -r'"
+  fi
+  [[ "${CHECK_SNAPPER:-0}" == 1 ]] && say "  • snapper config '${SNAPPER_CONFIG:-srv}' and its snapshots"
+  say ""
+  if (( UNINSTALL_DRY )); then
+    say "🪦 Dry run only — nothing was changed."
+  elif (( UNINSTALL_FAILED )); then
+    bad "uninstall finished with errors — review the ✗ lines above"
+    exit 1
+  else
+    say "🪦 The box is unraised."
+  fi
+}
+
 # ------------------------------------------------------------------ help ----
 cmd_help() {
   cat <<'EOF'
@@ -1668,6 +2002,12 @@ grave — gravedecay appliance control 🪦
                              artifact verified; a timer runs one nightly and
                              doctor enforces freshness (docs/RECOVERY.md)
   grave restore [backup]     list / restore backups
+  grave uninstall            remove the platform: units, CLIs, /etc/gravedecay,
+                             tailnet mounts, containers. KEEPS $GRAVE_ROOT
+                             (repos, agents, secrets, backups) and leaves
+                             docker/tailscale/packages alone
+  grave uninstall --purge    also delete $GRAVE_ROOT and every docker volume
+  grave uninstall --dry-run  print the teardown without touching anything
 
 Docs: $GRAVE_ROOT/docs   Config: /etc/gravedecay/grave.conf
 EOF
@@ -1724,6 +2064,7 @@ case "${1:-help}" in
   __users)    shift || true; [[ $EUID == 0 ]] || { bad "internal users helper requires root"; exit 1; }; exec "$(dirname "$0")/grave-workspaces" "$@" ;;
   backup)     shift || true; cmd_backup "$@" ;;
   restore)    shift || true; cmd_restore "$@" ;;
+  uninstall)  shift || true; cmd_uninstall "$@" ;;
   help|--help|-h) cmd_help ;;
   *) say "unknown command: $1"; cmd_help; exit 1 ;;
 esac
