@@ -158,6 +158,21 @@ templates, and the dashboard refresh — and doctor verifies the result.
 Releases are plain git tags (`v0.1.0`, …) with notes on GitHub: pin to them
 for stability, or ride main if the box is also where you hack on gravedecay.
 
+### Uninstalling
+
+```sh
+grave uninstall --dry-run   # print the whole teardown, change nothing
+grave uninstall             # remove the platform, keep the data
+grave uninstall --purge     # also delete $GRAVE_ROOT and every docker volume
+```
+
+The inverse of `raise.sh`: units, CLIs, `/etc/gravedecay`, the sudoers drop-in,
+the tailnet mounts and the containers go. `$GRAVE_ROOT` — repos, agent history,
+secrets, backups — and your docker volumes stay unless you say `--purge`, and
+Docker, Tailscale (still logged in) and the toolchain are left alone. Whatever
+survives is printed at the end rather than left for you to discover. Full
+contract in [docs/UNINSTALL.md](docs/UNINSTALL.md).
+
 ## Connecting a device (phone, laptop, tablet)
 
 Two routes. They compose — most boxes want the tailnet for the appliance
@@ -457,6 +472,7 @@ is in `docs/SECRETS.md`.
 | [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md) | Notifications: Web Push to the PWA + ntfy — agents, failing units, and doctor page your phone |
 | [docs/PORTS.md](docs/PORTS.md) | Every port, documented or it doesn't exist |
 | [docs/RECOVERY.md](docs/RECOVERY.md) | Backup/restore procedures |
+| [docs/UNINSTALL.md](docs/UNINSTALL.md) | Unraising the box: what `grave uninstall` removes, keeps, and deliberately won't touch |
 
 ## License
 

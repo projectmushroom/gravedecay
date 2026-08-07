@@ -98,6 +98,17 @@ resets)? Mitigate it, then capture it as `profiles/<host>.sh` with a
 `CHECK_*` flags in grave.conf, and add a doctor-verifiable invariant. A quirk
 that doctor can't detect will silently regress.
 
+## 7. Unraising (if you are asked to remove it)
+
+`grave uninstall` is the inverse of `raise.sh`. Always show the human
+`grave uninstall --dry-run` first — it prints the full teardown and changes
+nothing. The default keeps `$GRAVE_ROOT` (repos, agents, secrets, backups) and
+docker volumes; only `--purge` deletes them, and only they can authorize that.
+Never log the box out of Tailscale as part of an uninstall — on a remote box
+that is the link you are working through. If `/etc/gravedecay/grave.conf` is
+gone the CLI cannot start; use `./uninstall.sh` instead. See
+`docs/UNINSTALL.md`.
+
 ## House rules
 
 - Never bind a service to anything but `127.0.0.1` or the tailnet.
