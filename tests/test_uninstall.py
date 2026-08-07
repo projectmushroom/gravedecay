@@ -279,6 +279,64 @@ exit 0
         self.assertNotIn("tailscale logout", self.recorded())
         self.assertNotIn("tailscale down", self.recorded())
 
+    # -- tailnet (logged in) ------------------------------------------------
+    def stub_tailscale_serving(self, *extra_lines):
+        """A logged-in node serving the four gravedecay mounts.
+
+        `serve status` prints a header, one indented row per mount and a
+        trailing blank line — none of which carry a :port. Only a `grave
+        preview` tunnel does, so on an ordinary box every line of this output
+        misses the preview regex.
+        """
+        lines = [
+            "https://box.example.ts.net (tailnet only)",
+            "|-- /      proxy http://127.0.0.1:4711",
+            "|-- /term  proxy http://127.0.0.1:4713",
+            "|-- /grave proxy http://127.0.0.1:4712",
+            *extra_lines,
+            "",
+        ]
+        body = "\n".join(f"echo {line!r}" for line in lines)
+        self.stub("tailscale", f'''echo "tailscale $*" >> "{self.calls}"
+case "$1 $2" in
+  "serve status") {body} ;;
+esac
+exit 0
+''')
+
+    def test_completes_when_serving_with_no_preview_tunnels(self):
+        # Regression: the preview sweep ended on a bare `[[ -n "$port" ]] &&`,
+        # so a final line without a port made the loop — and the function —
+        # return non-zero. Under `set -e` that aborted the whole uninstall
+        # after the tailnet step, silently skipping Docker, /etc and the CLI.
+        self.stub_tailscale_serving()
+        proc = self.run_uninstall("--yes")
+        self.assertIn("Left on this box", proc.stdout, "run stopped before the summary")
+        rec = self.recorded()
+        self.assertIn("serve --https=443 --set-path=/grave off", rec)
+        # Assert on steps that come *after* the tailnet one and run on any
+        # host: /etc/gravedecay is skipped when the dir isn't there, so it
+        # can't distinguish "reached" from "aborted".
+        self.assertIn("compose --project-directory", rec, "Docker step must be reached")
+        self.assertIn("rm -f /etc/sudoers.d/50-gravedecay", rec, "sudoers step must be reached")
+
+    def test_dry_run_completes_when_serving(self):
+        self.stub_tailscale_serving()
+        proc = self.run_uninstall("--dry-run")
+        self.assertIn("Dry run only", proc.stdout)
+
+    def test_preview_tunnels_are_still_swept(self):
+        # The loop's real job: a preview tunnel in PREVIEW_RANGE gets closed.
+        self.stub_tailscale_serving("https://box.example.ts.net:3000 proxy http://127.0.0.1:3000")
+        self.run_uninstall("--yes")
+        self.assertIn("serve --https=3000 off", self.recorded())
+
+    def test_ports_outside_the_preview_range_are_left_alone(self):
+        # Someone else's tunnel on the same node is not gravedecay's to close.
+        self.stub_tailscale_serving("https://box.example.ts.net:8443 proxy http://127.0.0.1:8443")
+        self.run_uninstall("--yes")
+        self.assertNotIn("serve --https=8443 off", self.recorded())
+
     # -- purge --------------------------------------------------------------
     def test_purge_deletes_grave_root(self):
         (self.groot / "repos/important.txt").write_text("work")
