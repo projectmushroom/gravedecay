@@ -110,7 +110,6 @@ if ((${#files[@]})); then run sudo rm -f "${files[@]}"; did "removed ${#files[@]
 (( DRY )) || sudo rmdir /etc/systemd/system/tailscaled.service.d 2>/dev/null || true
 run sudo systemctl daemon-reload
 (( DRY )) || sudo systemctl reset-failed 2>/dev/null || true
-systemctl is-active --quiet tailscaled 2>/dev/null && run sudo systemctl restart tailscaled
 
 step "Tailnet"
 if command -v tailscale >/dev/null 2>&1 && tailscale status --peers=false >/dev/null 2>&1; then
@@ -120,6 +119,11 @@ if command -v tailscale >/dev/null 2>&1 && tailscale status --peers=false >/dev/
 else
   skip "tailscale not available/logged in — serve config untouched"
 fi
+# After the serve teardown, never before it: the restart drops the LocalAPI
+# drop-in removed above and leaves the daemon warming up, and `tailscale
+# status` fails for that whole window — which this script reads as "not logged
+# in", skipping the mounts entirely.
+systemctl is-active --quiet tailscaled 2>/dev/null && run sudo systemctl restart tailscaled
 
 step "System configuration"
 for f in /etc/sudoers.d/50-gravedecay /etc/sudoers.d/zz-gravedecay; do run sudo rm -f "$f"; done

@@ -1689,9 +1689,41 @@ uninstall_drop_lines() { # uninstall_drop_lines <file> <fixed-string> — delete
   cat "$tmp" >"$file" && rm -f "$tmp"             # preserve the original mode (600)
 }
 
+tailscale_backend_state() { # print tailscaled's BackendState; empty if unreachable
+  tailscale status --json 2>/dev/null \
+    | sed -n 's/.*"BackendState"[[:space:]]*:[[:space:]]*"\([A-Za-z]*\)".*/\1/p' | head -1
+}
+
+tailscale_wait_running() { # bounded wait for a warming-up backend
+  # `tailscale status` exits non-zero for the whole reconnect window, so a
+  # caller that reads that as "logged out" skips its own teardown. Wait out the
+  # transient states only — NeedsLogin and Stopped are answers, not delays.
+  local waited=0 state
+  while :; do
+    state=$(tailscale_backend_state)
+    case "$state" in
+      Running)             return 0 ;;
+      NoState|Starting|"") ;;
+      *)                   return 1 ;;
+    esac
+    (( waited >= 15 )) && return 1
+    sleep 1; waited=$(( waited + 1 ))
+  done
+}
+
 uninstall_tailscale_serve() { # drop only the mounts raise.sh created
   command -v tailscale >/dev/null 2>&1 || return 0
-  tailscale status --peers=false >/dev/null 2>&1 || { say "  ${YLW}– tailscale not logged in — no serve config to clear${RST}"; return 0; }
+  if ! tailscale_wait_running; then
+    case "$(tailscale_backend_state)" in
+      NeedsLogin|Stopped)
+        say "  ${YLW}– tailscale is logged out — no serve config to clear${RST}" ;;
+      *)
+        bad "tailscaled never became ready — serve mounts NOT cleared"
+        say "      once it is up: tailscale serve --https=443 off"
+        UNINSTALL_FAILED=1 ;;
+    esac
+    return 0
+  fi
   # A path that was never mounted makes `serve off` exit non-zero — expected on
   # a box that never finished its raise, so these are best-effort throughout.
   local path
@@ -1714,6 +1746,25 @@ uninstall_tailscale_serve() { # drop only the mounts raise.sh created
       uninst_try "preview tunnel on :$port removed" tailscale serve --https="$port" off
     fi
   done < <(tailscale serve status 2>/dev/null)
+  # `serve off` on a path that was never mounted also exits non-zero, so no
+  # exit code above can tell "nothing to remove" from "could not remove it".
+  # Ask the daemon instead: anything still served here outlived the uninstall,
+  # and a box whose tailnet URLs still answer is exactly what must not pass
+  # silently.
+  (( UNINSTALL_DRY )) && return 0
+  local left stuck=()
+  left=$(tailscale serve status 2>/dev/null)
+  # Only our own mounts: a tunnel this box serves for some other reason was
+  # deliberately left alone above, and must not read as a failed teardown.
+  for path in / /grave /term /net; do
+    grep -qE "^\|-- ${path}( |$)" <<<"$left" && stuck+=("$path")
+  done
+  if ((${#stuck[@]})); then
+    bad "tailnet mounts survived the teardown: ${stuck[*]}"
+    say "      the box still answers on its tailnet URL, proxying to dead ports"
+    say "      clear them with: tailscale serve --https=443 off"
+    UNINSTALL_FAILED=1
+  fi
 }
 
 cmd_uninstall() { # grave uninstall [--purge] [--yes] [--dry-run]
@@ -1828,15 +1879,17 @@ cmd_uninstall() { # grave uninstall [--purge] [--yes] [--dry-run]
   (( UNINSTALL_DRY )) || sudo rmdir /etc/systemd/system/tailscaled.service.d 2>/dev/null || true
   uninst_do "systemd daemon reloaded" sudo systemctl daemon-reload
   (( UNINSTALL_DRY )) || sudo systemctl reset-failed 2>/dev/null || true
-  # tailscaled loses the LocalAPI drop-in with the file above; restart so the
-  # socket returns to root-only ownership instead of keeping our group grant.
-  systemctl is-active --quiet tailscaled 2>/dev/null \
-    && uninst_try "tailscaled restarted without the gravedecay drop-in" \
-         sudo systemctl restart tailscaled
 
   # ---- 3. tailnet exposure ----
   hdr "Tailnet"
   uninstall_tailscale_serve
+  # tailscaled lost the LocalAPI drop-in with the unit files above; restart so
+  # the socket returns to root-only ownership instead of keeping our group
+  # grant. This has to come *after* the serve teardown: restarting first leaves
+  # the daemon warming up, and every LocalAPI call above it fails.
+  systemctl is-active --quiet tailscaled 2>/dev/null \
+    && uninst_try "tailscaled restarted without the gravedecay drop-in" \
+         sudo systemctl restart tailscaled
 
   # ---- 4. containers ----
   hdr "Docker"

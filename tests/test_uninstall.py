@@ -157,8 +157,16 @@ exit 0
         # A working docker: compose down / network rm succeed, and `volume ls`
         # reports nothing so purge has no named volumes to chase.
         self.stub("docker", f'echo "docker $*" >> "{self.calls}"\nexit 0\n')
-        # Not logged in — the tailnet branch is exercised separately.
-        self.stub("tailscale", f'echo "tailscale $*" >> "{self.calls}"\nexit 1\n')
+        # Logged out — the tailnet branch is exercised separately. `status
+        # --json` still answers, with NeedsLogin: that is a real state, and the
+        # readiness wait must act on it rather than sit through its timeout.
+        self.base = base
+        self.stub("tailscale", f'''echo "tailscale $*" >> "{self.calls}"
+case "$1 $2" in
+  "status --json") echo '{{"BackendState": "NeedsLogin"}}'; exit 0 ;;
+esac
+exit 1
+''')
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -280,27 +288,59 @@ exit 0
         self.assertNotIn("tailscale down", self.recorded())
 
     # -- tailnet (logged in) ------------------------------------------------
-    def stub_tailscale_serving(self, *extra_lines):
-        """A logged-in node serving the four gravedecay mounts.
+    def stub_tailscale(self, *, extra=(), warmup=0, off_works=True):
+        """A tailscaled that keeps state, so tests can assert on what it is
+        actually left serving rather than on which commands were issued.
 
-        `serve status` prints a header, one indented row per mount and a
-        trailing blank line — none of which carry a :port. Only a `grave
-        preview` tunnel does, so on an ordinary box every line of this output
-        misses the preview regex.
+        `serve status` reads a mounts file that `serve … off` edits — the real
+        output shape: a header, one indented row per mount, a trailing blank
+        line. None of those carry a `:port`; only a `grave preview` tunnel
+        does. `warmup` makes the first N `status --json` calls answer Starting,
+        the way a daemon that was just restarted does. `off_works=False` models
+        a daemon that accepts the command and changes nothing.
         """
-        lines = [
-            "https://box.example.ts.net (tailnet only)",
+        mounts = self.base / "mounts"
+        mounts.write_text("\n".join([
             "|-- /      proxy http://127.0.0.1:4711",
             "|-- /term  proxy http://127.0.0.1:4713",
             "|-- /grave proxy http://127.0.0.1:4712",
-            *extra_lines,
-            "",
-        ]
-        body = "\n".join(f"echo {line!r}" for line in lines)
+            *extra,
+        ]) + "\n")
+        warm = self.base / "warmups"
+        warm.write_text(str(warmup))
         self.stub("tailscale", f'''echo "tailscale $*" >> "{self.calls}"
+M="{mounts}"; W="{warm}"; OFF_WORKS={1 if off_works else 0}
 case "$1 $2" in
-  "serve status") {body} ;;
+  "status "*|"status")
+    # Warming up: plain `status` fails the way the real one does, while
+    # `--json` still answers Starting. That asymmetry is the whole bug.
+    n=$(cat "$W")
+    if [ "$n" -gt 0 ]; then
+      echo $((n - 1)) > "$W"
+      [ "$2" = "--json" ] && {{ echo '{{"BackendState": "Starting"}}'; exit 0; }}
+      echo 'Tailscale is starting. Please wait.'; exit 1
+    fi
+    [ "$2" = "--json" ] && {{ echo '{{"BackendState": "Running"}}'; exit 0; }}
+    exit 0 ;;
+  "serve status")
+    if [ -s "$M" ]; then
+      echo 'https://box.example.ts.net (tailnet only)'; cat "$M"; echo
+    else
+      echo 'No serve config'
+    fi
+    exit 0 ;;
 esac
+if [ "$1" = serve ] && [ "${{@: -1}}" = off ] && [ "$OFF_WORKS" = 1 ]; then
+  path=""; port=""
+  for a in "$@"; do
+    case "$a" in --set-path=*) path="${{a#--set-path=}}" ;; --https=*) port="${{a#--https=}}" ;; esac
+  done
+  if [ -n "$path" ]; then grep -vE "^\\|-- ${{path}}( |$)" "$M" > "$M.n" || true
+  elif [ "$port" = 443 ];  then grep -vE "^\\|-- /( |$)"     "$M" > "$M.n" || true
+  else                          grep -v  ":${{port}} "        "$M" > "$M.n" || true
+  fi
+  mv "$M.n" "$M"
+fi
 exit 0
 ''')
 
@@ -309,7 +349,7 @@ exit 0
         # so a final line without a port made the loop — and the function —
         # return non-zero. Under `set -e` that aborted the whole uninstall
         # after the tailnet step, silently skipping Docker, /etc and the CLI.
-        self.stub_tailscale_serving()
+        self.stub_tailscale()
         proc = self.run_uninstall("--yes")
         self.assertIn("Left on this box", proc.stdout, "run stopped before the summary")
         rec = self.recorded()
@@ -321,21 +361,59 @@ exit 0
         self.assertIn("rm -f /etc/sudoers.d/50-gravedecay", rec, "sudoers step must be reached")
 
     def test_dry_run_completes_when_serving(self):
-        self.stub_tailscale_serving()
+        self.stub_tailscale()
         proc = self.run_uninstall("--dry-run")
         self.assertIn("Dry run only", proc.stdout)
 
     def test_preview_tunnels_are_still_swept(self):
         # The loop's real job: a preview tunnel in PREVIEW_RANGE gets closed.
-        self.stub_tailscale_serving("https://box.example.ts.net:3000 proxy http://127.0.0.1:3000")
+        self.stub_tailscale(extra=["https://box.example.ts.net:3000 proxy http://127.0.0.1:3000"])
         self.run_uninstall("--yes")
         self.assertIn("serve --https=3000 off", self.recorded())
 
     def test_ports_outside_the_preview_range_are_left_alone(self):
-        # Someone else's tunnel on the same node is not gravedecay's to close.
-        self.stub_tailscale_serving("https://box.example.ts.net:8443 proxy http://127.0.0.1:8443")
-        self.run_uninstall("--yes")
+        # Someone else's tunnel on the same node is not gravedecay's to close —
+        # and leaving it must not be reported as a failed teardown.
+        self.stub_tailscale(extra=["https://box.example.ts.net:8443 proxy http://127.0.0.1:8443"])
+        proc = self.run_uninstall("--yes")
         self.assertNotIn("serve --https=8443 off", self.recorded())
+        self.assertNotIn("survived the teardown", proc.stdout)
+
+    def test_serve_teardown_runs_before_the_tailscaled_restart(self):
+        # The restart drops the LocalAPI grant and leaves the daemon warming
+        # up. Doing it first meant every serve call afterwards failed, so the
+        # mounts stayed published on a box the operator thought was gone.
+        self.stub_tailscale()
+        self.run_uninstall("--yes")
+        rec = self.recorded()
+        self.assertLess(
+            rec.index("tailscale serve --https=443 off"),
+            rec.index("sudo systemctl restart tailscaled"),
+            "serve config must be cleared while the LocalAPI still answers",
+        )
+
+    def test_a_warming_up_daemon_is_waited_out_not_written_off(self):
+        # `tailscale status` exits non-zero for the whole reconnect window.
+        # Reading that as "logged out" is what silently skipped the step.
+        self.stub_tailscale(warmup=3)
+        proc = self.run_uninstall("--yes")
+        self.assertIn("tailnet mount /grave removed", proc.stdout)
+        self.assertNotIn("logged out", proc.stdout)
+
+    def test_a_logged_out_node_is_reported_not_stalled(self):
+        # NeedsLogin is an answer, not a delay — say so and move on.
+        proc = self.run_uninstall("--yes")     # default stub: NeedsLogin
+        self.assertIn("logged out", proc.stdout)
+        self.assertNotIn("never became ready", proc.stdout)
+
+    def test_surviving_mounts_are_reported_loudly(self):
+        # A daemon that accepts `serve off` and changes nothing must not pass
+        # for success: exit non-zero and name what is still published.
+        self.stub_tailscale(off_works=False)
+        proc = self.run_uninstall("--yes", expect_ok=False)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("survived the teardown", proc.stdout)
+        self.assertIn("/grave", proc.stdout)
 
     # -- purge --------------------------------------------------------------
     def test_purge_deletes_grave_root(self):
