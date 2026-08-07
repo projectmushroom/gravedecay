@@ -1705,8 +1705,14 @@ uninstall_tailscale_serve() { # drop only the mounts raise.sh created
   local line port
   while IFS= read -r line; do
     port=$(sed -n 's#^https://[^ :]*:\([0-9]\{1,\}\).*#\1#p' <<<"$line")
-    [[ -n "$port" ]] && preview_in_range "$port" \
-      && uninst_try "preview tunnel on :$port removed" tailscale serve --https="$port" off
+    # An `if` (not a bare `&&` chain): most lines of `serve status` — the
+    # header, the mount rows, the trailing blank — carry no port, and a chain
+    # ending false makes the loop, and this function, return non-zero. Under
+    # `set -e` that aborted the uninstall here, skipping Docker, /etc and the
+    # CLI on every box that was serving without a preview tunnel open.
+    if [[ -n "$port" ]] && preview_in_range "$port"; then
+      uninst_try "preview tunnel on :$port removed" tailscale serve --https="$port" off
+    fi
   done < <(tailscale serve status 2>/dev/null)
 }
 
