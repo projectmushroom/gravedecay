@@ -29,7 +29,9 @@ import json
 import glob
 import os
 import re
+import shutil
 import socket
+import sys
 import subprocess
 import threading
 import time
@@ -69,13 +71,85 @@ def parse_role_overrides():
 
 
 ROLE_OVERRIDES = parse_role_overrides()
+MACOS = sys.platform == "darwin" or os.environ.get("GRAVENET_PLATFORM") == "macos"
+
+
+def run_lines(cmd):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=3).stdout.splitlines()
+    except Exception:
+        return []
+
+
+def parse_netstat_ib(lines):
+    """Return Darwin interface byte counters from `netstat -ibn` output."""
+    out, header = {}, []
+    for line in lines:
+        cols = line.split()
+        if not cols: continue
+        if cols[0] == "Name":
+            header = cols
+            continue
+        if not header or len(cols) < len(header): continue
+        row = dict(zip(header, cols))
+        name = row.get("Name", "")
+        try:
+            rx, tx = int(row.get("Ibytes", "0")), int(row.get("Obytes", "0"))
+        except ValueError:
+            continue
+        if name and name not in out:
+            out[name] = (rx, tx)
+    return out
+
+
+def parse_wifi_devices(lines):
+    out, wifi = set(), False
+    for line in lines:
+        if line.startswith("Hardware Port:"):
+            wifi = line.split(":", 1)[1].strip() in ("Wi-Fi", "AirPort")
+        elif wifi and line.startswith("Device:"):
+            out.add(line.split(":", 1)[1].strip())
+    return out
+
+
+_wifi_devices = None
+def wifi_devices():
+    global _wifi_devices
+    if _wifi_devices is None:
+        _wifi_devices = parse_wifi_devices(run_lines(["networksetup", "-listallhardwareports"])) if MACOS else set()
+    return _wifi_devices
+
+
+def parse_ifconfig(text):
+    out, current = {}, ""
+    for line in text.splitlines():
+        m = re.match(r"^([\w.-]+):\s+flags=", line)
+        if m:
+            current = m.group(1); out[current] = {"state": "down", "speed": None, "wireless": current in wifi_devices()}
+            continue
+        if not current: continue
+        if "status: active" in line: out[current]["state"] = "up"
+        if line.lstrip().startswith("inet "):
+            p = line.split()
+            if len(p) >= 2:
+                mask = next((x for x in p if x.startswith("netmask")), "")
+                try:
+                    hexmask = p[p.index(mask) + 1] if mask else ""
+                    prefix = bin(int(hexmask, 16)).count("1") if hexmask.startswith("0x") else 32
+                    out[current].setdefault("addrs", []).append(f"{p[1]}/{prefix}")
+                except (ValueError, IndexError): out[current].setdefault("addrs", []).append(p[1] + "/32")
+    return out
 
 
 def list_ifaces():
+    if MACOS:
+        return [n for n in sorted(parse_ifconfig("\n".join(run_lines(["ifconfig", "-a"])))) if not EXCLUDE.match(n)]
     return [n for n in sorted(os.listdir("/sys/class/net")) if not EXCLUDE.match(n)]
 
 
 def read_counters():
+    if MACOS:
+        return parse_netstat_ib(run_lines(["netstat", "-ibn"]))
     out = {}
     with open("/proc/net/dev") as f:
         for line in f.readlines()[2:]:
@@ -86,6 +160,9 @@ def read_counters():
 
 
 def iface_static(name):
+    if MACOS:
+        return parse_ifconfig("\n".join(run_lines(["ifconfig", name]))).get(name,
+            {"state": "down", "speed": None, "wireless": False})
     base = f"/sys/class/net/{name}"
     def slurp(p):
         try:
@@ -113,6 +190,8 @@ def ip_json(*args):
 
 
 def addrs_by_iface():
+    if MACOS:
+        return {n: s.get("addrs", []) for n, s in parse_ifconfig("\n".join(run_lines(["ifconfig", "-a"]))).items()}
     out = {}
     for e in ip_json("-4", "addr", "show"):
         for a in e.get("addr_info", []):
@@ -121,6 +200,12 @@ def addrs_by_iface():
 
 
 def neighbours():
+    if MACOS:
+        out = {}
+        for line in run_lines(["arp", "-an"]):
+            m = re.search(r"\? \(([^)]+)\) at ([^ ]+) on ([\w.-]+)", line)
+            if m: out[m.group(1)] = {"state": "reachable", "mac": m.group(2), "dev": m.group(3)}
+        return out
     out = {}
     for n in ip_json("neigh", "show"):
         if "dst" in n and ":" not in n["dst"]:
@@ -176,6 +261,8 @@ def lease_ifaces():
 
 
 def thunderbolt():
+    if MACOS:
+        return []
     devs = []
     for d in glob.glob("/sys/bus/thunderbolt/devices/*/device_name"):
         base = os.path.dirname(d)
@@ -191,6 +278,11 @@ def thunderbolt():
 
 
 def default_gateway():
+    if MACOS:
+        rows = run_lines(["route", "-n", "get", "default"])
+        gw = next((l.split(":", 1)[1].strip() for l in rows if l.strip().startswith("gateway:")), None)
+        dev = next((l.split(":", 1)[1].strip() for l in rows if l.strip().startswith("interface:")), None)
+        return gw, dev
     for r in ip_json("route", "show", "default"):
         return r.get("gateway"), r.get("dev")
     return None, None
@@ -198,7 +290,7 @@ def default_gateway():
 
 def ping(host):
     try:
-        r = subprocess.run(["ping", "-c1", "-W1", host],
+        r = subprocess.run(["ping", "-c1", "-W1000" if MACOS else "-W1", host],
                            capture_output=True, text=True, timeout=3)
         m = re.search(r"time=([\d.]+)", r.stdout)
         return (r.returncode == 0), (float(m.group(1)) if m else None)
@@ -207,11 +299,14 @@ def ping(host):
 
 
 def tailscale_peers():
-    if not any(os.access(os.path.join(p, "tailscale"), os.X_OK)
-               for p in os.environ.get("PATH", "").split(":")):
+    ts = shutil.which("tailscale")
+    if not ts and MACOS:
+        candidate = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+        ts = candidate if os.access(candidate, os.X_OK) else None
+    if not ts:
         return None
     try:
-        st = json.loads(subprocess.run(["tailscale", "status", "--json"],
+        st = json.loads(subprocess.run([ts, "status", "--json"],
                                        capture_output=True, text=True, timeout=5).stdout)
         peers = st.get("Peer") or {}
         return {"online": sum(1 for p in peers.values() if p.get("Online")),
@@ -221,6 +316,8 @@ def tailscale_peers():
 
 
 def conntrack_count():
+    if MACOS:
+        return None
     try:
         with open("/proc/sys/net/netfilter/nf_conntrack_count") as f:
             return int(f.read())

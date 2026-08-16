@@ -69,6 +69,32 @@ on first raise; every other system leaves it off unless you opt in.
 
 ## Quickstart
 
+### Choose your install
+
+**Linux appliance** is the complete, always-on development box described
+above: T3, persistent agent sessions, Docker backing services, terminal,
+system controls, and the full dashboard. The Linux quickstarts below are for
+that installation.
+
+**macOS companion** is a separate, small source install for a Mac you already
+use: a user-scoped read-only system dashboard and live network monitor. It
+does not raise an appliance or install/manage T3, Docker, terminal access,
+system services, firewall, or SSH. A signed-in Tailscale app is needed only to
+publish its two tailnet paths; it can otherwise stay localhost-only.
+
+```sh
+git clone https://github.com/projectmushroom/gravedecay
+cd gravedecay
+./macos/install.sh                 # dashboard + network monitor; /grave and /net
+./macos/install.sh --no-serve      # localhost only; no Tailscale Serve changes
+```
+
+The companion needs macOS and `python3`; it has no Linux, systemd, Docker, or
+RAM requirement. It is a source install for now — see [the macOS companion
+guide](docs/MACOS.md) for component-only modes, update/status/uninstall
+commands, Tailscale behavior, and its intentional feature limits. DMG and
+notarized distribution are deferred.
+
 ### The agent way (recommended)
 
 SSH into the fresh box, install your coding agent, and say:
@@ -100,9 +126,9 @@ grave t3 status                   # compare installed and stable T3 Code
 grave t3 update                   # install stable T3 and restart its service
 ```
 
-Requirements: a systemd-based distro (Arch-family is first-class; Debian/Fedora
-best-effort), ~8 GB RAM, and a [Tailscale](https://tailscale.com) account
-(free tier is fine).
+Linux appliance requirements: a systemd-based distro (Arch-family is
+first-class; Debian/Fedora best-effort), ~8 GB RAM, and a
+[Tailscale](https://tailscale.com) account (free tier is fine).
 
 > **Gaming is optional.** A generic Linux raise is a dev appliance with no
 > gaming controls in the main UI. If the same box also runs games, use `grave

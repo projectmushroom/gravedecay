@@ -37,6 +37,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("GRAVEDECAY_PORT", os.environ.get("DASH_PORT", "4712")))
 GRAVE_ROOT = os.environ.get("GRAVE_ROOT", "/srv/dev")
+PLATFORM = os.environ.get("GRAVEDECAY_PLATFORM", "linux").lower()
+MACOS = PLATFORM == "macos"
 # tmux socket carrying the agent sessions. Single-user uses "agents"; a workspace
 # dashboard is handed its per-workspace socket (grave-<slug>) via TMUX_SOCKET so
 # the sessions panel and kill button see the same sessions the workspace terminal
@@ -76,6 +78,8 @@ APPS = [{"name": name.strip(), "url": url.strip()}
         for name, _, url in (p.partition("=") for p in os.environ.get(
             "GRAVEDECAY_APPS", "⌨️ T3 Code=/").split(";"))
         if url.strip()]
+if MACOS and "GRAVEDECAY_APPS" not in os.environ:
+    APPS = [{"name": "📡 Network", "url": "/net/"}]
 # User preferences, editable from the ⚙️ panel (writes gated to ALLOWED_USERS
 # exactly like actions). Stored beside the other appliance config.
 SETTINGS_PATH = os.path.join(GRAVE_ROOT, "config", "gravedecay-settings.json")
@@ -204,6 +208,10 @@ ACTIONS = {
     "keepalive-on": [GRAVE, "keepalive", "on"],    # 🟢 "always alive": warm tailnet relay paths
     "keepalive-off": [GRAVE, "keepalive", "off"],
 }
+# The source macOS companion is intentionally observability-only.  Keep this
+# gate server-side: hiding buttons is not an authorization boundary.
+if MACOS:
+    ACTIONS = {}
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 # Only one grave action at a time: concurrent mode flips race each other
 # (instrumentation caught a developer run failing mid gaming-kill).
@@ -335,7 +343,16 @@ def unit_state(unit):
     return {"unit": unit, "active": kv.get("ActiveState", "?"), "sub": kv.get("SubState", "?")}
 
 
+def launchagent_state(label):
+    rc, out, _ = sh(["launchctl", "print", f"gui/{os.getuid()}/{label}"], timeout=3)
+    return {"unit": label, "active": "active" if rc == 0 else "inactive",
+            "sub": "launchd" if rc == 0 else "not loaded"}
+
+
 def collect_services():
+    if MACOS:
+        return [launchagent_state("io.gravedecay.dashboard"),
+                launchagent_state("io.gravedecay.network")]
     return [unit_state(u) for u in UNITS]
 
 
@@ -489,7 +506,10 @@ def collect_cpu():
     pure noise, so anything inside CPU_MIN_WINDOW replays the last reading."""
     global _cpu_prev, _cpu_prev_t, _cpu_last
     now = time.monotonic()
-    if now - _cpu_prev_t < CPU_MIN_WINDOW:
+    # A zero timestamp is the deliberate "sample now" sentinel used during
+    # startup/tests; do not mistake an early process monotonic clock for a
+    # sub-window poll.
+    if _cpu_prev_t and now - _cpu_prev_t < CPU_MIN_WINDOW:
         return _cpu_last
     try:
         cur = _read_proc_stat()
@@ -515,6 +535,34 @@ def collect_cpu():
 
 
 def collect_system():
+    if MACOS:
+        load = [0.0, 0.0, 0.0]
+        rc, out, _ = sh(["uptime"])
+        if rc == 0:
+            m = re.search(r"load averages?:\s*([\d.]+)[, ]+\s*([\d.]+)[, ]+\s*([\d.]+)", out)
+            if m:
+                load = [float(x) for x in m.groups()]
+        rc, out, _ = sh(["sysctl", "-n", "kern.boottime"])
+        m = re.search(r"sec\s*=\s*(\d+)", out)
+        uptime = int(time.time()) - int(m.group(1)) if m else 0
+        total = used = 0
+        rc, out, _ = sh(["vm_stat"])
+        pages = {k: int(v) for k, v in re.findall(r"Pages ([^:]+):\s*(\d+)", out)}
+        page_size = 4096
+        rc2, page_out, _ = sh(["sysctl", "-n", "hw.pagesize"])
+        if rc2 == 0 and page_out.strip().isdigit(): page_size = int(page_out)
+        rc, out, _ = sh(["sysctl", "-n", "hw.memsize"])
+        total = int(out.strip()) if rc == 0 and out.strip().isdigit() else 1
+        free = (pages.get("free", 0) + pages.get("speculative", 0)) * page_size
+        used = max(0, total - free)
+        u = shutil.disk_usage("/")
+        return {"load": load, "ncpu": os.cpu_count(), "cpu": {"pct": None, "cores": []},
+                "mem": {"total_kb": total // 1024, "used_kb": used // 1024,
+                        "pct": round(used / total * 100, 1) if total else 0},
+                "disks": [{"label": "/", "total": u.total, "used": u.used,
+                           "pct": round(u.used / u.total * 100, 1)}],
+                "uptime_s": uptime, "temps": {"cpu": None, "gpu": None,
+                "gpu_mhz": None, "gpu_state": None, "fans": []}}
     with open("/proc/loadavg") as f:
         load1, load5, load15 = f.read().split()[:3]
     mem = {}
@@ -1286,6 +1334,20 @@ def t3_connect_state():
 
 
 def state(headers):
+    if MACOS:
+        # No T3, terminal, Docker, privileged controls, or Linux data on Mac.
+        # Remote viewers remain read-only unless a future explicit allow-list
+        # policy is introduced; localhost retains the existing trusted model.
+        return {"host": HOST, "now": time.strftime("%H:%M:%S"),
+                "viewer": headers.get("Tailscale-User-Login", "local"), "platform": "macos",
+                "mode": "developer", "boot_mode": None, "gamewatch": None,
+                "keepalive": None, "apps": list(APPS), "settings": load_settings(),
+                "github": {"login": None, "prs": [], "error": "not configured on macOS"},
+                "linear": {"configured": False, "issues": [], "error": None}, "ci": {"rows": []},
+                "usage": None, "notify": None, "services": collect_services(),
+                "docker": {"error": "not managed on macOS", "containers": []}, "tmux": [],
+                "torpor": 0, "repos": [], "journal": [], "system": collect_system(),
+                "backups": {"count": 0, "latest": None}, "inbox": [], "agent_history": []}
     t3 = unit_state("t3code")
     mode = "developer" if t3["active"] == "active" else "gaming"
     tmux = collect_tmux()
@@ -1693,6 +1755,9 @@ class Handler(BaseHTTPRequestHandler):
         p = self._route()
         if p is None:
             return
+        if MACOS and p not in ("/", "/healthz", "/api/state", "/manifest.webmanifest", "/sw.js", "/offline.html", "/apple-touch-icon.png", "/icon-180.png", "/icon-192.png", "/icon-512.png"):
+            self._send(404, '{"error":"unavailable in macOS companion"}')
+            return
         if p == "/api/action-stream":
             self._stream_action()
             return
@@ -1781,6 +1846,9 @@ class Handler(BaseHTTPRequestHandler):
         p = self._route()
         if p is None:
             return
+        if MACOS and p != "/api/settings":
+            self._send(404, '{"error":"unavailable in macOS companion"}')
+            return
         viewer = self.headers.get("Tailscale-User-Login")
         if viewer is not None and viewer not in ALLOWED_USERS:
             self._send(403, json.dumps({
@@ -1805,6 +1873,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         if p == "/api/settings":
             try:
+                if MACOS:
+                    allowed = {"panel_order", "hidden_panels", "hidden_apps", "newtab_apps",
+                               "modal_apps", "custom_apps", "poll_ms"}
+                    if set(data) - allowed:
+                        raise ValueError("macOS settings only accept UI preferences")
                 key = data.pop("linear_key", "")
                 if isinstance(key, str) and key.strip():
                     save_linear_key(key)
@@ -2223,6 +2296,14 @@ body.gaming #foot{display:none}
   .topbar .meta{display:none}
   .apps{grid-template-columns:1fr}
 }
+/* The macOS companion is deliberately just a dashboard + network monitor. */
+body.macos [data-panel="prs"],body.macos [data-panel="linear"],body.macos [data-panel="ci"],
+body.macos [data-panel="tmux"],body.macos [data-panel="sessions"],body.macos [data-panel="usage"],
+body.macos [data-panel="repos"],body.macos [data-panel="actions"],body.macos [data-panel="docker"],
+body.macos [data-panel="journal"],body.macos #game-banner,body.macos #mode,
+body.macos #boot-mode-head,body.macos #boot-mode-row,body.macos #throttle-head,
+body.macos #throttle-row,body.macos #t3connect-head,body.macos #t3connect-row{display:none!important}
+body.macos .mac-linux-setting,body.macos .tab[data-tab="work"]{display:none!important}
 </style></head><body>
 <div id="topcover"></div>
 <div class="topbar">
@@ -2286,35 +2367,35 @@ body.gaming #foot{display:none}
     <span class="setlabel dim2" id="keepalive-state"></span>
   </div>
 
-  <div class="sethead">Auth &amp; pairing</div>
-  <div class="setrow">
+  <div class="sethead mac-linux-setting">Auth &amp; pairing</div>
+  <div class="setrow mac-linux-setting">
     <button class="mini" id="t3-pair-btn">🔑 New T3 pairing token</button>
     <a class="mini abtn" data-auth="auth-claude">🤖 Re-auth Claude</a>
     <a class="mini abtn" data-auth="auth-codex">🧠 Re-auth Codex</a>
     <a class="mini abtn" data-auth="auth-github">🐙 Re-auth GitHub</a>
   </div>
 
-  <div class="sethead">T3 Connect — official T3 apps<span class="dim2" title="Links this box's T3 instance to your T3 Connect account so the official T3 Code apps (iOS/Android/desktop) can reach it. 📱 notifications-only keeps the tailnet as the transport and only publishes agent activity (push + Live Activities). 🌐 full relay opens a managed tunnel via relay.t3.codes so the apps connect without Tailscale — session traffic transits T3's relay (see docs/SECURITY.md). Both open a terminal running the sign-in; grave doctor enforces whichever mode you declare." style="margin-left:7px;border:1px solid var(--ring);border-radius:50%;padding:0 5px;cursor:help">ⓘ</span></div>
-  <div class="setrow"><span class="setlabel dim2" id="t3c-state">…</span></div>
-  <div class="setrow">
+  <div class="sethead mac-linux-setting">T3 Connect — official T3 apps<span class="dim2" title="Links this box's T3 instance to your T3 Connect account so the official T3 Code apps (iOS/Android/desktop) can reach it. 📱 notifications-only keeps the tailnet as the transport and only publishes agent activity (push + Live Activities). 🌐 full relay opens a managed tunnel via relay.t3.codes so the apps connect without Tailscale — session traffic transits T3's relay (see docs/SECURITY.md). Both open a terminal running the sign-in; grave doctor enforces whichever mode you declare." style="margin-left:7px;border:1px solid var(--ring);border-radius:50%;padding:0 5px;cursor:help">ⓘ</span></div>
+  <div class="setrow mac-linux-setting"><span class="setlabel dim2" id="t3c-state">…</span></div>
+  <div class="setrow mac-linux-setting">
     <a class="mini abtn" data-auth="auth-t3publish">📱 notifications only</a>
     <a class="mini abtn" data-auth="auth-t3full">🌐 full relay</a>
     <button class="mini" id="t3c-off">⏸ off</button>
   </div>
-  <div class="setrow"><span class="setlabel">T3 tile opens<span class="dim2" title="'official T3 app' hands the launcher tile off to the installed T3 Code app via its t3code:// scheme — pair the app first (pairing tokens print an app link too). Devices without the app should stay on the web UI." style="margin-left:7px;border:1px solid var(--ring);border-radius:50%;padding:0 5px;cursor:help">ⓘ</span></span>
+  <div class="setrow mac-linux-setting"><span class="setlabel">T3 tile opens<span class="dim2" title="'official T3 app' hands the launcher tile off to the installed T3 Code app via its t3code:// scheme — pair the app first (pairing tokens print an app link too). Devices without the app should stay on the web UI." style="margin-left:7px;border:1px solid var(--ring);border-radius:50%;padding:0 5px;cursor:help">ⓘ</span></span>
     <select id="set-t3tile">
       <option value="pwa">the web UI (in-PWA)</option>
       <option value="app">the official T3 app</option>
     </select>
   </div>
 
-  <div class="sethead">Integrations</div>
-  <div class="setrow"><span class="setlabel">Linear API key <span id="linear-state"></span></span>
+  <div class="sethead mac-linux-setting">Integrations</div>
+  <div class="setrow mac-linux-setting"><span class="setlabel">Linear API key <span id="linear-state"></span></span>
     <input type="password" id="set-linear" placeholder="lin_api_… (leave empty to keep)" size="24">
   </div>
 
-  <div class="sethead sec-toggle" id="notify-head" data-sec="sec-notify">▸ Notifications — 🔔 push &amp; ntfy</div>
-  <div id="sec-notify" style="display:none">
+  <div class="sethead sec-toggle mac-linux-setting" id="notify-head" data-sec="sec-notify">▸ Notifications — 🔔 push &amp; ntfy</div>
+  <div id="sec-notify" class="mac-linux-setting" style="display:none">
     <div class="setrow"><span class="setlabel">🔔 push to this device <span class="dim2" id="push-support"></span></span>
       <button class="mini" id="push-enable">enable</button>
     </div>
@@ -2541,7 +2622,9 @@ function statusDot(state){
 }
 // same-origin app paths need the https origin spelled out when gravedecay is
 // viewed on a bare port (localhost:4712) rather than mounted at /grave/
-const appUrl=u=>(location.port&&location.port!=='443'&&u.startsWith('/'))
+let macosCompanion=false;
+const appUrl=u=>(macosCompanion&&location.port&&u==='/net/')
+  ?`http://${location.hostname}:4714/`:(location.port&&location.port!=='443'&&u.startsWith('/'))
   ?`https://${location.hostname}${u}`:u;
 // 'claude' or 'codex' if this tile launches that agent CLI via /term/?arg=…,
 // else null. Gates the ⚡ skip-perms toggle and the -yolo session rewrite.
@@ -2582,7 +2665,7 @@ function applyLayout(){
 document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
   activeTab=t.dataset.tab;localStorage.setItem('grave-tab',activeTab);
   if(cfg)applyLayout();
-  if(activeTab==='system')loadGraveReleases();
+  if(activeTab==='system'&&!macosCompanion)loadGraveReleases();
 });
 async function loadGraveReleases(force=false){
   if(graveReleasesLoaded&&!force)return;
@@ -2643,6 +2726,9 @@ function render(s){
   }
   const modeChanged=lastMode!==null&&lastMode!==s.mode;
   lastMode=s.mode;
+  macosCompanion=s.platform==='macos';
+  document.body.classList.toggle('macos',macosCompanion);
+  if(macosCompanion&&activeTab!=='system'){activeTab='system';localStorage.setItem('grave-tab',activeTab);}
   document.body.classList.toggle('gaming',s.mode==='gaming');
   $('game-banner').style.display=s.mode==='gaming'?'block':'none';
   if(s.mode==='gaming')
@@ -2652,9 +2738,9 @@ function render(s){
   if(modeChanged)schedule();
   const k=JSON.stringify([cfg.panel_order,cfg.hidden_panels,activeTab]);
   if(k!==layoutKey){layoutKey=k;applyLayout();}
-  if(activeTab==='system')loadGraveReleases();
+  if(activeTab==='system'&&!macosCompanion)loadGraveReleases();
   // 📁 Files is a built-in tile: opens the native file-manager modal.
-  const tiles=[{name:'📁 Files',url:FILES_URL}].concat(allApps());
+  const tiles=(s.platform==='macos'?[]:[{name:'📁 Files',url:FILES_URL}]).concat(allApps());
   $('apps').innerHTML=tiles.filter(a=>!cfg.hidden_apps.includes(a.name)).map(a=>{
     if(a.url===FILES_URL)
       return `<a class="app" href="#files" data-files="1">${esc(a.name)}</a>`;
