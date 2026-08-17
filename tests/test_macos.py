@@ -52,6 +52,22 @@ class MacosContractTests(unittest.TestCase):
         finally:
             net.run_lines = old
 
+    def test_installer_rejects_non_darwin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = dict(os.environ, HOME=tmp, GRAVEDECAY_MAC_ROOT=str(pathlib.Path(tmp) / "root"),
+                       PATH="/usr/bin:/bin")
+            # Linux CI covers the real, unmodified host path. macOS uses a
+            # Linux shim so contributors still exercise the guard locally.
+            if os.uname().sysname == "Darwin":
+                fake_bin = pathlib.Path(tmp) / "linux-bin"; fake_bin.mkdir()
+                fake_uname = fake_bin / "uname"; fake_uname.write_text("#!/bin/sh\necho Linux\n")
+                fake_uname.chmod(0o755)
+                env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            result = subprocess.run(["sh", str(ROOT / "macos/install.sh"), "--no-serve", "--dry-run"],
+                                    env=env, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("requires Darwin", result.stderr)
+
     def test_installer_is_user_scoped_and_convergent(self):
         install = (ROOT / "macos/install.sh").read_text()
         uninstall = (ROOT / "macos/uninstall.sh").read_text()
@@ -96,12 +112,17 @@ class MacosContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             env = dict(os.environ, HOME=tmp, GRAVEDECAY_MAC_ROOT=str(pathlib.Path(tmp) / "root"),
                        PATH="/usr/bin:/bin")
-            # A local-only dry run needs Python, but never a Tailscale binary.
+            # Linux CI needs a Darwin shim to exercise the macOS installer's
+            # local-only dry-run path without invoking launchd or Tailscale.
+            fake_bin = pathlib.Path(tmp) / "darwin-bin"; fake_bin.mkdir()
+            fake_uname = fake_bin / "uname"; fake_uname.write_text("#!/bin/sh\necho Darwin\n")
+            fake_uname.chmod(0o755)
+            darwin_env = dict(env, PATH=f"{fake_bin}:{env['PATH']}")
             result = subprocess.run(["sh", str(ROOT / "macos/install.sh"), "--no-serve", "--dry-run"],
-                                    env=env, capture_output=True, text=True)
+                                    env=darwin_env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             unsafe = subprocess.run(["sh", str(ROOT / "macos/install.sh"), "--no-serve", "--dry-run", "--root", str(pathlib.Path(tmp) / "sub/..")],
-                                    env=env, capture_output=True, text=True)
+                                    env=darwin_env, capture_output=True, text=True)
             self.assertNotEqual(unsafe.returncode, 0)
             (pathlib.Path(tmp) / ".gravedecay-macos").write_text("")
             refused = subprocess.run(["sh", str(ROOT / "macos/uninstall.sh"), "--purge", "--root", str(pathlib.Path(tmp) / "sub/..")],
