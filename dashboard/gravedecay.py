@@ -2700,6 +2700,8 @@ function cores(list){
   ).join('')+`</div>`;
 }
 function meter(p){return `<div class="meter ${meterClass(p)}"><i style="width:${Math.min(p,100)}%"></i></div>`}
+// Charge is an inverse signal: a full battery is good, unlike disk/memory use.
+function chargeMeter(p){return `<div class="meter"><i style="width:${Math.min(p,100)}%"></i></div>`}
 function tile(label,value,sub,extra){return `<div class="tile"><div class="label">${label}</div>
   <div class="value">${value}</div>${sub?`<div class="sub">${sub}</div>`:''}${extra||''}</div>`}
 function fmtGB(kb){return (kb/1048576).toFixed(1)+' GB'}
@@ -2877,7 +2879,7 @@ function render(s){
         `${fmtGB(mem.total_kb||0)} installed · ${fmtGB(mem.compressed_kb||0)} compressed`,pressure!=null?meter(pressure):'')+
       tile('Disk '+esc(disk.label),disk.pct+'%',`${fmtGB(disk.used/1024)} used`,meter(disk.pct))+
       tile('Thermal',thermalValue,thermalSub)+
-      (battery?tile('Battery',battery.pct+'%',`${esc(battery.state||'unknown')} · ${esc(battery.power_source||'battery')}`,meter(battery.pct)):'')+
+      (battery?tile('Battery',battery.pct+'%',`${esc(battery.state||'unknown')} · ${esc(battery.power_source||'battery')}`,chargeMeter(battery.pct)):'')+
       tile('Swap',swap.used_mb!=null?fmtMB(swap.used_mb):'—',
         swap.total_mb!=null?`${fmtMB(swap.used_mb)} used of ${fmtMB(swap.total_mb)}`:'swap status unavailable');
   }else{

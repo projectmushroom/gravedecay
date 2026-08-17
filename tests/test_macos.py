@@ -80,6 +80,9 @@ class MacosContractTests(unittest.TestCase):
         self.assertIn("tile('Thermal'", source)
         self.assertIn("tile('Swap'", source)
         self.assertIn("if(macosCompanion){", source)
+        self.assertIn("function chargeMeter(p)", source)
+        self.assertIn("chargeMeter(battery.pct)", source)
+        self.assertNotIn("meter(battery.pct)", source)
         # Linux's established temperature/fan cards remain in its separate branch.
         self.assertIn("tile('CPU temp'", source)
         self.assertIn("return cached(\"macos-system\", 5", source)
