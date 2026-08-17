@@ -223,6 +223,7 @@ class MacosContractTests(unittest.TestCase):
         self.assertIn("return cached(\"macos-system\", 5", source)
         self.assertIn("body:not(.macos) .mac-only-setting", source)
         self.assertIn("Keep the Linux PR-only presentation", source)
+        self.assertIn('body.macos [data-panel="inbox"]', source)
 
     def test_installer_rejects_non_darwin(self):
         with tempfile.TemporaryDirectory() as tmp:

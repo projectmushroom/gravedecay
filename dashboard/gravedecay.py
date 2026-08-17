@@ -2618,7 +2618,7 @@ body.gaming #foot{display:none}
   .apps{grid-template-columns:1fr}
 }
 /* macOS has a local-work dashboard but deliberately no Linux/T3 controls. */
-body.macos [data-panel="tmux"],body.macos [data-panel="sessions"],body.macos [data-panel="usage"],
+body.macos [data-panel="tmux"],body.macos [data-panel="sessions"],body.macos [data-panel="usage"],body.macos [data-panel="inbox"],
 body.macos [data-panel="actions"],body.macos [data-panel="docker"],
 body.macos [data-panel="journal"],body.macos #game-banner,body.macos #mode,
 body.macos #boot-mode-head,body.macos #boot-mode-row,body.macos #throttle-head,

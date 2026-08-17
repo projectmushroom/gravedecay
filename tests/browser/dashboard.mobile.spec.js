@@ -121,6 +121,9 @@ test('macOS renders its local work tab and repository-root setting', async ({ pa
   await expect(page.locator('#prs')).toContainText('An open pull request');
   await expect(page.locator('#prs')).toContainText('An open issue');
   await expect(page.locator('[data-panel="repos"]')).toContainText('a-private-repository');
+  expect(await page.locator('[data-panel]').evaluateAll(panels => panels
+    .filter(panel => getComputedStyle(panel).display !== 'none')
+    .map(panel => panel.dataset.panel).sort())).toEqual(['ci', 'linear', 'prs', 'repos']);
   await page.locator('#gear').click();
   await expect(page.locator('#set-repo-root')).toBeVisible();
   await expect(page.locator('#set-linear')).toBeVisible();
