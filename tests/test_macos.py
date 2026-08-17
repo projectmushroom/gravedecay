@@ -52,6 +52,38 @@ class MacosContractTests(unittest.TestCase):
         finally:
             net.run_lines = old
 
+    def test_dashboard_macos_metric_parsers_and_fallbacks(self):
+        dash = load(ROOT / "dashboard/gravedecay.py", {"GRAVEDECAY_PLATFORM": "macos"})
+        self.assertEqual(dash.parse_macos_top_cpu(
+            "CPU usage: 5.24% user, 9.75% sys, 85.0% idle\n"), 15.0)
+        self.assertIsNone(dash.parse_macos_top_cpu("CPU usage: unknown"))
+        self.assertEqual(dash.parse_macos_memory_pressure(
+            "System-wide memory free percentage: 75%\n"), 25.0)
+        self.assertIsNone(dash.parse_macos_memory_pressure("not available"))
+        pages, size = dash.parse_macos_vm_stat("Mach Virtual Memory Statistics: (page size of 16384 bytes)\n"
+                                                "Pages free: 10.\nPages occupied by compressor: 20.\n")
+        self.assertEqual((pages["occupied by compressor"], size), (20, 16384))
+        thermal = dash.parse_macos_pmset_therm("CPU_Scheduler_Limit = 100\nCPU_Available_CPUs = 8\nCPU_Speed_Limit = 100\n")
+        self.assertEqual((thermal["state"], thermal["speed_limit"]), ("nominal", 100))
+        self.assertEqual(dash.parse_macos_pmset_therm("CPU_Speed_Limit = 75")["state"], "throttled")
+        self.assertIsNone(dash.parse_macos_pmset_therm("missing")["state"])
+        battery = dash.parse_macos_pmset_batt("Now drawing from 'Battery Power'\n -InternalBattery-0 87%; discharging; 2:10 remaining\n")
+        self.assertEqual(battery, {"pct": 87, "state": "discharging", "power_source": "Battery Power"})
+        self.assertIsNone(dash.parse_macos_pmset_batt("Now drawing from 'AC Power'"))
+        self.assertEqual(dash.parse_macos_swapusage("total = 4096.00M  used = 512.00M  free = 3584.00M"),
+                         {"total_mb": 4096.0, "used_mb": 512.0, "free_mb": 3584.0})
+        self.assertIsNone(dash.parse_macos_swapusage("bad")["used_mb"])
+
+    def test_dashboard_macos_render_contract(self):
+        source = (ROOT / "dashboard/gravedecay.py").read_text()
+        self.assertIn("tile('Memory pressure'", source)
+        self.assertIn("tile('Thermal'", source)
+        self.assertIn("tile('Swap'", source)
+        self.assertIn("if(macosCompanion){", source)
+        # Linux's established temperature/fan cards remain in its separate branch.
+        self.assertIn("tile('CPU temp'", source)
+        self.assertIn("return cached(\"macos-system\", 5", source)
+
     def test_installer_rejects_non_darwin(self):
         with tempfile.TemporaryDirectory() as tmp:
             env = dict(os.environ, HOME=tmp, GRAVEDECAY_MAC_ROOT=str(pathlib.Path(tmp) / "root"),
@@ -147,7 +179,9 @@ class MacosContractTests(unittest.TestCase):
                 for port, path in ((dash_port, "/healthz"), (net_port, "/healthz"), (dash_port, "/api/state")):
                     for _ in range(30):
                         try:
-                            with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=.5) as r:
+                            # The first dashboard sample includes one native top
+                            # reading; subsequent polls reuse its short TTL cache.
+                            with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=3) as r:
                                 body = r.read().decode()
                             break
                         except (urllib.error.URLError, ConnectionError): time.sleep(.1)

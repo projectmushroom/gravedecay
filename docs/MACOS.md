@@ -23,6 +23,18 @@ write authorization. The dashboard intentionally has no T3 pairing/connect,
 update/restart, terminal, Docker, gaming, reboot, journal, or Linux service
 controls.
 
+The System view uses only native, unprivileged macOS data: CPU activity from
+`top`, reclaimability from `memory_pressure` (labelled **Memory pressure**, not
+RAM used), installed and compressed-memory detail from `sysctl`/`vm_stat`, disk
+usage, `pmset` thermal limits and battery state, and swap use from `sysctl`.
+The dashboard briefly caches native sampling so a normal refresh does not run
+`top` more often than about every five seconds. Exact CPU/GPU temperatures and
+fan RPM are intentionally not shown: macOS exposes those SMC readings through
+privileged `powermetrics` or third-party SMC tooling, neither of which this
+user-scoped, no-sudo companion installs or depends on. Thermal is instead
+reported as nominal or throttled from `pmset -g therm`; desktop Macs simply
+have no battery card.
+
 Run `macos/status.sh` for a read-only doctor-lite: it checks selected
 LaunchAgents, loopback health, and Serve paths when applicable. `macos/uninstall.sh --root PATH` unloads and removes only its two LaunchAgents and Serve
 path mounts. It preserves the Application Support data by default; `--purge`

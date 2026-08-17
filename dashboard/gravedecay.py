@@ -534,35 +534,124 @@ def collect_cpu():
     return _cpu_last
 
 
+def parse_macos_top_cpu(output):
+    """Parse the one-line CPU summary emitted by ``top -l 1 -n 0 -F -R``."""
+    m = re.search(r"CPU usage:\s*([\d.]+)%\s*user,\s*([\d.]+)%\s*sys,\s*([\d.]+)%\s*idle", output, re.I)
+    if not m:
+        return None
+    try:
+        return round(max(0.0, min(100.0, float(m.group(1)) + float(m.group(2)))), 1)
+    except ValueError:
+        return None
+
+
+def parse_macos_memory_pressure(output):
+    m = re.search(r"System-wide memory free percentage:\s*(\d+(?:\.\d+)?)%", output, re.I)
+    if not m:
+        return None
+    try:
+        return round(max(0.0, min(100.0, 100.0 - float(m.group(1)))), 1)
+    except ValueError:
+        return None
+
+
+def parse_macos_vm_stat(output, page_size=None):
+    """Return vm_stat pages and its reported page size, if either is usable."""
+    pages = {}
+    for name, value in re.findall(r"Pages ([^:]+):\s*(\d+)", output):
+        try:
+            pages[name.strip().lower()] = int(value)
+        except ValueError:
+            pass
+    m = re.search(r"page size of\s*(\d+)\s*bytes", output, re.I)
+    if m:
+        page_size = int(m.group(1))
+    return pages, page_size
+
+
+def parse_macos_pmset_therm(output):
+    values = {}
+    for key, value in re.findall(r"(CPU_(?:Scheduler_Limit|Available_CPUs|Speed_Limit))\s*=\s*(\d+)", output):
+        values[key] = int(value)
+    limits = [values[k] for k in ("CPU_Scheduler_Limit", "CPU_Speed_Limit") if k in values]
+    if not limits:
+        return {"state": None, "speed_limit": None, "scheduler_limit": None, "available_cpus": None}
+    return {"state": "throttled" if any(x < 100 for x in limits) else "nominal",
+            "speed_limit": values.get("CPU_Speed_Limit"),
+            "scheduler_limit": values.get("CPU_Scheduler_Limit"),
+            "available_cpus": values.get("CPU_Available_CPUs")}
+
+
+def parse_macos_pmset_batt(output):
+    source = re.search(r"Now drawing from '([^']+)'", output, re.I)
+    battery = re.search(r"\b(\d{1,3})%;\s*([^;\n]+)", output)
+    if not battery:
+        return None
+    try:
+        pct = max(0, min(100, int(battery.group(1))))
+    except ValueError:
+        return None
+    return {"pct": pct, "state": battery.group(2).strip(),
+            "power_source": source.group(1) if source else None}
+
+
+def parse_macos_swapusage(output):
+    values = {}
+    for key, value in re.findall(r"\b(total|used|free)\s*=\s*([\d.]+)M", output, re.I):
+        values[key.lower()] = float(value)
+    if "total" not in values or "used" not in values:
+        return {"total_mb": None, "used_mb": None, "free_mb": None}
+    return {"total_mb": values["total"], "used_mb": values["used"],
+            "free_mb": values.get("free")}
+
+
+def _collect_macos_system():
+    """Native, unprivileged Mac vitals. Kept together for one short TTL cache."""
+    load = [0.0, 0.0, 0.0]
+    rc, out, _ = sh(["uptime"])
+    if rc == 0:
+        m = re.search(r"load averages?:\s*([\d.]+)[, ]+\s*([\d.]+)[, ]+\s*([\d.]+)", out)
+        if m:
+            load = [float(x) for x in m.groups()]
+    rc, out, _ = sh(["sysctl", "-n", "kern.boottime"])
+    m = re.search(r"sec\s*=\s*(\d+)", out)
+    uptime = int(time.time()) - int(m.group(1)) if m else 0
+
+    rc, top_out, _ = sh(["top", "-l", "1", "-n", "0", "-F", "-R", "-stats", "cpu"], timeout=3)
+    cpu_pct = parse_macos_top_cpu(top_out) if rc == 0 else None
+    rc, pressure_out, _ = sh(["memory_pressure", "-Q"], timeout=3)
+    pressure_pct = parse_macos_memory_pressure(pressure_out) if rc == 0 else None
+    rc, vm_out, _ = sh(["vm_stat"])
+    rc2, page_out, _ = sh(["sysctl", "-n", "hw.pagesize"])
+    page_size = int(page_out.strip()) if rc2 == 0 and page_out.strip().isdigit() else None
+    pages, page_size = parse_macos_vm_stat(vm_out if rc == 0 else "", page_size)
+    rc, out, _ = sh(["sysctl", "-n", "hw.memsize"])
+    total = int(out.strip()) if rc == 0 and out.strip().isdigit() else None
+    compressed = pages.get("occupied by compressor", 0) * (page_size or 0)
+    rc, therm_out, _ = sh(["pmset", "-g", "therm"])
+    thermal = parse_macos_pmset_therm(therm_out) if rc == 0 else parse_macos_pmset_therm("")
+    rc, batt_out, _ = sh(["pmset", "-g", "batt"])
+    battery = parse_macos_pmset_batt(batt_out) if rc == 0 else None
+    rc, swap_out, _ = sh(["sysctl", "-n", "vm.swapusage"])
+    swap = parse_macos_swapusage(swap_out) if rc == 0 else parse_macos_swapusage("")
+    u = shutil.disk_usage("/")
+    return {"load": load, "ncpu": os.cpu_count(), "cpu": {"pct": cpu_pct, "cores": []},
+            # This is reclaimability pressure, not physical RAM occupancy.
+            "mem": {"total_kb": (total or 0) // 1024, "used_kb": 0,
+                    "pct": pressure_pct, "pressure_pct": pressure_pct,
+                    "compressed_kb": compressed // 1024},
+            "disks": [{"label": "/", "total": u.total, "used": u.used,
+                       "pct": round(u.used / u.total * 100, 1)}],
+            "uptime_s": uptime, "temps": {"cpu": None, "gpu": None,
+            "gpu_mhz": None, "gpu_state": None, "fans": []},
+            "thermal": thermal, "battery": battery, "swap": swap}
+
+
 def collect_system():
     if MACOS:
-        load = [0.0, 0.0, 0.0]
-        rc, out, _ = sh(["uptime"])
-        if rc == 0:
-            m = re.search(r"load averages?:\s*([\d.]+)[, ]+\s*([\d.]+)[, ]+\s*([\d.]+)", out)
-            if m:
-                load = [float(x) for x in m.groups()]
-        rc, out, _ = sh(["sysctl", "-n", "kern.boottime"])
-        m = re.search(r"sec\s*=\s*(\d+)", out)
-        uptime = int(time.time()) - int(m.group(1)) if m else 0
-        total = used = 0
-        rc, out, _ = sh(["vm_stat"])
-        pages = {k: int(v) for k, v in re.findall(r"Pages ([^:]+):\s*(\d+)", out)}
-        page_size = 4096
-        rc2, page_out, _ = sh(["sysctl", "-n", "hw.pagesize"])
-        if rc2 == 0 and page_out.strip().isdigit(): page_size = int(page_out)
-        rc, out, _ = sh(["sysctl", "-n", "hw.memsize"])
-        total = int(out.strip()) if rc == 0 and out.strip().isdigit() else 1
-        free = (pages.get("free", 0) + pages.get("speculative", 0)) * page_size
-        used = max(0, total - free)
-        u = shutil.disk_usage("/")
-        return {"load": load, "ncpu": os.cpu_count(), "cpu": {"pct": None, "cores": []},
-                "mem": {"total_kb": total // 1024, "used_kb": used // 1024,
-                        "pct": round(used / total * 100, 1) if total else 0},
-                "disks": [{"label": "/", "total": u.total, "used": u.used,
-                           "pct": round(u.used / u.total * 100, 1)}],
-                "uptime_s": uptime, "temps": {"cpu": None, "gpu": None,
-                "gpu_mhz": None, "gpu_state": None, "fans": []}}
+        # top costs about half a second on Intel Macs. Dashboard polling may be
+        # as fast as 2 seconds, so share one native sample for five seconds.
+        return cached("macos-system", 5, _collect_macos_system)
     with open("/proc/loadavg") as f:
         load1, load5, load15 = f.read().split()[:3]
     mem = {}
@@ -2614,6 +2703,7 @@ function meter(p){return `<div class="meter ${meterClass(p)}"><i style="width:${
 function tile(label,value,sub,extra){return `<div class="tile"><div class="label">${label}</div>
   <div class="value">${value}</div>${sub?`<div class="sub">${sub}</div>`:''}${extra||''}</div>`}
 function fmtGB(kb){return (kb/1048576).toFixed(1)+' GB'}
+function fmtMB(mb){return mb==null?'—':(mb>=1024?(mb/1024).toFixed(1)+' GB':Math.round(mb)+' MB')}
 function fmtUp(s){const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);
   return d?`${d}d ${h}h`:h?`${h}h ${m}m`:`${m}m`}
 function statusDot(state){
@@ -2769,11 +2859,31 @@ function render(s){
   // the mode you're already in isn't a button you can press
   document.querySelector('[data-act="gaming"]').disabled=(s.mode==='gaming');
   document.querySelector('[data-act="developer"]').disabled=(s.mode==='developer');
-  const sys=s.system,t=sys.temps;
+  const sys=s.system,t=sys.temps||{};
   const cpu=sys.cpu||{pct:null,cores:[]};
-  push('cpu',t.cpu);
-  $('tiles').innerHTML=
-    tile('CPU',cpu.pct!=null?Math.round(cpu.pct)+'%':'—',
+  if(macosCompanion){
+    const mem=sys.mem||{}, thermal=sys.thermal||{}, battery=sys.battery, swap=sys.swap||{};
+    const pressure=mem.pressure_pct;
+    push('cpu',cpu.pct);
+    const thermalValue=thermal.state==='nominal'?'Nominal':thermal.state==='throttled'?'Throttled':'N/A';
+    const thermalSub=thermal.speed_limit!=null
+      ?`CPU speed limit ${thermal.speed_limit}%${thermal.available_cpus!=null?` · ${thermal.available_cpus} CPUs available`:''}`
+      :'pmset thermal status unavailable';
+    const disk=sys.disks[0];
+    $('tiles').innerHTML=
+      tile('CPU',cpu.pct!=null?Math.round(cpu.pct)+'%':'—',
+        `load ${sys.load[0].toFixed(2)} / ${sys.load[1].toFixed(2)} / ${sys.load[2].toFixed(2)} · ${sys.ncpu} cores`,spark('cpu'))+
+      tile('Memory pressure',pressure!=null?Math.round(pressure)+'%':'—',
+        `${fmtGB(mem.total_kb||0)} installed · ${fmtGB(mem.compressed_kb||0)} compressed`,pressure!=null?meter(pressure):'')+
+      tile('Disk '+esc(disk.label),disk.pct+'%',`${fmtGB(disk.used/1024)} used`,meter(disk.pct))+
+      tile('Thermal',thermalValue,thermalSub)+
+      (battery?tile('Battery',battery.pct+'%',`${esc(battery.state||'unknown')} · ${esc(battery.power_source||'battery')}`,meter(battery.pct)):'')+
+      tile('Swap',swap.used_mb!=null?fmtMB(swap.used_mb):'—',
+        swap.total_mb!=null?`${fmtMB(swap.used_mb)} used of ${fmtMB(swap.total_mb)}`:'swap status unavailable');
+  }else{
+    push('cpu',t.cpu);
+    $('tiles').innerHTML=
+      tile('CPU',cpu.pct!=null?Math.round(cpu.pct)+'%':'—',
       `load ${sys.load[0].toFixed(2)} / ${sys.load[1].toFixed(2)} / ${sys.load[2].toFixed(2)} · ${sys.ncpu} cores`,
       cores(cpu.cores))+
     tile('CPU temp',t.cpu!=null?Math.round(t.cpu)+'°':'—','package',spark('cpu'))+
@@ -2783,6 +2893,7 @@ function render(s){
     tile('Memory',sys.mem.pct+'%',`${fmtGB(sys.mem.used_kb)} of ${fmtGB(sys.mem.total_kb)}`,meter(sys.mem.pct))+
     sys.disks.map(d=>tile('Disk '+esc(d.label),d.pct+'%',
       `${fmtGB(d.used/1024)} used · ${s.backups.count} backups`,meter(d.pct))).join('');
+  }
   $('services').innerHTML=s.services.map(u=>`<tr>
     <td>${statusDot(u.active)}${esc(u.unit)}</td>
     <td class="dim">${esc(u.active)} (${esc(u.sub)})</td></tr>`).join('');
