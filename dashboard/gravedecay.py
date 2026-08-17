@@ -18,6 +18,7 @@
 
 import base64
 import binascii
+import concurrent.futures
 import functools
 import glob
 import hashlib
@@ -37,6 +38,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("GRAVEDECAY_PORT", os.environ.get("DASH_PORT", "4712")))
 GRAVE_ROOT = os.environ.get("GRAVE_ROOT", "/srv/dev")
+PLATFORM = os.environ.get("GRAVEDECAY_PLATFORM", "linux").lower()
+MACOS = PLATFORM == "macos"
 # tmux socket carrying the agent sessions. Single-user uses "agents"; a workspace
 # dashboard is handed its per-workspace socket (grave-<slug>) via TMUX_SOCKET so
 # the sessions panel and kill button see the same sessions the workspace terminal
@@ -76,6 +79,8 @@ APPS = [{"name": name.strip(), "url": url.strip()}
         for name, _, url in (p.partition("=") for p in os.environ.get(
             "GRAVEDECAY_APPS", "⌨️ T3 Code=/").split(";"))
         if url.strip()]
+if MACOS and "GRAVEDECAY_APPS" not in os.environ:
+    APPS = [{"name": "📡 Network", "url": "/net/"}]
 # User preferences, editable from the ⚙️ panel (writes gated to ALLOWED_USERS
 # exactly like actions). Stored beside the other appliance config.
 SETTINGS_PATH = os.path.join(GRAVE_ROOT, "config", "gravedecay-settings.json")
@@ -93,6 +98,12 @@ DEFAULT_SETTINGS = {
                            # (hand off to the official T3 Code app, t3code://)
     "poll_ms": 5000,       # dashboard refresh interval
 }
+# The Mac companion deliberately keeps its project inventory outside its
+# Application Support root.  Expand this at startup so the settings UI shows a
+# useful, absolute default without requiring shell expansion from a browser.
+MACOS_REPO_ROOT_DEFAULT = os.path.realpath(os.path.expanduser("~/Sites"))
+if MACOS:
+    DEFAULT_SETTINGS["repo_root"] = MACOS_REPO_ROOT_DEFAULT
 
 
 def _safe_tile_url(url):
@@ -154,6 +165,22 @@ def save_settings(data):
     return merged
 
 
+def macos_repo_root(value=None):
+    """Canonical Mac project root, or a clear validation error.
+
+    The root is supplied by an owner in Settings, so never let it become an
+    implicit relative path or a shell fragment.  ``realpath`` also means a
+    symlinked root is checked against the directory it actually names.
+    """
+    root = MACOS_REPO_ROOT_DEFAULT if value is None else str(value).strip()
+    if not os.path.isabs(root):
+        return None, "Repository root must be an absolute path"
+    root = os.path.realpath(root)
+    if not os.path.isdir(root):
+        return None, f"Repository root does not exist or is not a directory: {root}"
+    return root, None
+
+
 GRAVE = os.environ.get("GRAVEDECAY_GRAVE", "/usr/local/bin/grave")
 # On a managed-toolchain host (SteamOS) t3 shares grave's durable bin dir
 # (~/.local/bin), but package hosts diverge: grave installs to /usr/local/bin
@@ -204,6 +231,10 @@ ACTIONS = {
     "keepalive-on": [GRAVE, "keepalive", "on"],    # 🟢 "always alive": warm tailnet relay paths
     "keepalive-off": [GRAVE, "keepalive", "off"],
 }
+# The source macOS companion is intentionally observability-only.  Keep this
+# gate server-side: hiding buttons is not an authorization boundary.
+if MACOS:
+    ACTIONS = {}
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 # Only one grave action at a time: concurrent mode flips race each other
 # (instrumentation caught a developer run failing mid gaming-kill).
@@ -335,7 +366,16 @@ def unit_state(unit):
     return {"unit": unit, "active": kv.get("ActiveState", "?"), "sub": kv.get("SubState", "?")}
 
 
+def launchagent_state(label):
+    rc, out, _ = sh(["launchctl", "print", f"gui/{os.getuid()}/{label}"], timeout=3)
+    return {"unit": label, "active": "active" if rc == 0 else "inactive",
+            "sub": "launchd" if rc == 0 else "not loaded"}
+
+
 def collect_services():
+    if MACOS:
+        return [launchagent_state("io.gravedecay.dashboard"),
+                launchagent_state("io.gravedecay.network")]
     return [unit_state(u) for u in UNITS]
 
 
@@ -391,6 +431,187 @@ def collect_repos():
                           "last_when": when, "last_subject": subject[:60]})
         return repos
     return cached("repos", 15, fetch)
+
+
+MACOS_REPO_SCAN_MAX_DEPTH = 4
+MACOS_REPO_SCAN_MAX_DIRS = 400
+MACOS_REPO_SCAN_MAX_REPOS = 40
+MACOS_GITHUB_REPO_LIMIT = 12
+MACOS_GITHUB_ITEMS_PER_REPO = 3
+MACOS_GITHUB_WORKERS = 4
+
+
+def github_remote(value):
+    """Return an owner/repository slug for a normal github.com remote only."""
+    value = value.strip()
+    m = re.search(r"github\.com[:/]([^/\s]+)/([^/\s]+?)(?:\.git)?/?$", value)
+    if not m:
+        return None
+    slug = f"{m.group(1)}/{m.group(2)}"
+    return slug if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", slug) else None
+
+
+def collect_macos_repo_inventory():
+    """Discover a bounded set of nested local Git repositories under ~/Sites.
+
+    No repo-provided string becomes a command: every git invocation is an argv
+    list and the walker never follows symlinked directories.  A typical
+    ``~/Sites/owner/repo`` layout is covered while an accidentally broad root
+    cannot turn a dashboard refresh into an unbounded filesystem crawl.
+    """
+    configured = load_settings().get("repo_root", MACOS_REPO_ROOT_DEFAULT)
+    root, error = macos_repo_root(configured)
+    if error:
+        return {"root": os.path.realpath(str(configured)), "repos": [], "error": error}
+    cache_key = f"macos-repo-inventory:{root}"
+
+    def fetch():
+        if not shutil.which("git"):
+            return {"root": root, "repos": [],
+                    "error": "git is not installed or unavailable in the LaunchAgent PATH"}
+        repos, seen_dirs = [], 0
+        try:
+            walker = os.walk(root, topdown=True, followlinks=False)
+            for directory, dirs, _files in walker:
+                # Do not enter hidden/tooling trees or symlinked directories;
+                # a repo's own .git directory is never part of the scan.
+                dirs[:] = sorted(d for d in dirs if d != ".git" and not os.path.islink(os.path.join(directory, d)))
+                relative = os.path.relpath(directory, root)
+                depth = 0 if relative == "." else relative.count(os.sep) + 1
+                if depth > MACOS_REPO_SCAN_MAX_DEPTH:
+                    dirs[:] = []
+                    continue
+                seen_dirs += 1
+                if seen_dirs > MACOS_REPO_SCAN_MAX_DIRS:
+                    break
+                git_marker = os.path.join(directory, ".git")
+                if not os.path.exists(git_marker):
+                    continue
+                rc, inside, _ = sh(["git", "-C", directory, "rev-parse", "--is-inside-work-tree"])
+                if rc != 0 or inside.strip() != "true":
+                    dirs[:] = []
+                    continue
+                _, branch, _ = sh(["git", "-C", directory, "rev-parse", "--abbrev-ref", "HEAD"])
+                _, porcelain, _ = sh(["git", "-C", directory, "status", "--porcelain"])
+                _, last, _ = sh(["git", "-C", directory, "log", "-1", "--format=%cr\t%s"])
+                _, remote, _ = sh(["git", "-C", directory, "remote", "get-url", "origin"])
+                when, _, subject = last.strip().partition("\t")
+                repos.append({"name": relative if relative != "." else os.path.basename(root),
+                              "branch": branch.strip() or "detached",
+                              "dirty": len(porcelain.splitlines()),
+                              "last_when": when, "last_subject": subject[:80],
+                              "github_repo": github_remote(remote)})
+                dirs[:] = []  # a nested repository is represented once
+                if len(repos) >= MACOS_REPO_SCAN_MAX_REPOS:
+                    break
+        except OSError as e:
+            return {"root": root, "repos": repos, "error": f"Repository scan failed: {e}"}
+        truncated = seen_dirs > MACOS_REPO_SCAN_MAX_DIRS or len(repos) >= MACOS_REPO_SCAN_MAX_REPOS
+        suffix = "repository scan limit reached" if truncated else None
+        return {"root": root, "repos": sorted(repos, key=lambda repo: repo["name"]),
+                "error": None, "warning": suffix, "truncated": truncated}
+    return cached(cache_key, 30, fetch)
+
+
+def collect_macos_work(inventory):
+    """Read bounded GitHub work + CI concurrently for the local repo set."""
+    root = inventory.get("root", "")
+    cache_key = f"macos-work:{root}"
+
+    def fetch():
+        if inventory.get("error") and not inventory.get("repos"):
+            return {"github": {"login": None, "repos": [], "error": inventory["error"]},
+                    "ci": {"rows": [], "error": inventory["error"]}}
+        if not shutil.which("gh"):
+            error = "gh is not installed — install GitHub CLI, then run gh auth login"
+            return {"github": {"login": None, "repos": [], "error": error},
+                    "ci": {"rows": [], "error": error}}
+        rc, out, _ = sh(["gh", "api", "user", "--jq", ".login"], timeout=10)
+        login = out.strip() if rc == 0 and out.strip() else None
+        if not login:
+            error = "gh not authenticated — run gh auth login in Terminal"
+            return {"github": {"login": None, "repos": [], "error": error},
+                    "ci": {"rows": [], "error": error}}
+        eligible_repos = sorted((repo for repo in inventory.get("repos", []) if repo.get("github_repo")),
+                                key=lambda repo: repo["name"])
+        capped = len(eligible_repos) > MACOS_GITHUB_REPO_LIMIT
+        github_repos = eligible_repos[:MACOS_GITHUB_REPO_LIMIT]
+        if not github_repos:
+            error = "No GitHub origin remotes in the configured repository root"
+            return {"github": {"login": login, "repos": [], "error": error},
+                    "ci": {"rows": [], "error": error}}
+
+        def api(repo, kind):
+            slug = repo["github_repo"]
+            if kind == "ci":
+                return kind, repo, sh(["gh", "run", "list", "-R", slug, "-L", "1",
+                                      "--json", "workflowName,conclusion,status,url,headBranch"], timeout=15)
+            if kind == "issues":
+                # REST /issues also includes pull requests; use gh's issue
+                # endpoint so the bounded limit applies to actual issues.
+                return kind, repo, sh(["gh", "issue", "list", "-R", slug, "--state", "open",
+                                      "--limit", str(MACOS_GITHUB_ITEMS_PER_REPO),
+                                      "--json", "number,title,url"], timeout=15)
+            return kind, repo, sh(["gh", "api", "-X", "GET",
+                                  f"repos/{slug}/pulls?state=open&per_page={MACOS_GITHUB_ITEMS_PER_REPO}"], timeout=15)
+
+        results = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=MACOS_GITHUB_WORKERS) as pool:
+            pending = [pool.submit(api, repo, kind) for repo in github_repos for kind in ("prs", "issues", "ci")]
+            for future in concurrent.futures.as_completed(pending):
+                kind, repo, result = future.result()
+                results[(repo["name"], kind)] = result
+
+        groups, ci_rows, errors = [], [], []
+        for repo in github_repos:
+            label, slug = repo["name"], repo["github_repo"]
+            group = {"repo": label, "url": f"https://github.com/{slug}", "prs": [], "issues": []}
+            for kind in ("prs", "issues"):
+                rc, out, _ = results.get((label, kind), (1, "", ""))
+                if rc != 0:
+                    errors.append(label)
+                    continue
+                try:
+                    rows = json.loads(out)
+                except ValueError:
+                    errors.append(label)
+                    continue
+                for row in rows[:MACOS_GITHUB_ITEMS_PER_REPO]:
+                    group[kind].append({"number": row.get("number"),
+                                        "title": str(row.get("title", ""))[:80],
+                                        "url": row.get("url") or row.get("html_url", "")})
+            rc, out, _ = results.get((label, "ci"), (1, "", ""))
+            if rc == 0:
+                try:
+                    runs = json.loads(out)
+                except ValueError:
+                    runs = []
+                if runs:
+                    run = runs[0]
+                    ci_rows.append({"repo": label, "workflow": run.get("workflowName", ""),
+                                    "branch": run.get("headBranch", ""), "status": run.get("status", ""),
+                                    "conclusion": run.get("conclusion") or "", "url": run.get("url", "")})
+            else:
+                errors.append(label)
+            if group["prs"] or group["issues"]:
+                groups.append(group)
+        warnings = []
+        if capped:
+            warnings.append(f"remote work limited to first {MACOS_GITHUB_REPO_LIMIT} GitHub repositories")
+        if errors:
+            warnings.append("GitHub data unavailable for " + ", ".join(sorted(set(errors))[:3]))
+        warning = "; ".join(warnings) or None
+        return {"github": {"login": login, "repos": groups, "error": None, "warning": warning},
+                "ci": {"rows": ci_rows, "error": None, "warning": warning}}
+    return cached(cache_key, 120, fetch)
+
+
+def collect_macos_github(inventory):
+    return collect_macos_work(inventory)["github"]
+
+
+def collect_macos_ci(inventory):
+    return collect_macos_work(inventory)["ci"]
 
 
 def collect_journal():
@@ -489,7 +710,10 @@ def collect_cpu():
     pure noise, so anything inside CPU_MIN_WINDOW replays the last reading."""
     global _cpu_prev, _cpu_prev_t, _cpu_last
     now = time.monotonic()
-    if now - _cpu_prev_t < CPU_MIN_WINDOW:
+    # A zero timestamp is the deliberate "sample now" sentinel used during
+    # startup/tests; do not mistake an early process monotonic clock for a
+    # sub-window poll.
+    if _cpu_prev_t and now - _cpu_prev_t < CPU_MIN_WINDOW:
         return _cpu_last
     try:
         cur = _read_proc_stat()
@@ -514,7 +738,124 @@ def collect_cpu():
     return _cpu_last
 
 
+def parse_macos_top_cpu(output):
+    """Parse the one-line CPU summary emitted by ``top -l 1 -n 0 -F -R``."""
+    m = re.search(r"CPU usage:\s*([\d.]+)%\s*user,\s*([\d.]+)%\s*sys,\s*([\d.]+)%\s*idle", output, re.I)
+    if not m:
+        return None
+    try:
+        return round(max(0.0, min(100.0, float(m.group(1)) + float(m.group(2)))), 1)
+    except ValueError:
+        return None
+
+
+def parse_macos_memory_pressure(output):
+    m = re.search(r"System-wide memory free percentage:\s*(\d+(?:\.\d+)?)%", output, re.I)
+    if not m:
+        return None
+    try:
+        return round(max(0.0, min(100.0, 100.0 - float(m.group(1)))), 1)
+    except ValueError:
+        return None
+
+
+def parse_macos_vm_stat(output, page_size=None):
+    """Return vm_stat pages and its reported page size, if either is usable."""
+    pages = {}
+    for name, value in re.findall(r"Pages ([^:]+):\s*(\d+)", output):
+        try:
+            pages[name.strip().lower()] = int(value)
+        except ValueError:
+            pass
+    m = re.search(r"page size of\s*(\d+)\s*bytes", output, re.I)
+    if m:
+        page_size = int(m.group(1))
+    return pages, page_size
+
+
+def parse_macos_pmset_therm(output):
+    values = {}
+    for key, value in re.findall(r"(CPU_(?:Scheduler_Limit|Available_CPUs|Speed_Limit))\s*=\s*(\d+)", output):
+        values[key] = int(value)
+    limits = [values[k] for k in ("CPU_Scheduler_Limit", "CPU_Speed_Limit") if k in values]
+    if not limits:
+        return {"state": None, "speed_limit": None, "scheduler_limit": None, "available_cpus": None}
+    return {"state": "throttled" if any(x < 100 for x in limits) else "nominal",
+            "speed_limit": values.get("CPU_Speed_Limit"),
+            "scheduler_limit": values.get("CPU_Scheduler_Limit"),
+            "available_cpus": values.get("CPU_Available_CPUs")}
+
+
+def parse_macos_pmset_batt(output):
+    source = re.search(r"Now drawing from '([^']+)'", output, re.I)
+    battery = re.search(r"\b(\d{1,3})%;\s*([^;\n]+)", output)
+    if not battery:
+        return None
+    try:
+        pct = max(0, min(100, int(battery.group(1))))
+    except ValueError:
+        return None
+    return {"pct": pct, "state": battery.group(2).strip(),
+            "power_source": source.group(1) if source else None}
+
+
+def parse_macos_swapusage(output):
+    values = {}
+    for key, value in re.findall(r"\b(total|used|free)\s*=\s*([\d.]+)M", output, re.I):
+        values[key.lower()] = float(value)
+    if "total" not in values or "used" not in values:
+        return {"total_mb": None, "used_mb": None, "free_mb": None}
+    return {"total_mb": values["total"], "used_mb": values["used"],
+            "free_mb": values.get("free")}
+
+
+def _collect_macos_system():
+    """Native, unprivileged Mac vitals. Kept together for one short TTL cache."""
+    load = [0.0, 0.0, 0.0]
+    rc, out, _ = sh(["uptime"])
+    if rc == 0:
+        m = re.search(r"load averages?:\s*([\d.]+)[, ]+\s*([\d.]+)[, ]+\s*([\d.]+)", out)
+        if m:
+            load = [float(x) for x in m.groups()]
+    rc, out, _ = sh(["sysctl", "-n", "kern.boottime"])
+    m = re.search(r"sec\s*=\s*(\d+)", out)
+    uptime = int(time.time()) - int(m.group(1)) if m else 0
+
+    rc, top_out, _ = sh(["top", "-l", "1", "-n", "0", "-F", "-R", "-stats", "cpu"], timeout=3)
+    cpu_pct = parse_macos_top_cpu(top_out) if rc == 0 else None
+    rc, pressure_out, _ = sh(["memory_pressure", "-Q"], timeout=3)
+    pressure_pct = parse_macos_memory_pressure(pressure_out) if rc == 0 else None
+    rc, vm_out, _ = sh(["vm_stat"])
+    rc2, page_out, _ = sh(["sysctl", "-n", "hw.pagesize"])
+    page_size = int(page_out.strip()) if rc2 == 0 and page_out.strip().isdigit() else None
+    pages, page_size = parse_macos_vm_stat(vm_out if rc == 0 else "", page_size)
+    rc, out, _ = sh(["sysctl", "-n", "hw.memsize"])
+    total = int(out.strip()) if rc == 0 and out.strip().isdigit() else None
+    compressed = pages.get("occupied by compressor", 0) * (page_size or 0)
+    rc, therm_out, _ = sh(["pmset", "-g", "therm"])
+    thermal = parse_macos_pmset_therm(therm_out) if rc == 0 else parse_macos_pmset_therm("")
+    rc, batt_out, _ = sh(["pmset", "-g", "batt"])
+    battery = parse_macos_pmset_batt(batt_out) if rc == 0 else None
+    rc, swap_out, _ = sh(["sysctl", "-n", "vm.swapusage"])
+    swap = parse_macos_swapusage(swap_out) if rc == 0 else parse_macos_swapusage("")
+    u = shutil.disk_usage("/")
+    return {"load": load, "ncpu": os.cpu_count(), "cpu": {"pct": cpu_pct, "cores": []},
+            # This is reclaimability pressure, not physical RAM occupancy.
+            "mem": {"total_kb": (total or 0) // 1024, "used_kb": 0,
+                    "pct": pressure_pct, "pressure_pct": pressure_pct,
+                    "compressed_kb": compressed // 1024},
+            "disks": [{"label": "/", "total": u.total, "used": u.used,
+                       "pct": round(u.used / u.total * 100, 1)}],
+            "uptime_s": uptime, "temps": {"cpu": None, "gpu": None,
+            "gpu_mhz": None, "gpu_state": None, "fans": []},
+            "thermal": thermal, "battery": battery, "swap": swap}
+
+
 def collect_system():
+    if MACOS:
+        # top costs about half a second on Intel Macs. Dashboard polling may be
+        # as fast as 2 seconds, so share one native sample for five seconds.
+        return cached("macos-system", 5, _collect_macos_system)
     with open("/proc/loadavg") as f:
         load1, load5, load15 = f.read().split()[:3]
     mem = {}
@@ -1286,6 +1627,41 @@ def t3_connect_state():
 
 
 def state(headers):
+    if MACOS:
+        # No T3, terminal, Docker, privileged controls, or Linux data on Mac.
+        # Unlike machine vitals, project names, commit subjects and integration
+        # data are owner-private.  Localhost is trusted; a Serve viewer must
+        # exactly match the installer-configured local Tailscale login.
+        viewer = headers.get("Tailscale-User-Login")
+        owner = viewer is None or viewer in ALLOWED_USERS
+        settings = load_settings()
+        if not owner:
+            # A configured path is part of the local project topology too.
+            # Do not hand it to a tailnet observer merely because preferences
+            # are otherwise harmless to render.
+            settings = dict(settings)
+            settings["repo_root"] = ""
+        private = {"github": {"login": None, "prs": [], "issues": [], "error": "restricted"},
+                   "linear": {"configured": False, "issues": [], "error": "restricted"},
+                   "ci": {"rows": [], "error": "restricted"}, "repos": [],
+                   "repo_scan": {"root": None, "error": "restricted"}}
+        if owner:
+            inventory = collect_macos_repo_inventory()
+            work = collect_macos_work(inventory)
+            private = {"github": work["github"], "linear": collect_linear(), "ci": work["ci"],
+                       "repos": inventory["repos"],
+                       "repo_scan": {"root": inventory["root"], "error": inventory.get("error"),
+                                     "warning": inventory.get("warning"),
+                                     "truncated": inventory.get("truncated", False)}}
+        return {"host": HOST, "now": time.strftime("%H:%M:%S"),
+                "viewer": viewer or "local", "platform": "macos",
+                "mode": "developer", "boot_mode": None, "gamewatch": None,
+                "keepalive": None, "apps": list(APPS), "settings": settings,
+                "github": private["github"], "linear": private["linear"], "ci": private["ci"],
+                "usage": None, "notify": None, "services": collect_services(),
+                "docker": {"error": "not managed on macOS", "containers": []}, "tmux": [],
+                "torpor": 0, "repos": private["repos"], "repo_scan": private["repo_scan"], "journal": [], "system": collect_system(),
+                "backups": {"count": 0, "latest": None}, "inbox": [], "agent_history": []}
     t3 = unit_state("t3code")
     mode = "developer" if t3["active"] == "active" else "gaming"
     tmux = collect_tmux()
@@ -1693,6 +2069,9 @@ class Handler(BaseHTTPRequestHandler):
         p = self._route()
         if p is None:
             return
+        if MACOS and p not in ("/", "/healthz", "/api/state", "/manifest.webmanifest", "/sw.js", "/offline.html", "/apple-touch-icon.png", "/icon-180.png", "/icon-192.png", "/icon-512.png"):
+            self._send(404, '{"error":"unavailable in macOS companion"}')
+            return
         if p == "/api/action-stream":
             self._stream_action()
             return
@@ -1781,6 +2160,9 @@ class Handler(BaseHTTPRequestHandler):
         p = self._route()
         if p is None:
             return
+        if MACOS and p != "/api/settings":
+            self._send(404, '{"error":"unavailable in macOS companion"}')
+            return
         viewer = self.headers.get("Tailscale-User-Login")
         if viewer is not None and viewer not in ALLOWED_USERS:
             self._send(403, json.dumps({
@@ -1805,6 +2187,16 @@ class Handler(BaseHTTPRequestHandler):
             return
         if p == "/api/settings":
             try:
+                if MACOS:
+                    allowed = {"panel_order", "hidden_panels", "hidden_apps", "newtab_apps",
+                               "modal_apps", "custom_apps", "poll_ms", "repo_root", "linear_key"}
+                    if set(data) - allowed:
+                        raise ValueError("macOS settings only accept UI preferences")
+                    if "repo_root" in data:
+                        root, error = macos_repo_root(data["repo_root"])
+                        if error:
+                            raise ValueError(error)
+                        data["repo_root"] = root
                 key = data.pop("linear_key", "")
                 if isinstance(key, str) and key.strip():
                     save_linear_key(key)
@@ -1821,8 +2213,10 @@ class Handler(BaseHTTPRequestHandler):
                 if events is not None:
                     save_notify_events(events)
                 merged = save_settings(data)
-            except (ValueError, TypeError, OSError):
-                self._send(400, json.dumps({"ok": False, "output": "bad settings payload"}))
+            except (ValueError, TypeError, OSError) as e:
+                # Validation messages are intentionally actionable (notably the
+                # Mac project root); no secret value is ever included in them.
+                self._send(400, json.dumps({"ok": False, "output": str(e) or "bad settings payload"}))
                 return
             self._send(200, json.dumps({"ok": True, "settings": merged,
                                         "linear_configured": bool(linear_key()),
@@ -2223,6 +2617,14 @@ body.gaming #foot{display:none}
   .topbar .meta{display:none}
   .apps{grid-template-columns:1fr}
 }
+/* macOS has a local-work dashboard but deliberately no Linux/T3 controls. */
+body.macos [data-panel="tmux"],body.macos [data-panel="sessions"],body.macos [data-panel="usage"],body.macos [data-panel="inbox"],
+body.macos [data-panel="actions"],body.macos [data-panel="docker"],
+body.macos [data-panel="journal"],body.macos #game-banner,body.macos #mode,
+body.macos #boot-mode-head,body.macos #boot-mode-row,body.macos #throttle-head,
+body.macos #throttle-row,body.macos #t3connect-head,body.macos #t3connect-row{display:none!important}
+body.macos .mac-linux-setting,body.macos .linear-create{display:none!important}
+body:not(.macos) .mac-only-setting{display:none!important}
 </style></head><body>
 <div id="topcover"></div>
 <div class="topbar">
@@ -2286,22 +2688,22 @@ body.gaming #foot{display:none}
     <span class="setlabel dim2" id="keepalive-state"></span>
   </div>
 
-  <div class="sethead">Auth &amp; pairing</div>
-  <div class="setrow">
+  <div class="sethead mac-linux-setting">Auth &amp; pairing</div>
+  <div class="setrow mac-linux-setting">
     <button class="mini" id="t3-pair-btn">🔑 New T3 pairing token</button>
     <a class="mini abtn" data-auth="auth-claude">🤖 Re-auth Claude</a>
     <a class="mini abtn" data-auth="auth-codex">🧠 Re-auth Codex</a>
     <a class="mini abtn" data-auth="auth-github">🐙 Re-auth GitHub</a>
   </div>
 
-  <div class="sethead">T3 Connect — official T3 apps<span class="dim2" title="Links this box's T3 instance to your T3 Connect account so the official T3 Code apps (iOS/Android/desktop) can reach it. 📱 notifications-only keeps the tailnet as the transport and only publishes agent activity (push + Live Activities). 🌐 full relay opens a managed tunnel via relay.t3.codes so the apps connect without Tailscale — session traffic transits T3's relay (see docs/SECURITY.md). Both open a terminal running the sign-in; grave doctor enforces whichever mode you declare." style="margin-left:7px;border:1px solid var(--ring);border-radius:50%;padding:0 5px;cursor:help">ⓘ</span></div>
-  <div class="setrow"><span class="setlabel dim2" id="t3c-state">…</span></div>
-  <div class="setrow">
+  <div class="sethead mac-linux-setting">T3 Connect — official T3 apps<span class="dim2" title="Links this box's T3 instance to your T3 Connect account so the official T3 Code apps (iOS/Android/desktop) can reach it. 📱 notifications-only keeps the tailnet as the transport and only publishes agent activity (push + Live Activities). 🌐 full relay opens a managed tunnel via relay.t3.codes so the apps connect without Tailscale — session traffic transits T3's relay (see docs/SECURITY.md). Both open a terminal running the sign-in; grave doctor enforces whichever mode you declare." style="margin-left:7px;border:1px solid var(--ring);border-radius:50%;padding:0 5px;cursor:help">ⓘ</span></div>
+  <div class="setrow mac-linux-setting"><span class="setlabel dim2" id="t3c-state">…</span></div>
+  <div class="setrow mac-linux-setting">
     <a class="mini abtn" data-auth="auth-t3publish">📱 notifications only</a>
     <a class="mini abtn" data-auth="auth-t3full">🌐 full relay</a>
     <button class="mini" id="t3c-off">⏸ off</button>
   </div>
-  <div class="setrow"><span class="setlabel">T3 tile opens<span class="dim2" title="'official T3 app' hands the launcher tile off to the installed T3 Code app via its t3code:// scheme — pair the app first (pairing tokens print an app link too). Devices without the app should stay on the web UI." style="margin-left:7px;border:1px solid var(--ring);border-radius:50%;padding:0 5px;cursor:help">ⓘ</span></span>
+  <div class="setrow mac-linux-setting"><span class="setlabel">T3 tile opens<span class="dim2" title="'official T3 app' hands the launcher tile off to the installed T3 Code app via its t3code:// scheme — pair the app first (pairing tokens print an app link too). Devices without the app should stay on the web UI." style="margin-left:7px;border:1px solid var(--ring);border-radius:50%;padding:0 5px;cursor:help">ⓘ</span></span>
     <select id="set-t3tile">
       <option value="pwa">the web UI (in-PWA)</option>
       <option value="app">the official T3 app</option>
@@ -2312,9 +2714,12 @@ body.gaming #foot{display:none}
   <div class="setrow"><span class="setlabel">Linear API key <span id="linear-state"></span></span>
     <input type="password" id="set-linear" placeholder="lin_api_… (leave empty to keep)" size="24">
   </div>
+  <div class="setrow mac-only-setting"><span class="setlabel">Repository root <span class="dim2">(nested Git repos)</span></span>
+    <input id="set-repo-root" placeholder="/Users/you/Sites" size="32">
+  </div>
 
-  <div class="sethead sec-toggle" id="notify-head" data-sec="sec-notify">▸ Notifications — 🔔 push &amp; ntfy</div>
-  <div id="sec-notify" style="display:none">
+  <div class="sethead sec-toggle mac-linux-setting" id="notify-head" data-sec="sec-notify">▸ Notifications — 🔔 push &amp; ntfy</div>
+  <div id="sec-notify" class="mac-linux-setting" style="display:none">
     <div class="setrow"><span class="setlabel">🔔 push to this device <span class="dim2" id="push-support"></span></span>
       <button class="mini" id="push-enable">enable</button>
     </div>
@@ -2454,10 +2859,10 @@ body.gaming #foot{display:none}
   </div>
 </div>
 <div id="panels">
-  <div class="panel" data-panel="prs"><h2>🔀 Pull requests</h2><table id="prs"></table></div>
+  <div class="panel" data-panel="prs"><h2 id="prs-heading">🔀 Pull requests</h2><table id="prs"></table></div>
   <div class="panel" data-panel="ci"><h2>🏗️ CI status</h2><table id="ci"></table></div>
   <div class="panel" data-panel="linear"><h2>📐 Linear — assigned to me</h2><table id="linear"></table>
-    <div class="setrow"><input id="new-linear" placeholder="new issue title…" style="flex:1">
+    <div class="setrow linear-create"><input id="new-linear" placeholder="new issue title…" style="flex:1">
       <button class="mini" id="add-linear">➕</button></div>
   </div>
   <div class="panel" data-panel="usage"><h2>🧾 Agent usage</h2><table id="usage"></table></div>
@@ -2530,9 +2935,12 @@ function cores(list){
   ).join('')+`</div>`;
 }
 function meter(p){return `<div class="meter ${meterClass(p)}"><i style="width:${Math.min(p,100)}%"></i></div>`}
+// Charge is an inverse signal: a full battery is good, unlike disk/memory use.
+function chargeMeter(p){return `<div class="meter"><i style="width:${Math.min(p,100)}%"></i></div>`}
 function tile(label,value,sub,extra){return `<div class="tile"><div class="label">${label}</div>
   <div class="value">${value}</div>${sub?`<div class="sub">${sub}</div>`:''}${extra||''}</div>`}
 function fmtGB(kb){return (kb/1048576).toFixed(1)+' GB'}
+function fmtMB(mb){return mb==null?'—':(mb>=1024?(mb/1024).toFixed(1)+' GB':Math.round(mb)+' MB')}
 function fmtUp(s){const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);
   return d?`${d}d ${h}h`:h?`${h}h ${m}m`:`${m}m`}
 function statusDot(state){
@@ -2541,7 +2949,9 @@ function statusDot(state){
 }
 // same-origin app paths need the https origin spelled out when gravedecay is
 // viewed on a bare port (localhost:4712) rather than mounted at /grave/
-const appUrl=u=>(location.port&&location.port!=='443'&&u.startsWith('/'))
+let macosCompanion=false;
+const appUrl=u=>(macosCompanion&&location.port&&u==='/net/')
+  ?`http://${location.hostname}:4714/`:(location.port&&location.port!=='443'&&u.startsWith('/'))
   ?`https://${location.hostname}${u}`:u;
 // 'claude' or 'codex' if this tile launches that agent CLI via /term/?arg=…,
 // else null. Gates the ⚡ skip-perms toggle and the -yolo session rewrite.
@@ -2582,7 +2992,7 @@ function applyLayout(){
 document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
   activeTab=t.dataset.tab;localStorage.setItem('grave-tab',activeTab);
   if(cfg)applyLayout();
-  if(activeTab==='system')loadGraveReleases();
+  if(activeTab==='system'&&!macosCompanion)loadGraveReleases();
 });
 async function loadGraveReleases(force=false){
   if(graveReleasesLoaded&&!force)return;
@@ -2643,6 +3053,9 @@ function render(s){
   }
   const modeChanged=lastMode!==null&&lastMode!==s.mode;
   lastMode=s.mode;
+  macosCompanion=s.platform==='macos';
+  document.body.classList.toggle('macos',macosCompanion);
+  $('prs-heading').textContent=macosCompanion?'🐙 GitHub — open work':'🔀 Pull requests';
   document.body.classList.toggle('gaming',s.mode==='gaming');
   $('game-banner').style.display=s.mode==='gaming'?'block':'none';
   if(s.mode==='gaming')
@@ -2652,9 +3065,9 @@ function render(s){
   if(modeChanged)schedule();
   const k=JSON.stringify([cfg.panel_order,cfg.hidden_panels,activeTab]);
   if(k!==layoutKey){layoutKey=k;applyLayout();}
-  if(activeTab==='system')loadGraveReleases();
+  if(activeTab==='system'&&!macosCompanion)loadGraveReleases();
   // 📁 Files is a built-in tile: opens the native file-manager modal.
-  const tiles=[{name:'📁 Files',url:FILES_URL}].concat(allApps());
+  const tiles=(s.platform==='macos'?[]:[{name:'📁 Files',url:FILES_URL}]).concat(allApps());
   $('apps').innerHTML=tiles.filter(a=>!cfg.hidden_apps.includes(a.name)).map(a=>{
     if(a.url===FILES_URL)
       return `<a class="app" href="#files" data-files="1">${esc(a.name)}</a>`;
@@ -2683,11 +3096,31 @@ function render(s){
   // the mode you're already in isn't a button you can press
   document.querySelector('[data-act="gaming"]').disabled=(s.mode==='gaming');
   document.querySelector('[data-act="developer"]').disabled=(s.mode==='developer');
-  const sys=s.system,t=sys.temps;
+  const sys=s.system,t=sys.temps||{};
   const cpu=sys.cpu||{pct:null,cores:[]};
-  push('cpu',t.cpu);
-  $('tiles').innerHTML=
-    tile('CPU',cpu.pct!=null?Math.round(cpu.pct)+'%':'—',
+  if(macosCompanion){
+    const mem=sys.mem||{}, thermal=sys.thermal||{}, battery=sys.battery, swap=sys.swap||{};
+    const pressure=mem.pressure_pct;
+    push('cpu',cpu.pct);
+    const thermalValue=thermal.state==='nominal'?'Nominal':thermal.state==='throttled'?'Throttled':'N/A';
+    const thermalSub=thermal.speed_limit!=null
+      ?`CPU speed limit ${thermal.speed_limit}%${thermal.available_cpus!=null?` · ${thermal.available_cpus} CPUs available`:''}`
+      :'pmset thermal status unavailable';
+    const disk=sys.disks[0];
+    $('tiles').innerHTML=
+      tile('CPU',cpu.pct!=null?Math.round(cpu.pct)+'%':'—',
+        `load ${sys.load[0].toFixed(2)} / ${sys.load[1].toFixed(2)} / ${sys.load[2].toFixed(2)} · ${sys.ncpu} cores`,spark('cpu'))+
+      tile('Memory pressure',pressure!=null?Math.round(pressure)+'%':'—',
+        `${fmtGB(mem.total_kb||0)} installed · ${fmtGB(mem.compressed_kb||0)} compressed`,pressure!=null?meter(pressure):'')+
+      tile('Disk '+esc(disk.label),disk.pct+'%',`${fmtGB(disk.used/1024)} used`,meter(disk.pct))+
+      tile('Thermal',thermalValue,thermalSub)+
+      (battery?tile('Battery',battery.pct+'%',`${esc(battery.state||'unknown')} · ${esc(battery.power_source||'battery')}`,chargeMeter(battery.pct)):'')+
+      tile('Swap',swap.used_mb!=null?fmtMB(swap.used_mb):'—',
+        swap.total_mb!=null?`${fmtMB(swap.used_mb)} used of ${fmtMB(swap.total_mb)}`:'swap status unavailable');
+  }else{
+    push('cpu',t.cpu);
+    $('tiles').innerHTML=
+      tile('CPU',cpu.pct!=null?Math.round(cpu.pct)+'%':'—',
       `load ${sys.load[0].toFixed(2)} / ${sys.load[1].toFixed(2)} / ${sys.load[2].toFixed(2)} · ${sys.ncpu} cores`,
       cores(cpu.cores))+
     tile('CPU temp',t.cpu!=null?Math.round(t.cpu)+'°':'—','package',spark('cpu'))+
@@ -2697,6 +3130,7 @@ function render(s){
     tile('Memory',sys.mem.pct+'%',`${fmtGB(sys.mem.used_kb)} of ${fmtGB(sys.mem.total_kb)}`,meter(sys.mem.pct))+
     sys.disks.map(d=>tile('Disk '+esc(d.label),d.pct+'%',
       `${fmtGB(d.used/1024)} used · ${s.backups.count} backups`,meter(d.pct))).join('');
+  }
   $('services').innerHTML=s.services.map(u=>`<tr>
     <td>${statusDot(u.active)}${esc(u.unit)}</td>
     <td class="dim">${esc(u.active)} (${esc(u.sub)})</td></tr>`).join('');
@@ -2726,31 +3160,59 @@ function render(s){
       <span class="dim" style="float:right">${esc(n.when)}</span>
       <div class="dim2" style="white-space:pre-wrap;font-size:12px">${esc(n.body)}</div></div>`).join('')
     :'<div class="dim">no pages yet — enable notifications in ⚙️ settings</div>';
-  $('repos').innerHTML=s.repos.length?s.repos.map(r=>`<tr>
+  const repoScan=s.repo_scan||{};
+  if(macosCompanion){
+    const repoRows=(s.repos||[]).map(r=>`<tr>
+      <td>${statusDot(r.dirty?'inactive':'active')}${esc(r.name)}</td>
+      <td class="dim">${esc(r.branch)}${r.dirty?` · ${r.dirty} dirty`:''}</td>
+      <td class="dim">${esc(r.last_when)}${r.last_subject?` · ${esc(r.last_subject)}`:''}</td></tr>`).join('');
+    const repoNote=repoScan.error||repoScan.warning;
+    $('repos').innerHTML=repoRows
+      +(repoNote?`<tr><td class="dim" colspan="3">${esc(repoNote)}</td></tr>`:'')
+      ||`<tr><td class="dim">${esc(repoScan.error||`no Git repositories under ${repoScan.root||'configured root'}`)}</td></tr>`;
+  }else{
+    // Keep the Linux repository card exactly as its long-standing contract.
+    $('repos').innerHTML=s.repos.length?s.repos.map(r=>`<tr>
       <td>${statusDot(r.dirty?'inactive':'active')}${esc(r.name)}</td>
       <td class="dim">${esc(r.branch)}${r.dirty?` · ${r.dirty} dirty`:''}</td>
       <td class="dim">${esc(r.last_when)}</td></tr>`).join('')
-    :'<tr><td class="dim">no repos</td></tr>';
+      :'<tr><td class="dim">no repos</td></tr>';
+  }
   $('journal').textContent=s.journal.join('\n');
   // integration lists: recent 5 inline, "show all" jumps to the real app
   const moreRow=(shown,total,url)=>total>shown&&url
     ? `<tr><td colspan="3"><a href="${esc(url)}" target="_blank" rel="noopener">show all (${total}${total>=15?'+':''}) →</a></td></tr>`:'';
   const gh=s.github||{};
-  const anyMine=(gh.prs||[]).some(p=>p.mine);
-  $('prs').innerHTML=gh.error
-    ? `<tr><td class="dim">${esc(gh.error)}</td></tr>`
-    : ((gh.prs||[]).slice(0,5).map(p=>`<tr>
-        <td>${p.mine?'<span title="your review is requested">👀 </span>':''}<a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.repo)} #${p.number}</a></td>
-        <td class="dim">${esc(p.title)}</td></tr>`).join('')
-       +moreRow(5,(gh.prs||[]).length,gh.more_url)
-       +(anyMine?'<tr><td class="dim" colspan="2">👀 = your review requested</td></tr>':'')
-       ||'<tr><td class="dim">no open PRs 🎉</td></tr>');
-  $('ci').innerHTML=((s.ci||{}).rows||[]).map(r=>{
+  if(macosCompanion){
+    const githubRows=(gh.repos||[]).map(group=>{
+      const prs=(group.prs||[]).map(p=>`<tr><td><span class="dim">PR</span> <a href="${esc(p.url)}" target="_blank" rel="noopener">#${p.number}</a></td><td class="dim">${esc(p.title)}</td></tr>`).join('');
+      const issues=(group.issues||[]).map(i=>`<tr><td><span class="dim">ISSUE</span> <a href="${esc(i.url)}" target="_blank" rel="noopener">#${i.number}</a></td><td class="dim">${esc(i.title)}</td></tr>`).join('');
+      return `<tr><td colspan="2"><a href="${esc(group.url)}" target="_blank" rel="noopener">${esc(group.repo)}</a> <span class="dim">· GitHub →</span></td></tr>`+prs+issues;
+    }).join('');
+    $('prs').innerHTML=gh.error
+      ? `<tr><td class="dim">${esc(gh.error)}</td></tr>`
+      : (githubRows+(gh.warning?`<tr><td class="dim" colspan="2">${esc(gh.warning)}</td></tr>`:'')
+         ||'<tr><td class="dim">no open pull requests or issues 🎉</td></tr>');
+  }else{
+    // Keep the Linux PR-only presentation, show-all URL, and review marker.
+    const anyMine=(gh.prs||[]).some(p=>p.mine);
+    $('prs').innerHTML=gh.error
+      ? `<tr><td class="dim">${esc(gh.error)}</td></tr>`
+      : ((gh.prs||[]).slice(0,5).map(p=>`<tr>
+          <td>${p.mine?'<span title="your review is requested">👀 </span>':''}<a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.repo)} #${p.number}</a></td>
+          <td class="dim">${esc(p.title)}</td></tr>`).join('')
+         +moreRow(5,(gh.prs||[]).length,gh.more_url)
+         +(anyMine?'<tr><td class="dim" colspan="2">👀 = your review requested</td></tr>':'')
+         ||'<tr><td class="dim">no open PRs 🎉</td></tr>');
+  }
+  $('ci').innerHTML=(s.ci||{}).error
+    ?`<tr><td class="dim">${esc(s.ci.error)}</td></tr>`
+    :(((s.ci||{}).rows||[]).map(r=>{
     const st=r.status!=='completed'?'inactive':(r.conclusion==='success'?'active':'failed');
     return `<tr><td>${statusDot(st)}<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.repo)}</a></td>
       <td class="dim">${esc(r.workflow)}</td>
       <td class="dim">${esc(r.branch)} · ${esc(r.conclusion||r.status)}</td></tr>`;
-  }).join('')||'<tr><td class="dim">no workflow runs in any repo</td></tr>';
+  }).join('')||'<tr><td class="dim">no workflow runs in configured repos</td></tr>');
   const us=s.usage;
   if(us){
     const fk=n=>n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?Math.round(n/1e3)+'k':''+n;
@@ -3052,6 +3514,7 @@ function buildSettings(existing){
     syncVis();draft.custom_apps.splice(+b.dataset.delApp,1);buildSettings(draft);});
   $('set-poll').value=String(draft.poll_ms);
   $('set-t3tile').value=draft.t3_tile||'pwa';
+  if($('set-repo-root'))$('set-repo-root').value=draft.repo_root||'';
   paintT3Connect();
   $('linear-state').textContent=linearConfigured?'✓ configured':'(not set)';
   document.querySelectorAll('[data-auth]').forEach(a=>
@@ -3166,6 +3629,7 @@ function syncVis(){
     .filter(c=>c.checked).map(c=>c.dataset.appNewtab);
   draft.poll_ms=+$('set-poll').value;
   draft.t3_tile=$('set-t3tile').value;
+  if(macosCompanion&&$('set-repo-root'))draft.repo_root=$('set-repo-root').value.trim();
 }
 // body scroll-lock while any overlay is open — without this, iOS scrolls
 // the page underneath the modal ("intermixed" scrolling)

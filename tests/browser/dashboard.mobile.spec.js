@@ -99,6 +99,36 @@ test('settings and narrow data records remain usable', async ({ page }) => {
   expect(box.height).toBeGreaterThanOrEqual(32);
 });
 
+test('macOS renders its local work tab and repository-root setting', async ({ page }) => {
+  await page.evaluate(async () => {
+    const state = await (await fetch('api/state')).json();
+    state.platform = 'macos';
+    state.mode = 'developer';
+    state.repos = [{ name: 'owner/a-private-repository', branch: 'main', dirty: 1,
+      last_when: 'now', last_subject: 'A private local commit' }];
+    state.repo_scan = { root: '/Users/test/Sites', error: null };
+    state.github = { error: null, repos: [{ repo: 'owner/a-private-repository',
+      url: 'https://github.com/example/repo',
+      prs: [{ number: 7, title: 'An open pull request', url: 'https://github.com/example/repo/pull/7' }],
+      issues: [{ number: 8, title: 'An open issue', url: 'https://github.com/example/repo/issues/8' }] }] };
+    state.ci = { rows: [] };
+    state.linear = { configured: false, issues: [], error: null };
+    state.settings.repo_root = '/Users/test/Sites';
+    render(state);
+  });
+  await page.locator('[data-tab="work"]').click();
+  await expect(page.locator('[data-panel="prs"]')).toBeVisible();
+  await expect(page.locator('#prs')).toContainText('An open pull request');
+  await expect(page.locator('#prs')).toContainText('An open issue');
+  await expect(page.locator('[data-panel="repos"]')).toContainText('a-private-repository');
+  expect(await page.locator('[data-panel]').evaluateAll(panels => panels
+    .filter(panel => getComputedStyle(panel).display !== 'none')
+    .map(panel => panel.dataset.panel).sort())).toEqual(['ci', 'linear', 'prs', 'repos']);
+  await page.locator('#gear').click();
+  await expect(page.locator('#set-repo-root')).toBeVisible();
+  await expect(page.locator('#set-linear')).toBeVisible();
+});
+
 test('gamewatch off presents a dev-only UI and can be opted back in', async ({ page }) => {
   await page.locator('[data-tab="system"]').click();
   await page.evaluate(async () => {

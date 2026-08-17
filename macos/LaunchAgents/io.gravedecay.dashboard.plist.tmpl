@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>io.gravedecay.dashboard</string>
+  <key>ProgramArguments</key><array><string>@PYTHON@</string><string>@ROOT@/scripts/gravedecay.py</string></array>
+  <key>EnvironmentVariables</key><dict>
+    <key>GRAVE_ROOT</key><string>@ROOT@</string><key>GRAVEDECAY_PORT</key><string>4712</string>
+    <key>GRAVEDECAY_PLATFORM</key><string>macos</string><key>GRAVEDECAY_BASE</key><string>/grave</string>
+    <key>GRAVEDECAY_APPS</key><string>@APPS@</string><key>GRAVEDECAY_ALLOWED_USERS</key><string>@ALLOWED_USERS@</string><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>@ROOT@/logs/dashboard.log</string>
+  <key>StandardErrorPath</key><string>@ROOT@/logs/dashboard.error.log</string>
+</dict></plist>
