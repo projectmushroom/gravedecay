@@ -18,10 +18,23 @@ removing its corresponding path mount.
 
 Open `http://127.0.0.1:4712/` and `http://127.0.0.1:4714/` locally, or the
 tailnet URLs `https://<mac>.ts.net/grave/` and `/net/` when Serve is enabled.
-Remote users are read-only: this companion does not configure allowed-user
-write authorization. The dashboard intentionally has no T3 pairing/connect,
-update/restart, terminal, Docker, gaming, reboot, journal, or Linux service
-controls.
+When enabling Serve, the installer reads `tailscale status --json` and binds
+private dashboard data to the current Mac's exact Tailscale `LoginName`; it
+fails closed if that identity cannot be determined. Other tailnet users see
+only machine vitals, while localhost remains usable with `--no-serve`.
+
+The **Work** tab scans nested Git repositories below `~/Sites` by default
+(for example `~/Sites/owner/repo`). Change the absolute existing root in
+**Settings → Work integrations**. It shows each local branch, dirty count and
+last commit, and read-only open GitHub pull requests/issues plus latest CI for
+repositories with a `github.com` origin. Discovery and API results are bounded
+and briefly cached. Install and authenticate GitHub CLI (`gh auth login`) to
+enable remote results; GitHub data is never changed. The same settings section
+accepts an explicit Linear API key for assigned-to-me issues; the key is stored
+locally with owner-only settings writes and is never returned to the browser.
+
+The dashboard intentionally has no T3 pairing/connect, update/restart,
+terminal, Docker, gaming, reboot, journal, or Linux service controls.
 
 The System view uses only native, unprivileged macOS data: CPU activity from
 `top`, reclaimability from `memory_pressure` (labelled **Memory pressure**, not

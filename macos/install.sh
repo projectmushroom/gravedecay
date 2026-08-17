@@ -20,10 +20,35 @@ case "$ROOT" in *[\&\|\<\>]* ) echo "--root must not contain XML/sed-sensitive c
 TAILSCALE=$(command -v tailscale || true)
 [ -n "$TAILSCALE" ] || [ ! -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ] || TAILSCALE=/Applications/Tailscale.app/Contents/MacOS/Tailscale
 [ "$SERVE" = 0 ] || [ -n "$TAILSCALE" ] || { echo "Tailscale CLI is required to publish Serve paths" >&2; exit 1; }
+ALLOWED_USERS=""
+if [ "$SERVE" = 1 ]; then
+  # Serve forwards an authenticated Tailscale login.  Bind private project and
+  # integration data to the identity currently signed in on this Mac; do not
+  # guess from a hostname or permit an empty allow-list.  The JSON mapping is
+  # deliberately Self.UserID -> User["<id>"].LoginName (the same value Serve
+  # puts in Tailscale-User-Login), and no status JSON is logged.
+  TAILSCALE_LOGIN=$("$TAILSCALE" status --json 2>/dev/null | "$PYTHON" -c '
+import json, sys
+try:
+    status = json.load(sys.stdin)
+    user_id = (status.get("Self") or {}).get("UserID")
+    user = (status.get("User") or {}).get(str(user_id))
+    login = (user or {}).get("LoginName")
+    if not isinstance(login, str):
+        raise ValueError("missing LoginName")
+    print(login.strip())
+except Exception:
+    raise SystemExit(1)
+') || { echo "Could not determine the signed-in local Tailscale identity; refusing to enable Serve" >&2; exit 1; }
+  case "$TAILSCALE_LOGIN" in
+    ""|*[!A-Za-z0-9._+@-]*) echo "Invalid local Tailscale login; refusing to enable Serve" >&2; exit 1;;
+  esac
+  ALLOWED_USERS=$TAILSCALE_LOGIN
+fi
 UID_NOW=$(id -u); AGENTS="$HOME/Library/LaunchAgents"
 run(){ if [ "$DRY" = 1 ]; then printf 'dry-run: '; printf '%s ' "$@"; printf '\n'; else "$@"; fi; }
 APPS=""; [ "$WANT_NET" = 0 ] || APPS="📡 Network=/net/"
-render(){ template=$1; target=$2; if [ "$DRY" = 1 ]; then echo "dry-run: render $template -> $target"; else sed "s|@PYTHON@|$PYTHON|g;s|@ROOT@|$ROOT|g;s|@APPS@|$APPS|g" "$template" > "$target"; plutil -lint "$target" >/dev/null; fi; }
+render(){ template=$1; target=$2; if [ "$DRY" = 1 ]; then echo "dry-run: render $template -> $target"; else sed "s|@PYTHON@|$PYTHON|g;s|@ROOT@|$ROOT|g;s|@APPS@|$APPS|g;s|@ALLOWED_USERS@|$ALLOWED_USERS|g" "$template" > "$target"; plutil -lint "$target" >/dev/null; fi; }
 unload(){ label=$1; plist="$AGENTS/$label.plist"; [ -e "$plist" ] && run launchctl bootout "gui/$UID_NOW" "$plist" || true; run rm -f "$plist"; }
 serve_off(){ path=$1; [ -z "$TAILSCALE" ] || run "$TAILSCALE" serve --https=443 --set-path="$path" off; }
 [ "$DRY" = 1 ] || { run mkdir -p "$ROOT/scripts" "$ROOT/web/net" "$ROOT/logs" "$ROOT/config" "$AGENTS"; : > "$ROOT/.gravedecay-macos"; }

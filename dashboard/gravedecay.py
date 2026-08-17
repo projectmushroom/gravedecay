@@ -18,6 +18,7 @@
 
 import base64
 import binascii
+import concurrent.futures
 import functools
 import glob
 import hashlib
@@ -97,6 +98,12 @@ DEFAULT_SETTINGS = {
                            # (hand off to the official T3 Code app, t3code://)
     "poll_ms": 5000,       # dashboard refresh interval
 }
+# The Mac companion deliberately keeps its project inventory outside its
+# Application Support root.  Expand this at startup so the settings UI shows a
+# useful, absolute default without requiring shell expansion from a browser.
+MACOS_REPO_ROOT_DEFAULT = os.path.realpath(os.path.expanduser("~/Sites"))
+if MACOS:
+    DEFAULT_SETTINGS["repo_root"] = MACOS_REPO_ROOT_DEFAULT
 
 
 def _safe_tile_url(url):
@@ -156,6 +163,22 @@ def save_settings(data):
         json.dump(merged, f, indent=2)
     os.replace(tmp, SETTINGS_PATH)
     return merged
+
+
+def macos_repo_root(value=None):
+    """Canonical Mac project root, or a clear validation error.
+
+    The root is supplied by an owner in Settings, so never let it become an
+    implicit relative path or a shell fragment.  ``realpath`` also means a
+    symlinked root is checked against the directory it actually names.
+    """
+    root = MACOS_REPO_ROOT_DEFAULT if value is None else str(value).strip()
+    if not os.path.isabs(root):
+        return None, "Repository root must be an absolute path"
+    root = os.path.realpath(root)
+    if not os.path.isdir(root):
+        return None, f"Repository root does not exist or is not a directory: {root}"
+    return root, None
 
 
 GRAVE = os.environ.get("GRAVEDECAY_GRAVE", "/usr/local/bin/grave")
@@ -408,6 +431,187 @@ def collect_repos():
                           "last_when": when, "last_subject": subject[:60]})
         return repos
     return cached("repos", 15, fetch)
+
+
+MACOS_REPO_SCAN_MAX_DEPTH = 4
+MACOS_REPO_SCAN_MAX_DIRS = 400
+MACOS_REPO_SCAN_MAX_REPOS = 40
+MACOS_GITHUB_REPO_LIMIT = 12
+MACOS_GITHUB_ITEMS_PER_REPO = 3
+MACOS_GITHUB_WORKERS = 4
+
+
+def github_remote(value):
+    """Return an owner/repository slug for a normal github.com remote only."""
+    value = value.strip()
+    m = re.search(r"github\.com[:/]([^/\s]+)/([^/\s]+?)(?:\.git)?/?$", value)
+    if not m:
+        return None
+    slug = f"{m.group(1)}/{m.group(2)}"
+    return slug if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", slug) else None
+
+
+def collect_macos_repo_inventory():
+    """Discover a bounded set of nested local Git repositories under ~/Sites.
+
+    No repo-provided string becomes a command: every git invocation is an argv
+    list and the walker never follows symlinked directories.  A typical
+    ``~/Sites/owner/repo`` layout is covered while an accidentally broad root
+    cannot turn a dashboard refresh into an unbounded filesystem crawl.
+    """
+    configured = load_settings().get("repo_root", MACOS_REPO_ROOT_DEFAULT)
+    root, error = macos_repo_root(configured)
+    if error:
+        return {"root": os.path.realpath(str(configured)), "repos": [], "error": error}
+    cache_key = f"macos-repo-inventory:{root}"
+
+    def fetch():
+        if not shutil.which("git"):
+            return {"root": root, "repos": [],
+                    "error": "git is not installed or unavailable in the LaunchAgent PATH"}
+        repos, seen_dirs = [], 0
+        try:
+            walker = os.walk(root, topdown=True, followlinks=False)
+            for directory, dirs, _files in walker:
+                # Do not enter hidden/tooling trees or symlinked directories;
+                # a repo's own .git directory is never part of the scan.
+                dirs[:] = sorted(d for d in dirs if d != ".git" and not os.path.islink(os.path.join(directory, d)))
+                relative = os.path.relpath(directory, root)
+                depth = 0 if relative == "." else relative.count(os.sep) + 1
+                if depth > MACOS_REPO_SCAN_MAX_DEPTH:
+                    dirs[:] = []
+                    continue
+                seen_dirs += 1
+                if seen_dirs > MACOS_REPO_SCAN_MAX_DIRS:
+                    break
+                git_marker = os.path.join(directory, ".git")
+                if not os.path.exists(git_marker):
+                    continue
+                rc, inside, _ = sh(["git", "-C", directory, "rev-parse", "--is-inside-work-tree"])
+                if rc != 0 or inside.strip() != "true":
+                    dirs[:] = []
+                    continue
+                _, branch, _ = sh(["git", "-C", directory, "rev-parse", "--abbrev-ref", "HEAD"])
+                _, porcelain, _ = sh(["git", "-C", directory, "status", "--porcelain"])
+                _, last, _ = sh(["git", "-C", directory, "log", "-1", "--format=%cr\t%s"])
+                _, remote, _ = sh(["git", "-C", directory, "remote", "get-url", "origin"])
+                when, _, subject = last.strip().partition("\t")
+                repos.append({"name": relative if relative != "." else os.path.basename(root),
+                              "branch": branch.strip() or "detached",
+                              "dirty": len(porcelain.splitlines()),
+                              "last_when": when, "last_subject": subject[:80],
+                              "github_repo": github_remote(remote)})
+                dirs[:] = []  # a nested repository is represented once
+                if len(repos) >= MACOS_REPO_SCAN_MAX_REPOS:
+                    break
+        except OSError as e:
+            return {"root": root, "repos": repos, "error": f"Repository scan failed: {e}"}
+        truncated = seen_dirs > MACOS_REPO_SCAN_MAX_DIRS or len(repos) >= MACOS_REPO_SCAN_MAX_REPOS
+        suffix = "repository scan limit reached" if truncated else None
+        return {"root": root, "repos": sorted(repos, key=lambda repo: repo["name"]),
+                "error": None, "warning": suffix, "truncated": truncated}
+    return cached(cache_key, 30, fetch)
+
+
+def collect_macos_work(inventory):
+    """Read bounded GitHub work + CI concurrently for the local repo set."""
+    root = inventory.get("root", "")
+    cache_key = f"macos-work:{root}"
+
+    def fetch():
+        if inventory.get("error") and not inventory.get("repos"):
+            return {"github": {"login": None, "repos": [], "error": inventory["error"]},
+                    "ci": {"rows": [], "error": inventory["error"]}}
+        if not shutil.which("gh"):
+            error = "gh is not installed — install GitHub CLI, then run gh auth login"
+            return {"github": {"login": None, "repos": [], "error": error},
+                    "ci": {"rows": [], "error": error}}
+        rc, out, _ = sh(["gh", "api", "user", "--jq", ".login"], timeout=10)
+        login = out.strip() if rc == 0 and out.strip() else None
+        if not login:
+            error = "gh not authenticated — run gh auth login in Terminal"
+            return {"github": {"login": None, "repos": [], "error": error},
+                    "ci": {"rows": [], "error": error}}
+        eligible_repos = sorted((repo for repo in inventory.get("repos", []) if repo.get("github_repo")),
+                                key=lambda repo: repo["name"])
+        capped = len(eligible_repos) > MACOS_GITHUB_REPO_LIMIT
+        github_repos = eligible_repos[:MACOS_GITHUB_REPO_LIMIT]
+        if not github_repos:
+            error = "No GitHub origin remotes in the configured repository root"
+            return {"github": {"login": login, "repos": [], "error": error},
+                    "ci": {"rows": [], "error": error}}
+
+        def api(repo, kind):
+            slug = repo["github_repo"]
+            if kind == "ci":
+                return kind, repo, sh(["gh", "run", "list", "-R", slug, "-L", "1",
+                                      "--json", "workflowName,conclusion,status,url,headBranch"], timeout=15)
+            if kind == "issues":
+                # REST /issues also includes pull requests; use gh's issue
+                # endpoint so the bounded limit applies to actual issues.
+                return kind, repo, sh(["gh", "issue", "list", "-R", slug, "--state", "open",
+                                      "--limit", str(MACOS_GITHUB_ITEMS_PER_REPO),
+                                      "--json", "number,title,url"], timeout=15)
+            return kind, repo, sh(["gh", "api", "-X", "GET",
+                                  f"repos/{slug}/pulls?state=open&per_page={MACOS_GITHUB_ITEMS_PER_REPO}"], timeout=15)
+
+        results = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=MACOS_GITHUB_WORKERS) as pool:
+            pending = [pool.submit(api, repo, kind) for repo in github_repos for kind in ("prs", "issues", "ci")]
+            for future in concurrent.futures.as_completed(pending):
+                kind, repo, result = future.result()
+                results[(repo["name"], kind)] = result
+
+        groups, ci_rows, errors = [], [], []
+        for repo in github_repos:
+            label, slug = repo["name"], repo["github_repo"]
+            group = {"repo": label, "url": f"https://github.com/{slug}", "prs": [], "issues": []}
+            for kind in ("prs", "issues"):
+                rc, out, _ = results.get((label, kind), (1, "", ""))
+                if rc != 0:
+                    errors.append(label)
+                    continue
+                try:
+                    rows = json.loads(out)
+                except ValueError:
+                    errors.append(label)
+                    continue
+                for row in rows[:MACOS_GITHUB_ITEMS_PER_REPO]:
+                    group[kind].append({"number": row.get("number"),
+                                        "title": str(row.get("title", ""))[:80],
+                                        "url": row.get("url") or row.get("html_url", "")})
+            rc, out, _ = results.get((label, "ci"), (1, "", ""))
+            if rc == 0:
+                try:
+                    runs = json.loads(out)
+                except ValueError:
+                    runs = []
+                if runs:
+                    run = runs[0]
+                    ci_rows.append({"repo": label, "workflow": run.get("workflowName", ""),
+                                    "branch": run.get("headBranch", ""), "status": run.get("status", ""),
+                                    "conclusion": run.get("conclusion") or "", "url": run.get("url", "")})
+            else:
+                errors.append(label)
+            if group["prs"] or group["issues"]:
+                groups.append(group)
+        warnings = []
+        if capped:
+            warnings.append(f"remote work limited to first {MACOS_GITHUB_REPO_LIMIT} GitHub repositories")
+        if errors:
+            warnings.append("GitHub data unavailable for " + ", ".join(sorted(set(errors))[:3]))
+        warning = "; ".join(warnings) or None
+        return {"github": {"login": login, "repos": groups, "error": None, "warning": warning},
+                "ci": {"rows": ci_rows, "error": None, "warning": warning}}
+    return cached(cache_key, 120, fetch)
+
+
+def collect_macos_github(inventory):
+    return collect_macos_work(inventory)["github"]
+
+
+def collect_macos_ci(inventory):
+    return collect_macos_work(inventory)["ci"]
 
 
 def collect_journal():
@@ -1425,17 +1629,38 @@ def t3_connect_state():
 def state(headers):
     if MACOS:
         # No T3, terminal, Docker, privileged controls, or Linux data on Mac.
-        # Remote viewers remain read-only unless a future explicit allow-list
-        # policy is introduced; localhost retains the existing trusted model.
+        # Unlike machine vitals, project names, commit subjects and integration
+        # data are owner-private.  Localhost is trusted; a Serve viewer must
+        # exactly match the installer-configured local Tailscale login.
+        viewer = headers.get("Tailscale-User-Login")
+        owner = viewer is None or viewer in ALLOWED_USERS
+        settings = load_settings()
+        if not owner:
+            # A configured path is part of the local project topology too.
+            # Do not hand it to a tailnet observer merely because preferences
+            # are otherwise harmless to render.
+            settings = dict(settings)
+            settings["repo_root"] = ""
+        private = {"github": {"login": None, "prs": [], "issues": [], "error": "restricted"},
+                   "linear": {"configured": False, "issues": [], "error": "restricted"},
+                   "ci": {"rows": [], "error": "restricted"}, "repos": [],
+                   "repo_scan": {"root": None, "error": "restricted"}}
+        if owner:
+            inventory = collect_macos_repo_inventory()
+            work = collect_macos_work(inventory)
+            private = {"github": work["github"], "linear": collect_linear(), "ci": work["ci"],
+                       "repos": inventory["repos"],
+                       "repo_scan": {"root": inventory["root"], "error": inventory.get("error"),
+                                     "warning": inventory.get("warning"),
+                                     "truncated": inventory.get("truncated", False)}}
         return {"host": HOST, "now": time.strftime("%H:%M:%S"),
-                "viewer": headers.get("Tailscale-User-Login", "local"), "platform": "macos",
+                "viewer": viewer or "local", "platform": "macos",
                 "mode": "developer", "boot_mode": None, "gamewatch": None,
-                "keepalive": None, "apps": list(APPS), "settings": load_settings(),
-                "github": {"login": None, "prs": [], "error": "not configured on macOS"},
-                "linear": {"configured": False, "issues": [], "error": None}, "ci": {"rows": []},
+                "keepalive": None, "apps": list(APPS), "settings": settings,
+                "github": private["github"], "linear": private["linear"], "ci": private["ci"],
                 "usage": None, "notify": None, "services": collect_services(),
                 "docker": {"error": "not managed on macOS", "containers": []}, "tmux": [],
-                "torpor": 0, "repos": [], "journal": [], "system": collect_system(),
+                "torpor": 0, "repos": private["repos"], "repo_scan": private["repo_scan"], "journal": [], "system": collect_system(),
                 "backups": {"count": 0, "latest": None}, "inbox": [], "agent_history": []}
     t3 = unit_state("t3code")
     mode = "developer" if t3["active"] == "active" else "gaming"
@@ -1964,9 +2189,14 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 if MACOS:
                     allowed = {"panel_order", "hidden_panels", "hidden_apps", "newtab_apps",
-                               "modal_apps", "custom_apps", "poll_ms"}
+                               "modal_apps", "custom_apps", "poll_ms", "repo_root", "linear_key"}
                     if set(data) - allowed:
                         raise ValueError("macOS settings only accept UI preferences")
+                    if "repo_root" in data:
+                        root, error = macos_repo_root(data["repo_root"])
+                        if error:
+                            raise ValueError(error)
+                        data["repo_root"] = root
                 key = data.pop("linear_key", "")
                 if isinstance(key, str) and key.strip():
                     save_linear_key(key)
@@ -1983,8 +2213,10 @@ class Handler(BaseHTTPRequestHandler):
                 if events is not None:
                     save_notify_events(events)
                 merged = save_settings(data)
-            except (ValueError, TypeError, OSError):
-                self._send(400, json.dumps({"ok": False, "output": "bad settings payload"}))
+            except (ValueError, TypeError, OSError) as e:
+                # Validation messages are intentionally actionable (notably the
+                # Mac project root); no secret value is ever included in them.
+                self._send(400, json.dumps({"ok": False, "output": str(e) or "bad settings payload"}))
                 return
             self._send(200, json.dumps({"ok": True, "settings": merged,
                                         "linear_configured": bool(linear_key()),
@@ -2385,14 +2617,14 @@ body.gaming #foot{display:none}
   .topbar .meta{display:none}
   .apps{grid-template-columns:1fr}
 }
-/* The macOS companion is deliberately just a dashboard + network monitor. */
-body.macos [data-panel="prs"],body.macos [data-panel="linear"],body.macos [data-panel="ci"],
+/* macOS has a local-work dashboard but deliberately no Linux/T3 controls. */
 body.macos [data-panel="tmux"],body.macos [data-panel="sessions"],body.macos [data-panel="usage"],
-body.macos [data-panel="repos"],body.macos [data-panel="actions"],body.macos [data-panel="docker"],
+body.macos [data-panel="actions"],body.macos [data-panel="docker"],
 body.macos [data-panel="journal"],body.macos #game-banner,body.macos #mode,
 body.macos #boot-mode-head,body.macos #boot-mode-row,body.macos #throttle-head,
 body.macos #throttle-row,body.macos #t3connect-head,body.macos #t3connect-row{display:none!important}
-body.macos .mac-linux-setting,body.macos .tab[data-tab="work"]{display:none!important}
+body.macos .mac-linux-setting,body.macos .linear-create{display:none!important}
+body:not(.macos) .mac-only-setting{display:none!important}
 </style></head><body>
 <div id="topcover"></div>
 <div class="topbar">
@@ -2478,9 +2710,12 @@ body.macos .mac-linux-setting,body.macos .tab[data-tab="work"]{display:none!impo
     </select>
   </div>
 
-  <div class="sethead mac-linux-setting">Integrations</div>
-  <div class="setrow mac-linux-setting"><span class="setlabel">Linear API key <span id="linear-state"></span></span>
+  <div class="sethead">Integrations</div>
+  <div class="setrow"><span class="setlabel">Linear API key <span id="linear-state"></span></span>
     <input type="password" id="set-linear" placeholder="lin_api_… (leave empty to keep)" size="24">
+  </div>
+  <div class="setrow mac-only-setting"><span class="setlabel">Repository root <span class="dim2">(nested Git repos)</span></span>
+    <input id="set-repo-root" placeholder="/Users/you/Sites" size="32">
   </div>
 
   <div class="sethead sec-toggle mac-linux-setting" id="notify-head" data-sec="sec-notify">▸ Notifications — 🔔 push &amp; ntfy</div>
@@ -2624,10 +2859,10 @@ body.macos .mac-linux-setting,body.macos .tab[data-tab="work"]{display:none!impo
   </div>
 </div>
 <div id="panels">
-  <div class="panel" data-panel="prs"><h2>🔀 Pull requests</h2><table id="prs"></table></div>
+  <div class="panel" data-panel="prs"><h2 id="prs-heading">🔀 Pull requests</h2><table id="prs"></table></div>
   <div class="panel" data-panel="ci"><h2>🏗️ CI status</h2><table id="ci"></table></div>
   <div class="panel" data-panel="linear"><h2>📐 Linear — assigned to me</h2><table id="linear"></table>
-    <div class="setrow"><input id="new-linear" placeholder="new issue title…" style="flex:1">
+    <div class="setrow linear-create"><input id="new-linear" placeholder="new issue title…" style="flex:1">
       <button class="mini" id="add-linear">➕</button></div>
   </div>
   <div class="panel" data-panel="usage"><h2>🧾 Agent usage</h2><table id="usage"></table></div>
@@ -2820,7 +3055,7 @@ function render(s){
   lastMode=s.mode;
   macosCompanion=s.platform==='macos';
   document.body.classList.toggle('macos',macosCompanion);
-  if(macosCompanion&&activeTab!=='system'){activeTab='system';localStorage.setItem('grave-tab',activeTab);}
+  $('prs-heading').textContent=macosCompanion?'🐙 GitHub — open work':'🔀 Pull requests';
   document.body.classList.toggle('gaming',s.mode==='gaming');
   $('game-banner').style.display=s.mode==='gaming'?'block':'none';
   if(s.mode==='gaming')
@@ -2925,31 +3160,59 @@ function render(s){
       <span class="dim" style="float:right">${esc(n.when)}</span>
       <div class="dim2" style="white-space:pre-wrap;font-size:12px">${esc(n.body)}</div></div>`).join('')
     :'<div class="dim">no pages yet — enable notifications in ⚙️ settings</div>';
-  $('repos').innerHTML=s.repos.length?s.repos.map(r=>`<tr>
+  const repoScan=s.repo_scan||{};
+  if(macosCompanion){
+    const repoRows=(s.repos||[]).map(r=>`<tr>
+      <td>${statusDot(r.dirty?'inactive':'active')}${esc(r.name)}</td>
+      <td class="dim">${esc(r.branch)}${r.dirty?` · ${r.dirty} dirty`:''}</td>
+      <td class="dim">${esc(r.last_when)}${r.last_subject?` · ${esc(r.last_subject)}`:''}</td></tr>`).join('');
+    const repoNote=repoScan.error||repoScan.warning;
+    $('repos').innerHTML=repoRows
+      +(repoNote?`<tr><td class="dim" colspan="3">${esc(repoNote)}</td></tr>`:'')
+      ||`<tr><td class="dim">${esc(repoScan.error||`no Git repositories under ${repoScan.root||'configured root'}`)}</td></tr>`;
+  }else{
+    // Keep the Linux repository card exactly as its long-standing contract.
+    $('repos').innerHTML=s.repos.length?s.repos.map(r=>`<tr>
       <td>${statusDot(r.dirty?'inactive':'active')}${esc(r.name)}</td>
       <td class="dim">${esc(r.branch)}${r.dirty?` · ${r.dirty} dirty`:''}</td>
       <td class="dim">${esc(r.last_when)}</td></tr>`).join('')
-    :'<tr><td class="dim">no repos</td></tr>';
+      :'<tr><td class="dim">no repos</td></tr>';
+  }
   $('journal').textContent=s.journal.join('\n');
   // integration lists: recent 5 inline, "show all" jumps to the real app
   const moreRow=(shown,total,url)=>total>shown&&url
     ? `<tr><td colspan="3"><a href="${esc(url)}" target="_blank" rel="noopener">show all (${total}${total>=15?'+':''}) →</a></td></tr>`:'';
   const gh=s.github||{};
-  const anyMine=(gh.prs||[]).some(p=>p.mine);
-  $('prs').innerHTML=gh.error
-    ? `<tr><td class="dim">${esc(gh.error)}</td></tr>`
-    : ((gh.prs||[]).slice(0,5).map(p=>`<tr>
-        <td>${p.mine?'<span title="your review is requested">👀 </span>':''}<a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.repo)} #${p.number}</a></td>
-        <td class="dim">${esc(p.title)}</td></tr>`).join('')
-       +moreRow(5,(gh.prs||[]).length,gh.more_url)
-       +(anyMine?'<tr><td class="dim" colspan="2">👀 = your review requested</td></tr>':'')
-       ||'<tr><td class="dim">no open PRs 🎉</td></tr>');
-  $('ci').innerHTML=((s.ci||{}).rows||[]).map(r=>{
+  if(macosCompanion){
+    const githubRows=(gh.repos||[]).map(group=>{
+      const prs=(group.prs||[]).map(p=>`<tr><td><span class="dim">PR</span> <a href="${esc(p.url)}" target="_blank" rel="noopener">#${p.number}</a></td><td class="dim">${esc(p.title)}</td></tr>`).join('');
+      const issues=(group.issues||[]).map(i=>`<tr><td><span class="dim">ISSUE</span> <a href="${esc(i.url)}" target="_blank" rel="noopener">#${i.number}</a></td><td class="dim">${esc(i.title)}</td></tr>`).join('');
+      return `<tr><td colspan="2"><a href="${esc(group.url)}" target="_blank" rel="noopener">${esc(group.repo)}</a> <span class="dim">· GitHub →</span></td></tr>`+prs+issues;
+    }).join('');
+    $('prs').innerHTML=gh.error
+      ? `<tr><td class="dim">${esc(gh.error)}</td></tr>`
+      : (githubRows+(gh.warning?`<tr><td class="dim" colspan="2">${esc(gh.warning)}</td></tr>`:'')
+         ||'<tr><td class="dim">no open pull requests or issues 🎉</td></tr>');
+  }else{
+    // Keep the Linux PR-only presentation, show-all URL, and review marker.
+    const anyMine=(gh.prs||[]).some(p=>p.mine);
+    $('prs').innerHTML=gh.error
+      ? `<tr><td class="dim">${esc(gh.error)}</td></tr>`
+      : ((gh.prs||[]).slice(0,5).map(p=>`<tr>
+          <td>${p.mine?'<span title="your review is requested">👀 </span>':''}<a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.repo)} #${p.number}</a></td>
+          <td class="dim">${esc(p.title)}</td></tr>`).join('')
+         +moreRow(5,(gh.prs||[]).length,gh.more_url)
+         +(anyMine?'<tr><td class="dim" colspan="2">👀 = your review requested</td></tr>':'')
+         ||'<tr><td class="dim">no open PRs 🎉</td></tr>');
+  }
+  $('ci').innerHTML=(s.ci||{}).error
+    ?`<tr><td class="dim">${esc(s.ci.error)}</td></tr>`
+    :(((s.ci||{}).rows||[]).map(r=>{
     const st=r.status!=='completed'?'inactive':(r.conclusion==='success'?'active':'failed');
     return `<tr><td>${statusDot(st)}<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.repo)}</a></td>
       <td class="dim">${esc(r.workflow)}</td>
       <td class="dim">${esc(r.branch)} · ${esc(r.conclusion||r.status)}</td></tr>`;
-  }).join('')||'<tr><td class="dim">no workflow runs in any repo</td></tr>';
+  }).join('')||'<tr><td class="dim">no workflow runs in configured repos</td></tr>');
   const us=s.usage;
   if(us){
     const fk=n=>n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?Math.round(n/1e3)+'k':''+n;
@@ -3251,6 +3514,7 @@ function buildSettings(existing){
     syncVis();draft.custom_apps.splice(+b.dataset.delApp,1);buildSettings(draft);});
   $('set-poll').value=String(draft.poll_ms);
   $('set-t3tile').value=draft.t3_tile||'pwa';
+  if($('set-repo-root'))$('set-repo-root').value=draft.repo_root||'';
   paintT3Connect();
   $('linear-state').textContent=linearConfigured?'✓ configured':'(not set)';
   document.querySelectorAll('[data-auth]').forEach(a=>
@@ -3365,6 +3629,7 @@ function syncVis(){
     .filter(c=>c.checked).map(c=>c.dataset.appNewtab);
   draft.poll_ms=+$('set-poll').value;
   draft.t3_tile=$('set-t3tile').value;
+  if(macosCompanion&&$('set-repo-root'))draft.repo_root=$('set-repo-root').value.trim();
 }
 // body scroll-lock while any overlay is open — without this, iOS scrolls
 // the page underneath the modal ("intermixed" scrolling)

@@ -7,6 +7,8 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import json
+import threading
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -33,6 +35,139 @@ class MacosContractTests(unittest.TestCase):
         self.assertEqual(state["platform"], "macos")
         self.assertEqual(state["docker"]["containers"], [])
         self.assertEqual(state["tmux"], [])
+
+    def test_macos_nested_repo_inventory_is_canonical_bounded_and_safe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app_root = pathlib.Path(tmp, "app-data")
+            sites = pathlib.Path(tmp, "Sites")
+            repo = sites / "owner" / "project"
+            repo.mkdir(parents=True)
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "remote", "add", "origin",
+                            "git@github.com:example/project.git"], check=True)
+            (app_root / "config").mkdir(parents=True)
+            dash = load(ROOT / "dashboard/gravedecay.py", {
+                "GRAVEDECAY_PLATFORM": "macos", "GRAVE_ROOT": str(app_root),
+            })
+            self.assertEqual(dash.macos_repo_root("relative")[0], None)
+            dash.save_settings({"repo_root": str(sites)})
+            inventory = dash.collect_macos_repo_inventory()
+            self.assertEqual(inventory["root"], str(sites.resolve()))
+            self.assertEqual(len(inventory["repos"]), 1)
+            found = inventory["repos"][0]
+            self.assertEqual(found["name"], "owner/project")
+            self.assertEqual(found["github_repo"], "example/project")
+            self.assertEqual(dash.github_remote("not-a-github-remote"), None)
+            self.assertIn("MACOS_REPO_SCAN_MAX_DIRS", (ROOT / "dashboard/gravedecay.py").read_text())
+
+    def test_macos_work_data_is_private_but_allowed_owner_can_read_it(self):
+        dash = load(ROOT / "dashboard/gravedecay.py", {
+            "GRAVEDECAY_PLATFORM": "macos", "GRAVEDECAY_ALLOWED_USERS": "owner@example.test",
+        })
+        saved = {name: getattr(dash, name) for name in (
+            "collect_macos_repo_inventory", "collect_macos_work",
+            "collect_linear", "collect_services", "collect_system",
+        )}
+        dash.collect_macos_repo_inventory = lambda: {"root": "/private/Sites", "repos": [{"name": "secret"}], "error": None}
+        dash.collect_macos_work = lambda _: {"github": {"repos": [{"repo": "secret", "prs": [{"title": "secret"}]}], "error": None, "login": "owner"},
+                                              "ci": {"rows": [{"repo": "secret"}], "error": None}}
+        dash.collect_linear = lambda: {"configured": True, "issues": [{"title": "secret"}], "error": None}
+        dash.collect_services = lambda: []
+        dash.collect_system = lambda: {}
+        try:
+            owner = dash.state({"Tailscale-User-Login": "owner@example.test"})
+            viewer = dash.state({"Tailscale-User-Login": "other@example.test"})
+        finally:
+            for name, fn in saved.items():
+                setattr(dash, name, fn)
+        self.assertEqual(owner["repos"], [{"name": "secret"}])
+        self.assertEqual(owner["github"]["repos"][0]["prs"][0]["title"], "secret")
+        self.assertEqual(viewer["repos"], [])
+        self.assertEqual(viewer["repo_scan"]["root"], None)
+        self.assertEqual(viewer["settings"]["repo_root"], "")
+        self.assertEqual(viewer["github"]["error"], "restricted")
+        self.assertEqual(viewer["linear"]["issues"], [])
+
+    def test_macos_github_work_is_per_repo_sorted_and_command_bounded(self):
+        dash = load(ROOT / "dashboard/gravedecay.py", {"GRAVEDECAY_PLATFORM": "macos"})
+        inventory = {"root": "/private/Sites", "error": None, "repos": [
+            {"name": "zeta/project", "github_repo": "example/zeta"},
+            {"name": "alpha/project", "github_repo": "example/alpha"},
+        ]}
+        calls, old_sh, old_which = [], dash.sh, dash.shutil.which
+        dash.shutil.which = lambda name: "/usr/bin/" + name
+        def fake_sh(command, timeout=10):
+            calls.append(command)
+            if command[:4] == ["gh", "api", "user", "--jq"]:
+                return 0, "owner\n", ""
+            if command[1:4] == ["api", "-X", "GET"]:
+                endpoint = command[4]
+                if "/pulls?" in endpoint:
+                    return 0, '[{"number": 1, "title": "PR", "html_url": "https://example/pr"}]', ""
+            if command[1:3] == ["issue", "list"]:
+                return 0, '[{"number": 2, "title": "Issue", "url": "https://example/issue"}]', ""
+            if command[1:3] == ["run", "list"]:
+                return 0, '[]', ""
+            return 1, "", "unexpected"
+        dash.sh = fake_sh
+        try:
+            dash._ttl_cache.pop("macos-work:/private/Sites", None)
+            work = dash.collect_macos_work(inventory)
+        finally:
+            dash.sh, dash.shutil.which = old_sh, old_which
+        groups = work["github"]["repos"]
+        self.assertEqual([group["repo"] for group in groups], ["alpha/project", "zeta/project"])
+        self.assertEqual(groups[0]["prs"][0]["title"], "PR")
+        self.assertEqual(groups[0]["issues"][0]["title"], "Issue")
+        self.assertEqual(len(calls), 1 + 3 * len(inventory["repos"]))
+        self.assertEqual(dash.MACOS_GITHUB_WORKERS, 4)
+        self.assertEqual(dash.MACOS_GITHUB_ITEMS_PER_REPO, 3)
+        # The remote cap is visible rather than silently dropping eligible
+        # repositories; its command bound still applies to the selected set.
+        capped = {"root": "/private/capped", "error": None, "repos": [
+            {"name": f"repo-{i:02d}", "github_repo": f"example/repo-{i:02d}"}
+            for i in range(dash.MACOS_GITHUB_REPO_LIMIT + 1)
+        ]}
+        calls, old_sh, old_which = [], dash.sh, dash.shutil.which
+        dash.sh, dash.shutil.which = fake_sh, lambda name: "/usr/bin/" + name
+        try:
+            capped_work = dash.collect_macos_work(capped)
+        finally:
+            dash.sh, dash.shutil.which = old_sh, old_which
+        self.assertIn("limited to first", capped_work["github"]["warning"])
+        self.assertEqual(len(capped_work["github"]["repos"]), dash.MACOS_GITHUB_REPO_LIMIT)
+
+    def test_macos_work_settings_validate_roots_and_never_return_linear_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app_root = pathlib.Path(tmp, "app"); (app_root / "config").mkdir(parents=True)
+            sites = pathlib.Path(tmp, "Sites"); sites.mkdir()
+            dash = load(ROOT / "dashboard/gravedecay.py", {
+                "GRAVEDECAY_PLATFORM": "macos", "GRAVE_ROOT": str(app_root),
+                "GRAVEDECAY_ALLOWED_USERS": "owner@example.test",
+            })
+            server = dash.ThreadingHTTPServer(("127.0.0.1", 0), dash.Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+            origin = f"http://127.0.0.1:{server.server_port}"
+            try:
+                def post(data, headers=None):
+                    request = urllib.request.Request(origin + "/api/settings", data=json.dumps(data).encode(),
+                        headers={"Content-Type": "application/json", **(headers or {})}, method="POST")
+                    return urllib.request.urlopen(request, timeout=2)
+                with self.assertRaises(urllib.error.HTTPError) as bad:
+                    post({"repo_root": "relative"})
+                self.assertIn("absolute path", bad.exception.read().decode())
+                with post({"repo_root": str(sites), "linear_key": "lin_private_test_key"}) as response:
+                    body = response.read().decode()
+                self.assertNotIn("lin_private_test_key", body)
+                self.assertIn(str(sites.resolve()), body)
+                with self.assertRaises(urllib.error.HTTPError) as remote:
+                    post({}, {"Tailscale-User-Login": "other@example.test"})
+                self.assertEqual(remote.exception.code, 403)
+                with self.assertRaises(urllib.error.HTTPError) as cross_site:
+                    post({}, {"Tailscale-User-Login": "owner@example.test", "Sec-Fetch-Site": "cross-site"})
+                self.assertEqual(cross_site.exception.code, 403)
+            finally:
+                server.shutdown(); server.server_close(); thread.join(timeout=2)
 
     def test_darwin_network_parsers(self):
         net = load(ROOT / "dashboard/gravenet.py", {"GRAVENET_PLATFORM": "macos"})
@@ -86,6 +221,8 @@ class MacosContractTests(unittest.TestCase):
         # Linux's established temperature/fan cards remain in its separate branch.
         self.assertIn("tile('CPU temp'", source)
         self.assertIn("return cached(\"macos-system\", 5", source)
+        self.assertIn("body:not(.macos) .mac-only-setting", source)
+        self.assertIn("Keep the Linux PR-only presentation", source)
 
     def test_installer_rejects_non_darwin(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -139,6 +276,11 @@ class MacosContractTests(unittest.TestCase):
         self.assertIn('invalid component metadata', status)
         self.assertIn('Tailscale Serve: empty status', status)
         self.assertIn('[ "$SERVE" = 0 ] || [ -n "$TAILSCALE" ]', install)
+        self.assertIn('Self.UserID', install)
+        self.assertIn('User["<id>"].LoginName', install)
+        self.assertIn('GRAVEDECAY_ALLOWED_USERS', plist_template)
+        self.assertIn('/opt/homebrew/bin', plist_template)
+        self.assertIn('refusing to enable Serve', install)
         self.assertIn("os.path.realpath", install)
         self.assertIn('ROOT_CANON=$(CDPATH= cd -- "$ROOT" && pwd -P)', uninstall)
         with tempfile.TemporaryDirectory() as tmp:
@@ -164,6 +306,29 @@ class MacosContractTests(unittest.TestCase):
                                      env=env, capture_output=True, text=True)
             self.assertNotEqual(refused.returncode, 0)
 
+    def test_serve_installer_derives_the_exact_local_tailscale_login_or_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_bin = pathlib.Path(tmp, "bin"); fake_bin.mkdir()
+            uname = fake_bin / "uname"
+            uname.write_text("#!/bin/sh\necho Darwin\n"); uname.chmod(0o755)
+            tailscale = fake_bin / "tailscale"
+            tailscale.write_text("#!/bin/sh\n"
+                                 "if [ \"$1\" = status ]; then\n"
+                                 "  printf '%s' '{\"Self\":{\"UserID\":123},\"User\":{\"123\":{\"LoginName\":\"han@projectmushroom.com\"}}}'\n"
+                                 "fi\n")
+            tailscale.chmod(0o755)
+            env = dict(os.environ, HOME=tmp, GRAVEDECAY_MAC_ROOT=str(pathlib.Path(tmp) / "root"),
+                       PATH=f"{fake_bin}:/usr/bin:/bin")
+            result = subprocess.run(["sh", str(ROOT / "macos/install.sh"), "--dry-run"],
+                                    env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("han@projectmushroom.com", result.stdout)
+            tailscale.write_text("#!/bin/sh\nprintf '%s' '{}'\n"); tailscale.chmod(0o755)
+            refused = subprocess.run(["sh", str(ROOT / "macos/install.sh"), "--dry-run"],
+                                     env=env, capture_output=True, text=True)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn("refusing to enable Serve", refused.stderr)
+
     def test_marked_servers_smoke_without_launchd_or_tailscale(self):
         """Real local processes, temporary state only: no launchctl/Serve calls."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -173,7 +338,7 @@ class MacosContractTests(unittest.TestCase):
             with socket.socket() as s1, socket.socket() as s2:
                 s1.bind(("127.0.0.1", 0)); dash_port = str(s1.getsockname()[1])
                 s2.bind(("127.0.0.1", 0)); net_port = str(s2.getsockname()[1])
-            env = dict(os.environ, GRAVE_ROOT=tmp, GRAVEDECAY_PLATFORM="macos",
+            env = dict(os.environ, HOME=tmp, GRAVE_ROOT=tmp, GRAVEDECAY_PLATFORM="macos",
                        GRAVEDECAY_PORT=dash_port, GRAVENET_PLATFORM="macos",
                        GRAVENET_PORT=net_port, GRAVENET_WEB=str(root / "web/net"))
             procs = [subprocess.Popen(["python3", str(ROOT / "dashboard/gravedecay.py")], env=env),

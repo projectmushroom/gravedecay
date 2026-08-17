@@ -77,7 +77,7 @@ system controls, and the full dashboard. The Linux quickstarts below are for
 that installation.
 
 **macOS companion** is a separate, small source install for a Mac you already
-use: a user-scoped read-only system dashboard and live network monitor. It
+use: a user-scoped system dashboard, local Git work view, and live network monitor. It
 does not raise an appliance or install/manage T3, Docker, terminal access,
 system services, firewall, or SSH. A signed-in Tailscale app is needed only to
 publish its two tailnet paths; it can otherwise stay localhost-only.
