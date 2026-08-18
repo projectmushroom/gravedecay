@@ -40,6 +40,14 @@ class DoctorContractTests(unittest.TestCase):
         self.assertIn('enable_restart gravedecay-gamewatch', RAISE)
         self.assertNotIn('if [[ "$IMMUTABLE" == 1 || "$PROFILE" == steam-machine ]]; then', RAISE)
 
+    def test_doctor_compares_the_running_shell_to_the_installed_file(self):
+        # The PWA page left gravedecay.py; a stale index.html is the same
+        # class of bug as a stale Python process. healthz.shell is the
+        # import-time sha256 of that file, matching sha256sum on disk.
+        self.assertIn('check "dashboard serving installed shell"', GRAVE)
+        self.assertIn("dashboard-static/index.html", GRAVE)
+        self.assertIn("jq -r .shell", GRAVE)
+
     def test_workspace_doctor_runs_through_the_root_helper(self):
         # Regression #45: run unprivileged the workspace doctor hits root-owned
         # 0700 paths and fails on a healthy box. Route it through sudo like every

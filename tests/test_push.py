@@ -271,7 +271,7 @@ class SettingsPanelContractTests(unittest.TestCase):
         # Product decision (#88 follow-up): Web Push is the default path. The
         # ntfy fields at eye level read as a required account signup — they are
         # neither required nor an account. Keep them, collapsed.
-        src = (ROOT / "dashboard/gravedecay.py").read_text()
+        src = (ROOT / "dashboard/static/index.html").read_text()
         self.assertIn('data-sec="ntfy-adv"', src)
         self.assertIn('<div id="ntfy-adv" style="display:none">', src)
 

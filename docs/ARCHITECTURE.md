@@ -134,6 +134,8 @@ repository.
 Every raise explicitly restarts the dashboard, terminal, T3, gateway, and
 workspace services after installing their scripts and unit files. Merely using
 `systemctl enable --now` is insufficient because systemd does not restart an
-already-active unit. Dashboard health reports the running source hash and
-`grave doctor` compares it with the installed script, making stale processes a
-visible contract failure instead of silently serving an old UI.
+already-active unit. Dashboard health reports the running source hash and the on-disk PWA shell
+hash (`index.html` under `scripts/dashboard-static/`). `grave doctor`
+compares both with the installed files, making a stale process — or a
+raise that updated the Python but not the shell — a visible contract
+failure instead of silently serving an old UI.

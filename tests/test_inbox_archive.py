@@ -10,6 +10,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 GRAVE = (ROOT / "bin/grave").read_text()
 DASH = (ROOT / "dashboard/gravedecay.py").read_text()
+SHELL = (ROOT / "dashboard/static/index.html").read_text()
 NOTIF_DOCS = (ROOT / "docs/NOTIFICATIONS.md").read_text()
 
 
@@ -80,9 +81,9 @@ class ArchiveContractTests(unittest.TestCase):
         self.assertIn('"/api/session-resume"', DASH)
 
     def test_dashboard_registers_both_panels(self):
-        self.assertIn('data-panel="sessions"', DASH)
-        self.assertIn('data-panel="inbox"', DASH)
-        self.assertIn("sessions:'work',inbox:'work'", DASH)
+        self.assertIn('data-panel="sessions"', SHELL)
+        self.assertIn('data-panel="inbox"', SHELL)
+        self.assertIn("sessions:'work',inbox:'work'", SHELL)
 
 
 class InboxExecutionTests(unittest.TestCase):

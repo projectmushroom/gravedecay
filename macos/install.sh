@@ -54,6 +54,8 @@ serve_off(){ path=$1; [ -z "$TAILSCALE" ] || run "$TAILSCALE" serve --https=443 
 [ "$DRY" = 1 ] || { run mkdir -p "$ROOT/scripts" "$ROOT/web/net" "$ROOT/logs" "$ROOT/config" "$AGENTS"; : > "$ROOT/.gravedecay-macos"; }
 if [ "$WANT_DASH" = 1 ]; then
   run cp "$HERE/../dashboard/gravedecay.py" "$ROOT/scripts/gravedecay.py"
+  run mkdir -p "$ROOT/scripts/dashboard-static"
+  run cp "$HERE/../dashboard/static/"* "$ROOT/scripts/dashboard-static/"
   run cp "$HERE/../assets/gravedecay.png" "$ROOT/config/gravedecay.png"
   render "$HERE/LaunchAgents/io.gravedecay.dashboard.plist.tmpl" "$AGENTS/io.gravedecay.dashboard.plist"
   run launchctl bootout "gui/$UID_NOW" "$AGENTS/io.gravedecay.dashboard.plist" || true

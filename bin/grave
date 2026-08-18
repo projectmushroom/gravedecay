@@ -1314,6 +1314,11 @@ cmd_doctor() { # grave doctor [--no-page]
     check "gravedecay answering"         curl -sf -o /dev/null "http://127.0.0.1:$DASH_PORT/healthz"
     check "dashboard running installed build" bash -c \
       "test \"\$(sha256sum '$GRAVE_ROOT/scripts/gravedecay.py' | cut -d' ' -f1)\" = \"\$(curl -sf 'http://127.0.0.1:$DASH_PORT/healthz' | jq -r .build)\""
+    # The PWA shell left the Python file; a stale index.html is the same
+    # class of bug as a stale gravedecay.py. Compare the on-disk asset
+    # (sha256sum) to the hash the running process reports for that file.
+    check "dashboard serving installed shell" bash -c \
+      "test \"\$(sha256sum '$GRAVE_ROOT/scripts/dashboard-static/index.html' | cut -d' ' -f1)\" = \"\$(curl -sf 'http://127.0.0.1:$DASH_PORT/healthz' | jq -r .shell)\""
     check "dashboard self-updater installed" systemctl cat gravedecay-upgrade.service
     check "selectable release updater installed" systemctl cat 'gravedecay-upgrade@.service'
     check "dashboard PWA owns app origin" bash -c \

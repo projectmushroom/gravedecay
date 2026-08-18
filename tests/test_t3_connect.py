@@ -6,6 +6,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 GRAVE = (ROOT / "bin/grave").read_text()
 WEBTERM = (ROOT / "bin/webterm").read_text()
 DASHBOARD = (ROOT / "dashboard/gravedecay.py").read_text()
+SHELL = (ROOT / "dashboard/static/index.html").read_text()
 GATEWAY = (ROOT / "dashboard/gateway.py").read_text()
 TERM_APP = (ROOT / "web/term/app.js").read_text()
 SECURITY_DOC = (ROOT / "docs/SECURITY.md").read_text()
@@ -55,6 +56,7 @@ class T3ConnectContractTests(unittest.TestCase):
         for arg in ("auth-t3publish", "auth-t3full"):
             self.assertIn(arg, WEBTERM)
             self.assertIn(arg, DASHBOARD)
+            self.assertIn(arg, SHELL)
         self.assertIn('auth-t3publish) [[ "$WORKSPACE_ROLE" == admin ]]', WEBTERM)
         self.assertIn('auth-t3full)    [[ "$WORKSPACE_ROLE" == admin ]]', WEBTERM)
 
@@ -122,12 +124,12 @@ class T3ConnectContractTests(unittest.TestCase):
         # The app-mode tile bypasses _safe_tile_url (which rightly refuses
         # non-http schemes), so its href must be a hardcoded constant — never
         # interpolated from settings or tile data.
-        self.assertIn('href="t3code://"', DASHBOARD)
-        self.assertNotIn("href=\"t3code://'+", DASHBOARD)
+        self.assertIn('href="t3code://"', SHELL)
+        self.assertNotIn("href=\"t3code://'+", SHELL)
 
     def test_pairing_console_offers_the_official_app_deeplink(self):
         # The mobile app's citable pairing form: t3code://pair?pairingUrl=<enc>
-        self.assertIn("t3code://pair?pairingUrl='+encodeURIComponent(", DASHBOARD)
+        self.assertIn("t3code://pair?pairingUrl='+encodeURIComponent(", SHELL)
 
 
 if __name__ == "__main__":
