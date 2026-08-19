@@ -48,6 +48,13 @@ class DoctorContractTests(unittest.TestCase):
         self.assertIn("dashboard-static/index.html", GRAVE)
         self.assertIn("jq -r .shell", GRAVE)
 
+    def test_doctor_compares_the_worker_stamp_to_the_installed_offline_page(self):
+        # sw.js embeds a digest of offline.html in its cache name; a mismatch
+        # means installed PWAs still pre-cache an outdated offline page.
+        self.assertIn('check "dashboard serving installed offline page"', GRAVE)
+        self.assertIn("dashboard-static/offline.html", GRAVE)
+        self.assertIn("jq -r .sw", GRAVE)
+
     def test_workspace_doctor_runs_through_the_root_helper(self):
         # Regression #45: run unprivileged the workspace doctor hits root-owned
         # 0700 paths and fails on a healthy box. Route it through sudo like every

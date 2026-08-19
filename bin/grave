@@ -1325,6 +1325,11 @@ cmd_doctor() { # grave doctor [--no-page]
       "curl -sf 'http://127.0.0.1:$DASH_PORT/manifest.webmanifest' | grep -q '\"scope\": \"/\"'"
     check "dashboard offline shell ready" bash -c \
       "curl -sf -D - -o /dev/null 'http://127.0.0.1:$DASH_PORT/sw.js' | grep -qi '^Service-Worker-Allowed: /'"
+    # The worker's cache name embeds a digest of offline.html (healthz.sw).
+    # A mismatch means installed PWAs are pinning an outdated offline page —
+    # the browser only re-installs a worker whose served bytes changed.
+    check "dashboard serving installed offline page" bash -c \
+      "test \"\$(sha256sum '$GRAVE_ROOT/scripts/dashboard-static/offline.html' | cut -d' ' -f1 | cut -c-12)\" = \"\$(curl -sf 'http://127.0.0.1:$DASH_PORT/healthz' | jq -r .sw)\""
   else
     say "  ${YLW}– gravedecay stopped${RST}"
   fi

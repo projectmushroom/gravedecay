@@ -119,8 +119,12 @@ The dashboard is network-first because it controls a remote machine. API
 responses, machine state, file listings, and action output are always
 `no-store`. A service worker caches only a static connection-help page so a
 disconnected launch explains how to restore Tailscale instead of showing a
-blank browser error. `grave doctor` verifies the manifest scope and root-scoped
-service worker contract.
+blank browser error. The worker's cache name embeds a digest of that offline
+page (stamped into `sw.js` at import, reported as `sw` on `/healthz`): browsers
+only re-install a worker whose served bytes changed, so without the stamp an
+upgrade touching `offline.html` would never reach already-installed PWAs.
+`grave doctor` verifies the manifest scope, the root-scoped service worker
+contract, and that the running stamp matches the installed offline page.
 
 Dashboard self-upgrades are queued with `systemctl --no-block` into either
 `gravedecay-upgrade.service` (configured release/edge channel) or the validated

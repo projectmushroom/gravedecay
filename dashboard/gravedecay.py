@@ -293,10 +293,10 @@ MANIFEST = json.dumps({
 # that the box/Tailscale is unreachable and retry without dropping to a blank
 # WebKit error page.  The worker is allowed to cover the entire origin because
 # the manifest intentionally does too; non-navigation requests pass through.
-SERVICE_WORKER = r"""const CACHE='gravedecay-shell-v1';
+SERVICE_WORKER = r"""const CACHE='gravedecay-shell-@OFFLINE@';
 const OFFLINE=new URL('offline.html',self.location.href).href;
 self.addEventListener('install',event=>{
-  event.waitUntil(caches.open(CACHE).then(cache=>cache.add(OFFLINE)).then(()=>self.skipWaiting()));
+  event.waitUntil(caches.open(CACHE).then(cache=>cache.add(new Request(OFFLINE,{cache:'reload'}))).then(()=>self.skipWaiting()));
 });
 self.addEventListener('activate',event=>{
   event.waitUntil(caches.keys().then(keys=>Promise.all(
@@ -397,6 +397,19 @@ PAGE = load_page()
 # as BUILD_ID: after raise replaces the file, a process that was not
 # restarted still reports the old hash and doctor fails.
 SHELL_ID = static_asset_sha("index.html")
+
+
+def load_service_worker():
+    """Stamp the worker's cache name with a digest of the offline page it
+    pre-caches. sw.js is otherwise byte-stable, and browsers only re-install
+    a worker whose bytes changed — without the stamp an upgrade that touched
+    offline.html would leave the old copy in CacheStorage forever."""
+    offline = static_asset("offline.html", OFFLINE_PAGE)
+    stamp = hashlib.sha256(offline.encode()).hexdigest()[:12]
+    return static_asset("sw.js", SERVICE_WORKER).replace("@OFFLINE@", stamp), stamp
+
+
+SW, SW_ID = load_service_worker()
 
 
 def sh(cmd, timeout=10):
@@ -2130,6 +2143,7 @@ class Handler(BaseHTTPRequestHandler):
                 "ok": True,
                 "build": BUILD_ID,
                 "shell": SHELL_ID,
+                "sw": SW_ID,
             }))
         elif p == "/api/state":
             self._send(200, json.dumps(state(self.headers)))
@@ -2195,7 +2209,7 @@ class Handler(BaseHTTPRequestHandler):
         elif p == "/manifest.webmanifest":
             self._send(200, MANIFEST, "application/manifest+json", "no-cache")
         elif p == "/sw.js":
-            self._send(200, static_asset("sw.js", SERVICE_WORKER),
+            self._send(200, SW,
                        "text/javascript; charset=utf-8", "no-cache",
                        {"Service-Worker-Allowed": "/"})
         elif p == "/offline.html":

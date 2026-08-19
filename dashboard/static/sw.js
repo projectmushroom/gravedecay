@@ -1,9 +1,16 @@
-const CACHE = 'gravedecay-shell-v1';
+// @OFFLINE@ is stamped by gravedecay.py with a digest of the offline page.
+// This file is otherwise byte-stable, and browsers only re-install a worker
+// whose bytes changed — without the stamp an upgraded offline.html would
+// never replace the copy already sitting in CacheStorage.
+const CACHE = 'gravedecay-shell-@OFFLINE@';
 const OFFLINE = new URL('offline.html', self.location.href).href;
 
 self.addEventListener('install', event => {
+  // cache:'reload' skips the HTTP cache — offline.html is served with
+  // max-age=86400, and re-caching a stale copy would defeat the stamp.
   event.waitUntil(
-    caches.open(CACHE).then(cache => cache.add(OFFLINE)).then(() => self.skipWaiting())
+    caches.open(CACHE).then(cache => cache.add(new Request(OFFLINE, { cache: 'reload' })))
+      .then(() => self.skipWaiting())
   );
 });
 

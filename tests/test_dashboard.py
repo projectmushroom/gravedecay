@@ -87,6 +87,12 @@ class DashboardContractTests(unittest.TestCase):
             self.assertEqual(response.headers["Cache-Control"], "no-cache")
         self.assertIn("request.mode !== 'navigate'", worker)
         self.assertNotIn("/api/", worker)
+        # The served worker carries the offline-page digest in its cache
+        # name; the raw @OFFLINE@ placeholder must never reach a browser.
+        offline_stamp = hashlib.sha256(
+            (ROOT / "dashboard/static/offline.html").read_bytes()).hexdigest()[:12]
+        self.assertIn(f"gravedecay-shell-{offline_stamp}", worker)
+        self.assertNotIn("@OFFLINE@", worker)
         with self.get("/healthz") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-store")
             health = json.loads(response.read())
@@ -94,6 +100,8 @@ class DashboardContractTests(unittest.TestCase):
             (ROOT / "dashboard/gravedecay.py").read_bytes()).hexdigest())
         self.assertEqual(health["shell"], hashlib.sha256(
             (ROOT / "dashboard/static/index.html").read_bytes()).hexdigest())
+        self.assertEqual(health["sw"], hashlib.sha256(
+            (ROOT / "dashboard/static/offline.html").read_bytes()).hexdigest()[:12])
 
     def test_pwa_shell_is_a_file_raise_installs_beside_the_python(self):
         # The dashboard page is the existing dashboard-static/ install, not a
