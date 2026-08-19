@@ -41,13 +41,13 @@ class DashboardContractTests(unittest.TestCase):
         # The persistent gamewatch preference is the UI feature gate. Keep one
         # Settings control to opt back in, but hide every routine mode control;
         # the existing game banner remains the recovery path if already buried.
-        dash = (ROOT / "dashboard/gravedecay.py").read_text()
-        self.assertIn('let throttleOn=null,gamingFeatures=false;', dash)
-        self.assertIn("gamingFeatures=show&&!!g.on;paintGamingControls();", dash)
-        self.assertIn("$('mode').style.display=gamingFeatures?'':'none';", dash)
-        self.assertIn("$('boot-mode-row').style.display=gamingFeatures?'':'none';", dash)
-        self.assertIn("document.querySelectorAll('[data-gaming-control]')", dash)
-        self.assertNotIn("$('game-banner').style.display=gamingFeatures", dash)
+        shell = (ROOT / "dashboard/static/index.html").read_text()
+        self.assertIn('let throttleOn=null,gamingFeatures=false;', shell)
+        self.assertIn("gamingFeatures=show&&!!g.on;paintGamingControls();", shell)
+        self.assertIn("$('mode').style.display=gamingFeatures?'':'none';", shell)
+        self.assertIn("$('boot-mode-row').style.display=gamingFeatures?'':'none';", shell)
+        self.assertIn("document.querySelectorAll('[data-gaming-control]')", shell)
+        self.assertNotIn("$('game-banner').style.display=gamingFeatures", shell)
 
     @classmethod
     def setUpClass(cls):
@@ -87,11 +87,41 @@ class DashboardContractTests(unittest.TestCase):
             self.assertEqual(response.headers["Cache-Control"], "no-cache")
         self.assertIn("request.mode !== 'navigate'", worker)
         self.assertNotIn("/api/", worker)
+        # The served worker carries the offline-page digest in its cache
+        # name; the raw @OFFLINE@ placeholder must never reach a browser.
+        offline_stamp = hashlib.sha256(
+            (ROOT / "dashboard/static/offline.html").read_bytes()).hexdigest()[:12]
+        self.assertIn(f"gravedecay-shell-{offline_stamp}", worker)
+        self.assertNotIn("@OFFLINE@", worker)
         with self.get("/healthz") as response:
             self.assertEqual(response.headers["Cache-Control"], "no-store")
             health = json.loads(response.read())
         self.assertEqual(health["build"], hashlib.sha256(
             (ROOT / "dashboard/gravedecay.py").read_bytes()).hexdigest())
+        self.assertEqual(health["shell"], hashlib.sha256(
+            (ROOT / "dashboard/static/index.html").read_bytes()).hexdigest())
+        self.assertEqual(health["sw"], hashlib.sha256(
+            (ROOT / "dashboard/static/offline.html").read_bytes()).hexdigest()[:12])
+
+    def test_pwa_shell_is_a_file_raise_installs_beside_the_python(self):
+        # The dashboard page is the existing dashboard-static/ install, not a
+        # 1600-line string inside the Python. raise.sh already copies static/*
+        # there; doctor hashes that file separately from gravedecay.py.
+        src = (ROOT / "dashboard/gravedecay.py").read_text()
+        ritual = (ROOT / "raise.sh").read_text()
+        self.assertTrue((ROOT / "dashboard/static/index.html").is_file())
+        self.assertIn("PAGE = load_page()", src)
+        # OFFLINE_PAGE still embeds a tiny HTML fallback; the live page must not.
+        self.assertNotIn("\nPAGE = r\"\"\"<!doctype html>", src)
+        self.assertIn('static_asset("index.html"', src)
+        self.assertIn("SHELL_ID = static_asset_sha", src)
+        self.assertIn('"$REPO_DIR/dashboard/static/"*', ritual)
+        self.assertIn("scripts/dashboard-static", ritual)
+        self.assertEqual(DASHBOARD.SHELL_ID, hashlib.sha256(
+            (ROOT / "dashboard/static/index.html").read_bytes()).hexdigest())
+        self.assertIn("@HOST@", (ROOT / "dashboard/static/index.html").read_text())
+        self.assertNotIn("@HOST@", DASHBOARD.PAGE)
+        self.assertIn(DASHBOARD.HOST, DASHBOARD.PAGE)
 
     def test_raise_restarts_services_after_installing_their_files(self):
         ritual = (ROOT / "raise.sh").read_text()

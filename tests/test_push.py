@@ -271,7 +271,7 @@ class SettingsPanelContractTests(unittest.TestCase):
         # Product decision (#88 follow-up): Web Push is the default path. The
         # ntfy fields at eye level read as a required account signup — they are
         # neither required nor an account. Keep them, collapsed.
-        src = (ROOT / "dashboard/gravedecay.py").read_text()
+        src = (ROOT / "dashboard/static/index.html").read_text()
         self.assertIn('data-sec="ntfy-adv"', src)
         self.assertIn('<div id="ntfy-adv" style="display:none">', src)
 
@@ -287,6 +287,12 @@ class ServiceWorkerContractTests(unittest.TestCase):
             self.assertIn("addEventListener('notificationclick'", source, name)
             self.assertIn("showNotification", source, name)
             self.assertIn("openWindow", source, name)
+            # Both copies must carry the offline-page stamp in the cache name
+            # (a fixed name means installed PWAs never refresh offline.html)
+            # and bypass the HTTP cache when re-caching it.
+            self.assertIn("gravedecay-shell-@OFFLINE@", source, name)
+            self.assertIn("'reload'", source, name)
+            self.assertNotIn("gravedecay-shell-v1", source, name)
 
 
 if __name__ == "__main__":

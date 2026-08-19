@@ -7,6 +7,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 GRAVE = (ROOT / "bin/grave").read_text()
 RAISE = (ROOT / "raise.sh").read_text()
 DASH = (ROOT / "dashboard/gravedecay.py").read_text()
+SHELL = (ROOT / "dashboard/static/index.html").read_text()
 DOCS = (ROOT / "docs/NOTIFICATIONS.md").read_text()
 SERVICE = (ROOT / "systemd/gravedecay-digest.service.tmpl").read_text()
 TIMER = (ROOT / "systemd/gravedecay-digest.timer.tmpl").read_text()
@@ -70,7 +71,7 @@ class DigestContractTests(unittest.TestCase):
         # The ⚙️ notification preferences enumerate NOTIFY_CLASSES; a class
         # without a checkbox could never be muted without editing grave.conf.
         self.assertIn('"digest"', DASH)
-        self.assertIn("'digest':'morning digest'", DASH)
+        self.assertIn("'digest':'morning digest'", SHELL)
 
     def test_docs_table_documents_the_class(self):
         self.assertIn("| `digest` |", DOCS)

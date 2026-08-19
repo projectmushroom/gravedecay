@@ -211,19 +211,20 @@ class MacosContractTests(unittest.TestCase):
 
     def test_dashboard_macos_render_contract(self):
         source = (ROOT / "dashboard/gravedecay.py").read_text()
-        self.assertIn("tile('Memory pressure'", source)
-        self.assertIn("tile('Thermal'", source)
-        self.assertIn("tile('Swap'", source)
-        self.assertIn("if(macosCompanion){", source)
-        self.assertIn("function chargeMeter(p)", source)
-        self.assertIn("chargeMeter(battery.pct)", source)
-        self.assertNotIn("meter(battery.pct)", source)
+        shell = (ROOT / "dashboard/static/index.html").read_text()
+        self.assertIn("tile('Memory pressure'", shell)
+        self.assertIn("tile('Thermal'", shell)
+        self.assertIn("tile('Swap'", shell)
+        self.assertIn("if(macosCompanion){", shell)
+        self.assertIn("function chargeMeter(p)", shell)
+        self.assertIn("chargeMeter(battery.pct)", shell)
+        self.assertNotIn("meter(battery.pct)", shell)
         # Linux's established temperature/fan cards remain in its separate branch.
-        self.assertIn("tile('CPU temp'", source)
+        self.assertIn("tile('CPU temp'", shell)
         self.assertIn("return cached(\"macos-system\", 5", source)
-        self.assertIn("body:not(.macos) .mac-only-setting", source)
-        self.assertIn("Keep the Linux PR-only presentation", source)
-        self.assertIn('body.macos [data-panel="inbox"]', source)
+        self.assertIn("body:not(.macos) .mac-only-setting", shell)
+        self.assertIn("Keep the Linux PR-only presentation", shell)
+        self.assertIn('body.macos [data-panel="inbox"]', shell)
 
     def test_installer_rejects_non_darwin(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -250,6 +251,8 @@ class MacosContractTests(unittest.TestCase):
         self.assertIn(".gravedecay-macos", install)
         self.assertIn("plutil -lint", install)
         self.assertIn("assets/gravedecay.png", install)
+        self.assertIn("dashboard/static/", install)
+        self.assertIn("scripts/dashboard-static", install)
         self.assertIn("config/components", install)
         plist_template = (ROOT / "macos/LaunchAgents/io.gravedecay.dashboard.plist.tmpl").read_text()
         self.assertIn("@APPS@", plist_template)
