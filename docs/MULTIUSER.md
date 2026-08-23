@@ -38,8 +38,10 @@ workspace's mode-700 private configuration tree.
 1. Tailscale Serve terminates HTTPS and supplies its authenticated identity
    headers to the loopback-only gateway.
 2. The gateway accepts those headers only on requests arriving through its
-   configured trusted proxy path. Direct loopback is reserved for health
-   checks and explicit administrator maintenance; it is not an implicit user.
+   configured trusted proxy path. Direct loopback is not an implicit user:
+   a root-owned nftables `inet gravedecay` output rule rejects non-root TCP
+   sockets to the legacy and workspace backend ranges (IPv4 and IPv6). Root's
+   gateway socket is the backend capability for T3 and ttyd.
 3. The gateway resolves stable user ID first. A login is used only to migrate
    a legacy record after the local Tailscale API confirms the stable ID.
 4. The registry selects a fixed upstream for the workspace. Client URLs,
@@ -50,10 +52,13 @@ workspace's mode-700 private configuration tree.
    changing the workspace. A shared device resolves to the Tailscale user who
    authenticated the request, not an email or device name.
 
-Local `/healthz` checks require no identity and disclose no user state. All
-other local access must use the administrator maintenance mechanism described
-by the gateway; blindly trusting headerless loopback would let any workspace
-process impersonate the administrator.
+Every dashboard backend additionally requires a random, root-owned capability
+header injected by the gateway with a constant-time comparison; only
+`/healthz` is exempt. The gateway strips any client-supplied copy. The gateway
+and backend units require the boundary unit, so a boot where nftables cannot
+install the rule fails closed instead of exposing workspace ports. The boundary
+executes through the root-only `grave` CLI rather than a mutable `/usr` helper,
+so immutable hosts remain supported when `nft` is present.
 
 ## Roles and endpoint classes
 
@@ -77,6 +82,8 @@ terminal and global file manager are removed from developer routes.
 - Tailscale ACLs/grants decide who can reach the appliance.
 - Tailscale Serve authenticates the remote principal.
 - The gateway maps that principal to role and a fixed workspace.
+- The root-owned nftables boundary prevents one workspace Unix user from
+  directly dialing another workspace's T3, terminal, or dashboard port.
 - Unix ownership prevents ordinary cross-workspace file, process-state, home,
   credential, tmux-socket, and log access.
 - Project grants limit what the dashboard and T3 expose; repository-provider
@@ -112,9 +119,11 @@ ports, unsafe ownership, and an unconfirmed owner ID stop migration.
 Migration is explicit: `grave multiuser enable <stable-id> <owner-login>
 owner --profile <profile>`. It takes a normal backup plus a migration snapshot,
 creates the admin workspace without starting it, copies owner state and adopts
-existing Git remotes, then sets `MULTI_USER=1` and re-runs the ritual. Serve
-changes only during successful re-raise. Failure restores single-user config
-and retains the copied workspace for inspection.
+existing Git remotes, then sets `MULTI_USER=1` and re-runs the ritual. The
+ritual installs and verifies the nftables boundary before starting backends,
+then disables the legacy global `t3code` and `gravedecay-term` units on every
+multi-user re-raise. Serve changes only during successful re-raise. Failure
+restores single-user config and retains the copied workspace for inspection.
 
 Administrators use `grave users`, `grave projects`, `grave integrations`, and
 `grave provider` for lifecycle, grants, onboarding and entitlement. Run

@@ -2,6 +2,8 @@
 Description=gravedecay identity-aware Tailscale gateway
 After=tailscaled.service network-online.target
 Wants=network-online.target
+Requires=gravedecay-boundary.service
+After=gravedecay-boundary.service
 # Page the human if this unit lands in failed state (silent no-op unless
 # notifications are configured -- see docs/NOTIFICATIONS.md).
 OnFailure=gravedecay-notify@%n.service

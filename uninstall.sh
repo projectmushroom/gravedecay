@@ -84,7 +84,7 @@ UNITS=(
   gravedecay-gamewatch.service gravedecay-keepalive.service
   gravedecay-selfheal.service gravedecay-net.service
   gravedecay-term.service t3code.service
-  gravedecay-gateway.service gravedecay.service
+  gravedecay-gateway.service gravedecay-boundary.service gravedecay.service
   gravedecay-notify@.service
   gravedecay-t3@.service gravedecay-term@.service gravedecay-dashboard@.service
 )
@@ -106,8 +106,11 @@ files=()
 for u in "${UNITS[@]}"; do [[ -e "/etc/systemd/system/$u" ]] && files+=("/etc/systemd/system/$u"); done
 [[ -e /etc/systemd/system/tailscaled.service.d/gravedecay-localapi.conf ]] \
   && files+=(/etc/systemd/system/tailscaled.service.d/gravedecay-localapi.conf)
+[[ -e /etc/systemd/system/gravedecay.service.d/multiuser-boundary.conf ]] \
+  && files+=(/etc/systemd/system/gravedecay.service.d/multiuser-boundary.conf)
 if ((${#files[@]})); then run sudo rm -f "${files[@]}"; did "removed ${#files[@]} unit file(s)"; fi
 (( DRY )) || sudo rmdir /etc/systemd/system/tailscaled.service.d 2>/dev/null || true
+(( DRY )) || sudo rmdir /etc/systemd/system/gravedecay.service.d 2>/dev/null || true
 run sudo systemctl daemon-reload
 (( DRY )) || sudo systemctl reset-failed 2>/dev/null || true
 
@@ -118,6 +121,10 @@ if command -v tailscale >/dev/null 2>&1 && tailscale status --peers=false >/dev/
   did "gravedecay serve mounts cleared (node still logged in)"
 else
   skip "tailscale not available/logged in — serve config untouched"
+fi
+if command -v nft >/dev/null 2>&1; then
+  run sudo nft delete table inet gravedecay
+  did "multi-user loopback boundary removed"
 fi
 # After the serve teardown, never before it: the restart drops the LocalAPI
 # drop-in removed above and leaves the daemon warming up, and `tailscale

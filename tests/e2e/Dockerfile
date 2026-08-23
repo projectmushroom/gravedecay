@@ -6,7 +6,7 @@
 FROM archlinux:base
 RUN pacman -Syu --noconfirm archlinux-keyring && \
     pacman -Syu --noconfirm systemd sudo git tmux curl jq python python-pillow \
-      python-cryptography nodejs npm ttyd lm_sensors ufw docker docker-compose \
+      python-cryptography nodejs npm ttyd lm_sensors ufw nftables docker docker-compose \
       openssh && \
     pacman -Scc --noconfirm
 RUN systemd-machine-id-setup && systemctl set-default multi-user.target

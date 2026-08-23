@@ -80,6 +80,52 @@ class DashboardContractTests(unittest.TestCase):
         self.assertTrue(manifest["id"].endswith("/grave/"))
         self.assertEqual(manifest["start_url"], "./")
 
+    def test_multi_user_backend_requires_gateway_capability_except_health(self):
+        secured = load_dashboard({"GRAVEDECAY_BACKEND_TOKEN": "a" * 64})
+        server = secured.ThreadingHTTPServer(("127.0.0.1", 0), secured.Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        origin = f"http://127.0.0.1:{server.server_port}"
+        try:
+            with urllib.request.urlopen(origin + "/healthz", timeout=2) as response:
+                self.assertEqual(response.status, 200)
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(origin + "/manifest.webmanifest", timeout=2)
+            self.assertEqual(error.exception.code, 401)
+            request = urllib.request.Request(origin + "/manifest.webmanifest",
+                                             headers={"X-Grave-Backend-Token": "a" * 64})
+            with urllib.request.urlopen(request, timeout=2) as response:
+                self.assertEqual(response.status, 200)
+        finally:
+            server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+    def test_required_backend_mode_denies_missing_or_short_capability(self):
+        for token in (None, "short"):
+            env = {"GRAVEDECAY_REQUIRE_BACKEND_TOKEN": "1"}
+            if token is not None:
+                env["GRAVEDECAY_BACKEND_TOKEN"] = token
+            secured = load_dashboard(env)
+            server = secured.ThreadingHTTPServer(("127.0.0.1", 0), secured.Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+            try:
+                origin = f"http://127.0.0.1:{server.server_port}"
+                with urllib.request.urlopen(origin + "/healthz", timeout=2) as response:
+                    self.assertEqual(response.status, 200)
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    urllib.request.urlopen(origin + "/manifest.webmanifest", timeout=2)
+                self.assertEqual(error.exception.code, 401)
+            finally:
+                server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+    def test_single_user_without_required_mode_remains_compatible(self):
+        dashboard = load_dashboard({})
+        server = dashboard.ThreadingHTTPServer(("127.0.0.1", 0), dashboard.Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/manifest.webmanifest", timeout=2) as response:
+                self.assertEqual(response.status, 200)
+        finally:
+            server.shutdown(); server.server_close(); thread.join(timeout=2)
+
     def test_service_worker_can_control_the_root_but_not_cache_api_data(self):
         with self.get("/sw.js") as response:
             worker = response.read().decode()
@@ -223,8 +269,10 @@ class DashboardContractTests(unittest.TestCase):
         ritual = (ROOT / "raise.sh").read_text()
         # Regression #42: stale single-user /grave and /term mounts bypass the
         # identity gateway; the multi-user branch must remove them.
-        self.assertIn("--set-path=/grave off", ritual)
-        self.assertIn("--set-path=/term off", ritual)
+        self.assertIn("__multiuser-serve", ritual)
+        serve = (ROOT / "bin/grave").read_text()
+        self.assertIn("--set-path=/grave off", serve)
+        self.assertIn("--set-path=/term off", serve)
         # Regression #51: the gateway reads workspaces.json, created by
         # `__users reapply`, so it must start AFTER reapply.
         reapply = ritual.find("__users reapply")
@@ -235,6 +283,35 @@ class DashboardContractTests(unittest.TestCase):
         # …and tolerate the registry not existing yet ('-' prefix).
         unit = (ROOT / "systemd/gravedecay-gateway.service.tmpl").read_text()
         self.assertIn("-@GRAVE_ROOT@/config/workspaces.json", unit)
+        self.assertIn("gravedecay-boundary.service", unit)
+        self.assertIn("multi-user loopback boundary active", ritual)
+        self.assertIn("legacy web terminal disabled in multi-user mode", ritual)
+        self.assertIn("legacy T3 Code disabled in multi-user mode", ritual)
+        self.assertIn("multi-user loopback boundary reapplied after firewall", ritual)
+        self.assertIn("__multiuser-cleanup", ritual)
+        self.assertNotIn("requires mutable /usr", ritual)
+        boundary = (ROOT / "systemd/gravedecay-boundary.service.tmpl").read_text()
+        self.assertIn("ExecStart=@GRAVE_BIN@ __boundary-apply", boundary)
+
+    def test_multi_user_migration_runs_raise_as_the_owner_not_the_root_helper(self):
+        grave = (ROOT / "bin/grave").read_text()
+        self.assertIn('env -u SUDO_USER -u SUDO_UID -u SUDO_GID USER="$owner"', grave)
+
+    def test_multi_user_migration_only_grants_provider_when_a_key_exists(self):
+        grave = (ROOT / "bin/grave").read_text()
+        self.assertIn('[[ -n "$provider_lines" ]] || provider_arg=(--no-llm)', grave)
+        self.assertIn('"${provider_arg[@]}"', grave)
+
+    def test_multi_user_migration_prepares_dropin_before_headless_owner_raise(self):
+        grave = (ROOT / "bin/grave").read_text()
+        prepare = grave.index('install -d -m 755 -o root -g root /etc/systemd/system/gravedecay.service.d')
+        owner_raise = grave.index('sudo -u "$owner" -H env -u SUDO_USER')
+        self.assertLess(prepare, owner_raise)
+
+    def test_multi_user_raise_uses_the_root_dashboard_maintenance_probe(self):
+        ritual = (ROOT / "raise.sh").read_text()
+        self.assertIn('sudo -n "$GRAVE_BIN" __dashboard-health', ritual)
+        self.assertIn('refusing multi-user raise', ritual)
 
     def test_workspace_dashboard_targets_its_own_socket_and_pairing_dir(self):
         # Regression #43/#44: a workspace dashboard hardcoded the owner's tmux
@@ -294,7 +371,7 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("Environment=GRAVEDECAY_T3=@T3@",
                       (ROOT / "systemd/gravedecay.service.tmpl").read_text())
         self.assertIn('"s|@T3@|$T3_BIN|g"', (ROOT / "raise.sh").read_text())
-        self.assertIn('"GRAVEDECAY_T3":os.environ.get("GRAVE_T3_BIN","/usr/bin/t3")',
+        self.assertIn('t3_bin=os.environ.get("GRAVE_T3_BIN") or shutil.which("t3") or "/usr/bin/t3"',
                       (ROOT / "bin/grave-workspaces").read_text())
 
     def test_workspace_dashboard_unit_wires_socket_dir_and_shares_tmp(self):

@@ -1,0 +1,7 @@
+[Unit]
+Requires=gravedecay-boundary.service
+After=gravedecay-boundary.service
+
+[Service]
+EnvironmentFile=@GRAVE_ROOT@/config/secrets/admin-dashboard.env
+Environment=GRAVEDECAY_REQUIRE_BACKEND_TOKEN=1

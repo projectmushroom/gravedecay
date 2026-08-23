@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Appliance-owned multi-user workspace registry and lifecycle helper."""
-import argparse, fcntl, json, os, pwd, re, shutil, subprocess, sys, tempfile, time
+import argparse, fcntl, ipaddress, json, os, pwd, re, secrets, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
 
 ROOT = Path(os.environ.get("GRAVE_ROOT", "/srv/dev"))
@@ -16,6 +16,17 @@ PROVIDER_NAMES={"OPENAI_API_KEY","ANTHROPIC_API_KEY"}
 
 def die(message): raise SystemExit(f"grave users: {message}")
 def unix_name(slug): return f"grave-{slug}"
+def loopback_listeners(text):
+    """True when every parsed `ss -H -ltn` local endpoint is loopback."""
+    for line in text.splitlines():
+        fields=line.split()
+        if len(fields) < 4: return False
+        host=fields[3].rsplit(":",1)[0].strip("[]").split("%",1)[0]
+        try: ip=ipaddress.ip_address(host)
+        except ValueError: return False
+        mapped=getattr(ip,"ipv4_mapped",None)
+        if not (ip.is_loopback or (mapped and mapped.is_loopback)): return False
+    return True
 def run(*args):
     if os.environ.get("GRAVE_WORKSPACE_TEST") == "1": return
     subprocess.run(args, check=True)
@@ -139,10 +150,19 @@ def provision(w):
     provision_agent_hooks(home, account)
     SERVICE_ROOT.mkdir(parents=True,exist_ok=True); SERVICE_ROOT.chmod(0o700)
     env=service_env(w)
+    old=env.read_text() if env.exists() else ""
+    token=next((line.partition("=")[2].strip().strip('"') for line in old.splitlines()
+                if line.startswith("GRAVEDECAY_BACKEND_TOKEN=") and len(line.partition("=")[2].strip().strip('"')) >= 32),secrets.token_hex(32))
+    # Later `grave users add` calls do not carry raise.sh's explicit tool
+    # arguments; resolve the appliance's installed binaries instead of
+    # reviving a stale /usr/bin assumption.
+    t3_bin=os.environ.get("GRAVE_T3_BIN") or shutil.which("t3") or "/usr/bin/t3"
+    ttyd_bin=os.environ.get("GRAVE_TTYD_BIN") or shutil.which("ttyd") or "/usr/bin/ttyd"
+    grave_bin=os.environ.get("GRAVE_BIN") or shutil.which("grave") or "/usr/local/bin/grave"
     values={"WORKSPACE_SLUG":w["slug"],"GRAVE_WORKSPACE_ID":w["id"],"WORKSPACE_ROLE":w["role"],"WORKSPACE_HOME":str(home),
             "T3_PORT":w["ports"]["t3"],"TERM_PORT":w["ports"]["term"],"DASH_PORT":w["ports"]["dash"],
-            "T3_BIN":os.environ.get("GRAVE_T3_BIN","/usr/bin/t3"),"GRAVEDECAY_T3":os.environ.get("GRAVE_T3_BIN","/usr/bin/t3"),"TTYD_BIN":os.environ.get("GRAVE_TTYD_BIN","/usr/bin/ttyd"),"GRAVEDECAY_GRAVE":os.environ.get("GRAVE_BIN","/usr/local/bin/grave"),
-            "PATH":os.environ.get("GRAVE_TOOL_PATH","")+"/usr/local/bin:/usr/bin:/bin"}
+            "T3_BIN":t3_bin,"GRAVEDECAY_T3":t3_bin,"TTYD_BIN":ttyd_bin,"GRAVEDECAY_GRAVE":grave_bin,
+            "PATH":os.environ.get("GRAVE_TOOL_PATH","")+"/usr/local/bin:/usr/bin:/bin","GRAVEDECAY_BACKEND_TOKEN":token}
     env.write_text("".join(f'{key}="{str(value).replace(chr(34), "")}"\n' for key,value in values.items()))
     env.chmod(0o600)
     sync_provider(w)
@@ -214,6 +234,8 @@ def cmd_doctor(a):
                 die(f"ownership or mode drift: {w['slug']}")
             env_file=service_env(w)
             if env_file.stat().st_uid != 0 or env_file.stat().st_mode & 0o077: die(f"unsafe service environment: {w['slug']}")
+            token=next((line.partition("=")[2].strip().strip('"') for line in env_file.read_text().splitlines() if line.startswith("GRAVEDECAY_BACKEND_TOKEN=")),"")
+            if len(token) < 32: die(f"missing backend capability: {w['slug']}")
             for project in w["projects"]:
                 checkout=home/"repos"/project["name"]
                 if checkout.is_symlink() or not checkout.is_dir() or checkout.stat().st_uid != account.pw_uid: die(f"project ownership drift: {w['slug']}/{project['name']}")
@@ -235,8 +257,8 @@ def cmd_doctor(a):
                     if user != unix_name(w["slug"]): die(f"service identity drift: {instance}")
             for kind,port in w["ports"].items():
                 listeners=subprocess.run(["ss","-H","-ltn",f"sport = :{port}"],capture_output=True,text=True).stdout
-                if listeners and any(addr not in ("127.0.0.1","[::ffff:127.0.0.1]") for addr in re.findall(r"\s(\S+):\d+\s",listeners)):
-                    die(f"non-loopback workspace listener: {w['slug']}/{kind}")
+                if listeners and not loopback_listeners(listeners):
+                    die(f"non-loopback workspace listener: {w['slug']}/{kind} ({listeners.strip()})")
     print(f"ok: {len(data['workspaces'])} workspace(s)")
 def cmd_remove(a):
     if a.confirm != a.workspace: die("destructive removal requires --confirm WORKSPACE")

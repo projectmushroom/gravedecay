@@ -63,6 +63,11 @@ exit 0
 EOF
 chmod 755 /usr/bin/ufw
 
+# Docker Desktop and some CI kernels cannot nest overlayfs. Keep the appliance
+# smoke real while using vfs only for this disposable inner daemon.
+mkdir -p /etc/docker
+printf '{"storage-driver":"vfs"}\n' >/etc/docker/daemon.json
+
 # Real docker-in-container: the core stack (postgres+redis) must actually
 # come up. The playwright browsers image is ~2 GiB, so pre-seed that stack
 # with a tiny stand-in — raise deliberately never overwrites an existing one.

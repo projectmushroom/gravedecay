@@ -36,6 +36,8 @@ class MultiUserEndToEnd(unittest.TestCase):
     def test_migration_backup_and_recovery_contracts_are_wired(self):
         grave=(ROOT/"bin/grave").read_text(); recovery=(ROOT/"docs/RECOVERY.md").read_text()
         self.assertIn("cmd_multiuser",grave); self.assertIn("--reflink=auto",grave)
+        self.assertIn('[[ -d "$repo" && ! -L "$repo" ]] || continue', grave)
+        self.assertIn('[[ -d "$repo/.git" && ! -L "$repo" ]] || continue', grave)
         self.assertIn("migration failed; single-user config restored",grave)
         self.assertIn("workspaces.tar.gz",grave); self.assertIn("--include-secrets",grave)
         self.assertIn("Tailscale LocalAPI hidden from workspaces",grave)

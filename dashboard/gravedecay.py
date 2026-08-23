@@ -22,6 +22,7 @@ import binascii
 import concurrent.futures
 import functools
 import glob
+import hmac
 import hashlib
 import io
 import json
@@ -76,6 +77,11 @@ MAX_UPLOAD = 2 * 1024 * 1024 * 1024   # 2 GiB per uploaded file
 # (actions) are restricted to these identities. Requests with no header can
 # only come from localhost (127.0.0.1 bind) and are trusted.
 ALLOWED_USERS = set(filter(None, os.environ.get("GRAVEDECAY_ALLOWED_USERS", "").split(",")))
+# Set only on multi-user backends by root-owned EnvironmentFile= entries.  A
+# loopback TCP client cannot forge this header; /healthz remains the sole
+# unauthenticated maintenance endpoint.
+BACKEND_TOKEN = os.environ.get("GRAVEDECAY_BACKEND_TOKEN", "")
+REQUIRE_BACKEND_TOKEN = os.environ.get("GRAVEDECAY_REQUIRE_BACKEND_TOKEN") == "1"
 UNITS = [u for u in os.environ.get(
     "GRAVEDECAY_UNITS", "t3code,gravedecay,gravedecay-term,tailscaled,sshd,docker").split(",") if u]
 APPS = [{"name": name.strip(), "url": url.strip()}
@@ -2037,6 +2043,19 @@ class Handler(BaseHTTPRequestHandler):
             return True
         return False
 
+    def _backend_forbidden(self, path):
+        if path == "/healthz":
+            return False
+        if REQUIRE_BACKEND_TOKEN and len(BACKEND_TOKEN) < 32:
+            self._send(401, '{"error":"gateway capability required"}')
+            return True
+        if not BACKEND_TOKEN:
+            return False
+        if hmac.compare_digest(self.headers.get("X-Grave-Backend-Token", ""), BACKEND_TOKEN):
+            return False
+        self._send(401, '{"error":"gateway capability required"}')
+        return True
+
     def _cross_site(self):
         """True (and a 403 already sent) if this state-changing request looks
         cross-site. Auth here is ambient — tailscale serve stamps the requesting
@@ -2254,6 +2273,8 @@ class Handler(BaseHTTPRequestHandler):
         p = self._route()
         if p is None:
             return
+        if self._backend_forbidden(p):
+            return
         if MACOS and p not in ("/", "/healthz", "/api/state", "/api/v1/summary", "/manifest.webmanifest", "/sw.js", "/offline.html", "/apple-touch-icon.png", "/icon-180.png", "/icon-192.png", "/icon-512.png"):
             self._send(404, '{"error":"unavailable in macOS companion"}')
             return
@@ -2357,6 +2378,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         p = self._route()
         if p is None:
+            return
+        if self._backend_forbidden(p):
             return
         if MACOS and p != "/api/settings":
             self._send(404, '{"error":"unavailable in macOS companion"}')

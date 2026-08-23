@@ -274,7 +274,7 @@ elif command -v pacman >/dev/null; then
   # Probe first (pacman -T is an unprivileged query): a steady-state re-raise
   # — the headless upgrade path (#89) — must not run sudo pacman, which is
   # outside the scoped NOPASSWD grant and dies at a password prompt there.
-  PACMAN_PKGS=(git tmux curl jq python docker docker-compose nodejs npm ufw
+  PACMAN_PKGS=(git tmux curl jq python docker docker-compose nodejs npm ufw nftables
     lm_sensors python-pillow python-cryptography ttyd)
   if pacman -T "${PACMAN_PKGS[@]}" >/dev/null; then
     skip "packages already installed — no privileged install"
@@ -287,7 +287,7 @@ elif command -v apt-get >/dev/null; then
   # and the install below already tolerates failure the same way
   sudo apt-get update -qq || skip "apt-get update failed (headless re-raise?) — continuing"
   sudo apt-get install -y git tmux curl jq python3 docker.io docker-compose-v2 \
-    nodejs npm ufw lm-sensors python3-pil python3-cryptography ttyd || skip "some packages failed — fix names for your distro and rerun"
+    nodejs npm ufw nftables lm-sensors python3-pil python3-cryptography ttyd || skip "some packages failed — fix names for your distro and rerun"
   ok "packages present"
 elif command -v dnf >/dev/null; then
   # Amazon Linux 2023 (ID=amzn) is dnf-based but not Fedora: no `docker-compose`
@@ -296,7 +296,7 @@ elif command -v dnf >/dev/null; then
   # doesn't have these particular gaps, so scope the extra packages to amzn.
   AMZN_LINUX=0
   grep -qE '^ID="?amzn"?$' /etc/os-release 2>/dev/null && AMZN_LINUX=1
-  DNF_PKGS=(git tmux curl jq python3 docker lm_sensors python3-pillow python3-cryptography)
+  DNF_PKGS=(git tmux curl jq python3 docker nftables lm_sensors python3-pillow python3-cryptography)
   DNF_FLAGS=()
   if [[ "$AMZN_LINUX" == 1 ]]; then
     DNF_PKGS+=(nodejs22 nodejs22-npm gcc-c++ make firewalld)
@@ -468,6 +468,38 @@ if [[ -f /etc/gravedecay/grave.conf ]]; then
   GATEWAY_PORT=$(. /etc/gravedecay/grave.conf >/dev/null 2>&1; printf '%s' "${GATEWAY_PORT:-4710}")
 fi
 
+# In multi-user mode loopback is a shared network.  Establish this root-owned
+# nftables boundary before starting the owner dashboard, then make every
+# gateway/backend unit require it at boot.  No nft/kernel support is a hard
+# failure: starting private workspace services without this guard is unsafe.
+if [[ "${MULTI_USER:-0}" == 1 ]]; then
+  command -v nft >/dev/null || { echo "multi-user mode requires nftables; install it and rerun" >&2; exit 1; }
+  for token_file in "$GRAVE_ROOT/config/secrets/gateway-token" "$GRAVE_ROOT/config/secrets/admin-dashboard.env"; do
+    if [[ ! -s "$token_file" ]]; then
+      if [[ "$token_file" == *admin-dashboard.env ]]; then
+        (umask 077; printf 'GRAVEDECAY_BACKEND_TOKEN=%s\n' "$(python3 -c 'import secrets; print(secrets.token_hex(32))')" >"$token_file")
+      else
+        (umask 077; python3 -c 'import secrets; print(secrets.token_hex(32))' >"$token_file")
+      fi
+    fi
+    [[ "$(stat -c '%U %a' "$token_file")" == "root 600" ]] || { sudo chown root:root "$token_file"; sudo chmod 600 "$token_file"; }
+  done
+  sed -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" \
+    "$REPO_DIR/systemd/gravedecay-boundary.service.tmpl" | install_unit gravedecay-boundary.service
+  [[ -d /etc/systemd/system/gravedecay.service.d ]] || sudo mkdir -p /etc/systemd/system/gravedecay.service.d
+  sed -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" "$REPO_DIR/systemd/gravedecay-multiuser-boundary.conf.tmpl" \
+    | install_unit gravedecay.service.d/multiuser-boundary.conf
+  sudo systemctl daemon-reload
+  sudo systemctl enable gravedecay-boundary.service >/dev/null
+  sudo systemctl restart gravedecay-boundary.service
+  ok "multi-user loopback boundary active"
+else
+  # A migration rollback re-runs raise.sh with MULTI_USER=0.  Remove every
+  # privileged multi-user residue before starting legacy owner services.
+  sudo -n "$GRAVE_BIN" __multiuser-cleanup
+  ok "single-user boundary residue removed"
+fi
+
 # ------------------------------------------------------------- 4. sudoers ----
 step "Scoped passwordless sudo (see docs/SECURITY.md)"
 # sudo is last-match-wins across /etc/sudoers.d in lexicographic order. SteamOS
@@ -572,14 +604,24 @@ sed -e "s|@USER@|$RUN_USER|g" -e "s|@HOME@|$HOME_DIR|g" \
   || skip "dashboard is read-only until GRAVEDECAY_ALLOWED_USERS is set (auto-fills after tailscale login on re-raise)"
 sudo systemctl daemon-reload
 enable_restart gravedecay
-wait_http "http://127.0.0.1:$DASH_PORT/healthz" "gravedecay answering on :$DASH_PORT"
+if [[ "${MULTI_USER:-0}" == 1 ]]; then
+  # The owner service is intentionally unreachable from this non-root raise
+  # process once the output boundary is active.  Root's maintenance probe is
+  # the explicit gateway/maintenance trust boundary.
+  dashboard_ready=0
+  for _ in $(seq 1 10); do
+    sudo -n "$GRAVE_BIN" __dashboard-health && { dashboard_ready=1; break; }
+    sleep 1
+  done
+  if (( dashboard_ready )); then ok "gravedecay maintenance health on :$DASH_PORT"; else
+    echo "gravedecay maintenance health failed; refusing multi-user raise" >&2; exit 1
+  fi
+else
+  wait_http "http://127.0.0.1:$DASH_PORT/healthz" "gravedecay answering on :$DASH_PORT"
+fi
 
 # Multi-user front door is installed only when explicitly enabled in grave.conf.
 if [[ "${MULTI_USER:-0}" == 1 ]]; then
-  if [[ ! -s "$GRAVE_ROOT/config/secrets/gateway-token" ]]; then
-    (umask 077; python3 -c 'import secrets; print(secrets.token_hex(32))' >"$GRAVE_ROOT/config/secrets/gateway-token")
-  fi
-  chmod 600 "$GRAVE_ROOT/config/secrets/gateway-token"
   sed -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" -e "s|@PYTHON@|$PYTHON_BIN|g" \
       "$REPO_DIR/systemd/gravedecay-gateway.service.tmpl" \
     | install_unit gravedecay-gateway.service
@@ -634,8 +676,15 @@ PY
       "$REPO_DIR/systemd/gravedecay-term.service.tmpl" \
     | grep -v '^Environment=DOCKER_HOST=$' | install_unit gravedecay-term.service
   sudo systemctl daemon-reload
-  enable_restart gravedecay-term
-  wait_http "http://127.0.0.1:$TERM_PORT/" "web terminal answering on :$TERM_PORT"
+  if [[ "${MULTI_USER:-0}" == 1 ]]; then
+    sudo systemctl disable --now gravedecay-term
+    ! systemctl is-enabled --quiet gravedecay-term && ! systemctl is-active --quiet gravedecay-term \
+      || { echo "legacy terminal remains enabled or active; refusing multi-user raise" >&2; exit 1; }
+    skip "legacy web terminal disabled in multi-user mode"
+  else
+    enable_restart gravedecay-term
+    wait_http "http://127.0.0.1:$TERM_PORT/" "web terminal answering on :$TERM_PORT"
+  fi
 else
   skip "ttyd missing — web terminal not installed"
 fi
@@ -656,8 +705,15 @@ sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
     -e "s|@T3@|$T3_BIN|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
     "$REPO_DIR/systemd/t3code.service.tmpl" | install_unit t3code.service
 sudo systemctl daemon-reload
-enable_restart t3code
-wait_http "http://127.0.0.1:$T3_PORT/" "t3code answering on :$T3_PORT"
+if [[ "${MULTI_USER:-0}" == 1 ]]; then
+  sudo systemctl disable --now t3code
+  ! systemctl is-enabled --quiet t3code && ! systemctl is-active --quiet t3code \
+    || { echo "legacy T3 remains enabled or active; refusing multi-user raise" >&2; exit 1; }
+  skip "legacy T3 Code disabled in multi-user mode"
+else
+  enable_restart t3code
+  wait_http "http://127.0.0.1:$T3_PORT/" "t3code answering on :$T3_PORT"
+fi
 
 # ---------------------------------------------- 6b. self-heal (immutable) ----
 # On an image-based rootfs, a boot-time unit checks that /etc survived the last
@@ -812,6 +868,13 @@ else
   skip "no firewall tool found — services still bind 127.0.0.1 + tailnet only"
 fi
 
+# UFW/firewalld reloads can replace nftables rulesets.  Reapply atomically
+# after the host firewall step while every multi-user backend remains guarded.
+if [[ "${MULTI_USER:-0}" == 1 ]]; then
+  sudo systemctl restart gravedecay-boundary.service
+  ok "multi-user loopback boundary reapplied after firewall"
+fi
+
 # ----------------------------------------------------------- 9. tailscale ----
 step "Tailscale"
 # On a managed-toolchain host tailscaled is the Homebrew binary with no unit —
@@ -882,11 +945,12 @@ EOF
     # raise; remove them so the identity gateway (root mount below) is the ONLY
     # origin — otherwise workspace users reach owner-level backends unproxied. Only
     # touches :443 paths, so `grave preview` tunnels on their own ports survive.
-    tailscale serve --https=443 --set-path=/grave off >/dev/null 2>&1 || true
-    tailscale serve --https=443 --set-path=/term off  >/dev/null 2>&1 || true
-    gateway_token=$(<"$GRAVE_ROOT/config/secrets/gateway-token")
-    tailscale serve --bg --https=443 "http://127.0.0.1:${GATEWAY_PORT:-4710}/_grave_proxy/$gateway_token" >/dev/null \
-      && ok "identity gateway → HTTPS origin on tailnet"
+    if sudo -n "$GRAVE_BIN" __multiuser-serve; then
+      ok "identity gateway → HTTPS origin on tailnet"
+    else
+      echo "multi-user Serve configuration failed; refusing an unverified front door" >&2
+      exit 1
+    fi
   else
   # one origin: T3 at the root, gravedecay mounted at /grave — gravedecay is the
   # entry point (install the PWA from /grave/), apps hop stays same-origin

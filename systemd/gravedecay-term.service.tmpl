@@ -15,7 +15,7 @@ Group=@USER@
 # No --base-path: tailscale serve strips the /term mount prefix.
 # -I: custom frontend with working clipboard (OSC 52 + copy/paste bar) —
 #     built by raise.sh from web/term/, see docs/TERMINAL.md.
-ExecStart=@TTYD@ -p @TERM_PORT@ -i lo -W --url-arg \
+ExecStart=@TTYD@ -p @TERM_PORT@ -i 127.0.0.1 -W --url-arg \
   -I @GRAVE_ROOT@/web/term/index.html \
   -t fontSize=14 -t 'theme={"background":"#0d0d0d"}' -t titleFixed=gravedecay \
   @GRAVE_ROOT@/scripts/webterm

@@ -71,6 +71,11 @@ class UnitCoverageTests(unittest.TestCase):
     def test_uninstall_script_is_executable(self):
         self.assertTrue(os.access(UNINSTALL_SH, os.X_OK), "uninstall.sh must be chmod +x")
 
+    def test_both_uninstall_paths_remove_multi_user_boundary_residue(self):
+        for text in (GRAVE_TEXT, UNINSTALL_SH.read_text()):
+            self.assertIn("multiuser-boundary.conf", text)
+            self.assertIn("delete table inet gravedecay", text)
+
 
 class DocsContractTests(unittest.TestCase):
     DOC = (ROOT / "docs/UNINSTALL.md").read_text()

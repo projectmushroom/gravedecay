@@ -4,6 +4,9 @@
 # a live loopback listener on the t3 port, so serve mode is a bare HTTP
 # server — enough for t3code.service, wait_http, and the doctor probes.
 [[ "${1:-}" == "--version" ]] && { echo "t3 v0.0.0-e2e"; exit 0; }
+# Doctor queries Connect even when the owner T3 unit is deliberately disabled
+# in multi-user mode.  Do not fall through to the listener for this CLI query.
+[[ "${1:-}" == connect && "${2:-}" == status ]] && { printf '{"desired":false,"authenticated":false,"linked":false}\n'; exit 0; }
 port=4711 prev=""
 for a in "$@"; do [[ "$prev" == "--port" ]] && port="$a"; prev="$a"; done
 exec python3 -m http.server "$port" --bind 127.0.0.1
