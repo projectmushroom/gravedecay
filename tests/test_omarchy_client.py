@@ -28,6 +28,8 @@ class OmarchyClientContractTests(unittest.TestCase):
         self.assertIn("refusing to overwrite", installer)
         self.assertIn(".backup.", installer)
         self.assertNotIn(".previous", installer)
+        self.assertIn("attempt < 40", installer)
+        self.assertIn("omarchy plugin list --json", installer)
 
     def test_client_uses_argv_discovery_and_versioned_summary(self):
         panel = (CLIENT / "Panel.qml").read_text()
@@ -59,7 +61,7 @@ class OmarchyClientContractTests(unittest.TestCase):
             log = root / "calls"
             for name in ("omarchy", "omarchy-shell"):
                 script = bindir / name
-                script.write_text("#!/bin/sh\necho \"$0 $*\" >> \"$CALLS\"\nexit 0\n")
+                script.write_text("#!/bin/sh\nif [ \"$1 $2\" = \"plugin list\" ]; then echo '[{\"id\":\"projectmushroom.gravedecay\"}]'; else echo \"$0 $*\" >> \"$CALLS\"; fi\nexit 0\n")
                 script.chmod(0o755)
             env = dict(os.environ, PATH=str(bindir) + os.pathsep + os.environ["PATH"],
                        HOME=str(home), CALLS=str(log))

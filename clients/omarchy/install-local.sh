@@ -27,6 +27,7 @@ rollback() {
   elif [[ $installed == true ]]; then
     rm -rf "$dest"
   fi
+  [[ $installed == true ]] && omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
 }
 trap 'rollback; rm -rf "$stage"' ERR
 find "$here" -mindepth 1 -maxdepth 1 ! -name README.md ! -name install-local.sh ! -name tests -exec cp -a {} "$stage" \;
@@ -39,6 +40,15 @@ mv "$stage" "$dest"
 installed=true
 omarchy plugin validate "$dest"
 omarchy-shell shell rescanPlugins
+discovered=0
+for (( attempt = 0; attempt < 40; attempt++ )); do
+  if omarchy plugin list --json | jq -e --arg id "$id" 'any(.[]; .id == $id)' >/dev/null; then
+    discovered=1
+    break
+  fi
+  sleep 0.05
+done
+(( discovered )) || { echo "plugin '$id' is not known after rescan" >&2; exit 1; }
 omarchy plugin enable "$id"
 rm -rf "$backup"
 trap - ERR
