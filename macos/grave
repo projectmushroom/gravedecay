@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""Small, fixed-path macOS release CLI (stdlib and argv only)."""
+import json, os, re, subprocess, sys, time
+ROOT=os.path.realpath(os.environ.get("GRAVE_ROOT",os.path.expanduser("~/Library/Application Support/Gravedecay")))
+ORIGIN="https://github.com/projectmushroom/gravedecay.git"; REPO=os.path.join(ROOT,"repos","gravedecay"); CONFIG=os.path.join(ROOT,"config")
+META=os.path.join(CONFIG,"release.json"); REQUEST=os.path.join(CONFIG,"update-request.json"); STATUS=os.path.join(CONFIG,"update-status.json"); LOCK=os.path.join(CONFIG,"update.lock"); TAG=re.compile(r"v(\d+)\.(\d+)\.(\d+)$")
+def die(s): print(s,file=sys.stderr); raise SystemExit(2)
+def inside(p): return os.path.commonpath((ROOT,os.path.realpath(p)))==ROOT and os.path.realpath(p)!=ROOT
+def read(p,d={}):
+ try:
+  with open(p) as f: x=json.load(f)
+  return x if isinstance(x,dict) else d
+ except (OSError,ValueError): return d
+def write(p,x,exclusive=False):
+ if not inside(p): die("unsafe companion path")
+ os.makedirs(os.path.dirname(p),exist_ok=True)
+ if exclusive:
+  fd=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+  with os.fdopen(fd,"w") as f: json.dump(x,f,separators=(",",":"))
+  return
+ t=p+".tmp"
+ with open(t,"w") as f: json.dump(x,f,separators=(",",":"))
+ os.replace(t,p)
+def git(*a,check=True):
+ r=subprocess.run(["git","-C",REPO,*a],text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+ if check and r.returncode: die(r.stderr.strip() or "git operation failed")
+ return r
+def trusted():
+ home=os.path.realpath(os.path.expanduser("~"))
+ if ROOT==home or os.path.commonpath((home,ROOT))!=home or not os.path.isfile(os.path.join(ROOT,".gravedecay-macos")): die("managed root is not a marked home descendant")
+ if not os.path.isdir(os.path.join(REPO,".git")): die("managed gravedecay checkout is missing")
+ if git("remote","get-url","origin").stdout.strip()!=ORIGIN: die("managed checkout origin is not trusted")
+ if git("status","--porcelain").stdout.strip(): die("managed checkout has local changes; refusing update")
+def releases():
+ trusted(); git("fetch","--tags","--prune","origin")
+ tags=[x.strip() for x in git("tag","-l","v*",check=False).stdout.splitlines() if TAG.fullmatch(x.strip())]; tags.sort(key=lambda x:tuple(map(int,TAG.fullmatch(x).groups())),reverse=True)
+ m=read(META); exact="" if m.get("channel") == "edge" else git("describe","--tags","--exact-match","HEAD",check=False).stdout.strip(); checkout=m.get("checkout") if m.get("channel") == "edge" else (exact or git("rev-parse","--short","HEAD").stdout.strip())
+ return {"current":exact,"checkout":checkout,"channel":m.get("channel","release"),"releases":tags}
+def upgrade(args):
+ m=read(META); channel=m.get("channel","release"); tag=None
+ if not args: channel=releases().get("channel",channel)
+ elif args==["--release"]: channel="release"
+ elif args==["--edge"]: channel="edge"
+ elif len(args)==2 and args[0]=="--tag" and TAG.fullmatch(args[1]): channel="tag"; tag=args[1]
+ else: die("usage: grave upgrade [--release|--edge|--tag vX.Y.Z]")
+ if channel not in ("release","edge","tag"): die("invalid stored release channel")
+ info=releases()
+ if tag and tag not in info["releases"]: die("requested release does not exist in the managed checkout")
+ request={"channel":channel,"tag":tag,"requested_at":int(time.time())}
+ try: write(REQUEST,request,exclusive=True)
+ except FileExistsError: die("an update is already queued or running")
+ write(STATUS,{"state":"queued","channel":channel,"tag":tag})
+ r=subprocess.run(["launchctl","kickstart",f"gui/{os.getuid()}/io.gravedecay.updater"],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+ if r.returncode:
+  if inside(REQUEST): os.unlink(REQUEST)
+  write(STATUS,{"state":"failed","message":"launchd start failed: "+(r.stderr.strip() or r.stdout.strip())[:800]})
+  die("launchd start failed")
+ print("macOS update queued; the dashboard will reconnect")
+def main():
+ if len(sys.argv)<2: die("usage: grave releases [--json] | grave upgrade [--release|--edge|--tag vX.Y.Z] | grave update-status")
+ c,a=sys.argv[1],sys.argv[2:]
+ if c=="releases" and a in ([],["--json"]):
+  x=releases(); print(json.dumps(x) if a else "\n".join(["gravedecay checkout: "+x["checkout"]]+["  "+v for v in x["releases"]]))
+ elif c=="upgrade": upgrade(a)
+ elif c=="update-status" and not a: print(json.dumps(read(STATUS,{"state":"idle"})))
+ else: die("usage: grave releases [--json] | grave upgrade [--release|--edge|--tag vX.Y.Z] | grave update-status")
+if __name__=="__main__": main()

@@ -39,6 +39,11 @@ people—not mutually hostile or public tenants.
 5. **Secrets** live in `$GRAVE_ROOT/config/secrets/*.env`, mode 600,
    git-ignored, delivered via systemd `EnvironmentFile=` — never in unit
    files, shell configs, or agent JSON configs (use `${VAR}` expansion).
+6. **macOS companion updates** run as the logged-in user through a fixed
+   LaunchAgent/helper path. Validated semantic tags/channels, a fixed trusted
+   origin, argv execution, root-confined staging, and rollback prevent an
+   update request from becoming an arbitrary command. It has no privileged
+   operation and does not alter the Tailscale connection or host services.
 
 ## T3 Connect (the one sanctioned exception to tailnet-only)
 

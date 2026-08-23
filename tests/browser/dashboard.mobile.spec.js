@@ -247,6 +247,25 @@ test('an administrator can select an exact stable release', async ({ page }) => 
   expect(await page.evaluate(() => window.requestedReleaseTag)).toBe('v0.5.0');
 });
 
+test('macOS updater uses its configured edge channel and exposes progress', async ({ page }) => {
+  await page.evaluate(async () => {
+    const s=await (await fetch('api/state')).json(); s.platform='macos'; s.mode='developer'; s.apps=[{name:'📡 Network',url:'/net/'}];
+    window.macRequests=[]; window.macUpdateFixtureState='queued'; const real=fetch.bind(window);
+    window.fetch=(u,i={})=>{u=typeof u==='string'?u:u.url;if(u.endsWith('api/admin/releases'))return Promise.resolve(new Response(JSON.stringify({current:'',checkout:'edge abc',channel:'edge',releases:['v0.10.0']})));if(u.endsWith('api/admin/update-status'))return Promise.resolve(new Response(JSON.stringify({state:window.macUpdateFixtureState})));if(u.endsWith('api/admin/upgrade')){window.macRequests.push(JSON.parse(i.body));window.macUpdateFixtureState='running';return Promise.resolve(new Response(JSON.stringify({ok:true})));}return real(u,i)}; render(s);
+  });
+  await page.locator('[data-tab="system"]').click();
+  await expect(page.locator('[data-panel="actions"]')).toBeVisible();
+  await expect(page.locator('[data-act="reboot"]')).toBeHidden();
+  await expect(page.locator('[data-panel="tmux"]')).toBeHidden();
+  await page.locator('#update-macos-channel').click();
+  expect(await page.evaluate(()=>window.macRequests[0])).toEqual({channel:'edge'});
+  await page.locator('#grave-release').selectOption('v0.10.0'); page.once('dialog',d=>d.accept()); await page.locator('#install-grave-release').click();
+  expect(await page.evaluate(()=>window.macRequests[1])).toEqual({tag:'v0.10.0'});
+  await expect(page.locator('#grave-release-state')).toContainText(/queued|running/);
+  await page.evaluate(()=>{window.macUpdateFixtureState='ok';return macUpdateStatus(false)}); await expect(page.locator('#grave-release-state')).toContainText('ok');
+  await page.evaluate(()=>{window.macUpdateFixtureState='failed';return macUpdateStatus(false)}); await expect(page.locator('#grave-release-state')).toContainText('failed');
+});
+
 test('PWA contract spans the appliance origin', async ({ request, baseURL }) => {
   const manifest = await (await request.get(new URL('manifest.webmanifest', baseURL).href)).json();
   expect(manifest.scope).toBe('/');

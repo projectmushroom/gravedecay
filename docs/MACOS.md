@@ -49,7 +49,32 @@ reported as nominal or throttled from `pmset -g therm`; desktop Macs simply
 have no battery card.
 
 Run `macos/status.sh` for a read-only doctor-lite: it checks selected
-LaunchAgents, loopback health, and Serve paths when applicable. `macos/uninstall.sh --root PATH` unloads and removes only its two LaunchAgents and Serve
+LaunchAgents, loopback health, Serve paths, installed checkout/version/channel, and the detached updater. `macos/uninstall.sh --root PATH` unloads and removes its LaunchAgents (including the updater) and Serve
 path mounts. It preserves the Application Support data by default; `--purge`
 explicitly removes it. Neither mode uninstalls Tailscale. DMG packaging and
 notarization are future work.
+
+## Updating the companion
+
+The first manual rerun from an older companion (including v0.17.0) bootstraps
+an installer-controlled checkout at `$GRAVE_ROOT/repos/gravedecay`, installs
+the user updater and records `$GRAVE_ROOT/config/release.json` (exact release
+or development checkout plus channel). Use `grave releases --json`, `grave
+upgrade --release`, `grave upgrade --tag v0.20.0`, or `grave upgrade --edge`.
+The dashboard provides the configured-channel action and exact picker through
+its fixed installed helper, never interactive `PATH`.
+
+`io.gravedecay.updater` stages a clean trusted checkout, preserves component
+and Serve choice, and restarts only dashboard/network agents. Failed fetch,
+install, or health work restores the prior payload. Status is bounded in
+`config/update-status.json`, logs stay under `$GRAVE_ROOT/logs`, and no new
+port is added. Normal uninstall keeps source/data; `--purge` is required to
+remove them. T3, Tailscale connection, Docker, SSH and Linux services remain
+unmanaged.
+
+The installer creates `~/.local/bin/grave` only when that path is absent or
+already points to this companion; add `~/.local/bin` to your shell `PATH` if it
+is not already present. It never edits shell startup files or replaces another
+`grave` command. The updater keeps the installer-recorded Serve owner identity
+instead of querying or logging it again, and removes only its own hook on
+uninstall.

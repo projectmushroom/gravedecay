@@ -2,16 +2,25 @@
 # Read-only doctor-lite for the source-installed macOS companion.
 set -u
 ROOT=${GRAVEDECAY_MAC_ROOT:-"$HOME/Library/Application Support/Gravedecay"}
+PYTHON=$(command -v python3 2>/dev/null || true)
 if [ "${1:-}" = "--root" ]; then [ $# -ge 2 ] || { echo "--root needs a path" >&2; exit 2; }; ROOT=$2; shift 2; fi
 [ $# -eq 0 ] || { echo "usage: $0 [--root PATH]" >&2; exit 2; }
 state="$ROOT/config/components"; rc=0
 if [ ! -f "$ROOT/.gravedecay-macos" ] || [ ! -f "$state" ]; then echo "gravedecay macOS companion: not installed at $ROOT"; exit 0; fi
 dash=$(sed -n 's/^dashboard=//p' "$state"); net=$(sed -n 's/^network=//p' "$state"); serve=$(sed -n 's/^serve=//p' "$state"); uid=$(id -u)
-case "$dash:$net:$serve" in [01]:[01]:[01]) ;; *) echo "invalid component metadata" >&2; exit 2;; esac
+case "$dash:$net:$serve" in 1:1:[01]|1:0:[01]|0:1:[01]) ;; *) echo "invalid component metadata" >&2; exit 2;; esac
 check(){ label=$1 port=$2 enabled=$3; [ "$enabled" = 1 ] || return 0
   if launchctl print "gui/$uid/$label" >/dev/null 2>&1; then echo "$label: loaded"; else echo "$label: not loaded"; rc=1; fi
   if curl -fsS "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then echo ":$port health: ok"; else echo ":$port health: failed"; rc=1; fi; }
 check io.gravedecay.dashboard 4712 "$dash"; check io.gravedecay.network 4714 "$net"
+if [ -n "$PYTHON" ] && [ -f "$ROOT/config/release.json" ]; then
+  "$PYTHON" - "$ROOT/config/release.json" <<'PY' 2>/dev/null || true
+import json, sys
+v=json.load(open(sys.argv[1])); print("version: %s (checkout: %s, channel: %s)" % (v.get("current") or "development", v.get("checkout") or "unknown", v.get("channel") or "unknown"))
+PY
+  "$ROOT/scripts/grave" update-status 2>/dev/null || true
+fi
+if launchctl print "gui/$uid/io.gravedecay.updater" >/dev/null 2>&1; then echo "io.gravedecay.updater: loaded"; else echo "io.gravedecay.updater: not loaded"; rc=1; fi
 ts=$(command -v tailscale 2>/dev/null || true); [ -n "$ts" ] || [ ! -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ] || ts=/Applications/Tailscale.app/Contents/MacOS/Tailscale
 if [ "$serve" = 0 ]; then
   echo "Serve: disabled (localhost-only)"

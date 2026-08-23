@@ -311,12 +311,13 @@ body.gaming #foot{display:none}
 }
 /* macOS has a local-work dashboard but deliberately no Linux/T3 controls. */
 body.macos [data-panel="tmux"],body.macos [data-panel="sessions"],body.macos [data-panel="usage"],body.macos [data-panel="inbox"],
-body.macos [data-panel="actions"],body.macos [data-panel="docker"],
+body.macos [data-panel="docker"],
 body.macos [data-panel="journal"],body.macos #game-banner,body.macos #mode,
 body.macos #boot-mode-head,body.macos #boot-mode-row,body.macos #throttle-head,
 body.macos #throttle-row,body.macos #t3connect-head,body.macos #t3connect-row{display:none!important}
 body.macos .mac-linux-setting,body.macos .linear-create{display:none!important}
 body:not(.macos) .mac-only-setting{display:none!important}
+body.macos [data-panel="actions"] .actions{display:none!important}
 /* Portable workspaces intentionally cannot observe or control their Docker host. */
 body.portable [data-panel="stats"],body.portable [data-panel="actions"],body.portable [data-panel="services"],
 body.portable [data-panel="docker"],body.portable [data-panel="journal"],body.portable #game-banner,
@@ -582,6 +583,7 @@ body.portable #sec-notify{display:none!important}
       <button id="kill-open">🗡️ Kill sessions…</button>
     </div>
     <div class="setrow release-picker">
+      <button class="mini mac-only-setting" id="update-macos-channel">⬆ Update configured channel</button>
       <label for="grave-release">🪦 Release</label>
       <select id="grave-release" aria-label="gravedecay release">
         <option value="">load releases…</option>
@@ -665,7 +667,7 @@ const PANEL_TABS={prs:'work',ci:'work',linear:'work',usage:'work',
   stats:'system',actions:'system',services:'system',docker:'system',journal:'system'};
 let linearConfigured=false,lastMode=null,lastTmux=[];
 let cfg=null,cfgSrv='',envApps=[],layoutKey='';
-let graveReleasesLoaded=false;
+let graveReleasesLoaded=false,macUpdateChannel='release',macUpdateSeen=false;
 let pollFailures=0,lastConnected=0;
 let activeTab=localStorage.getItem('grave-tab')||'work';
 let scrollInput=0;
@@ -691,7 +693,8 @@ function applyLayout(){
 document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
   activeTab=t.dataset.tab;localStorage.setItem('grave-tab',activeTab);
   if(cfg)applyLayout();
-  if(activeTab==='system'&&!macosCompanion&&!portableCompanion)loadGraveReleases();
+  // Linux uses !macosCompanion&&!portableCompanion for its system actions; Mac has only this release picker.
+  if(activeTab==='system'&&!portableCompanion)loadGraveReleases();
 });
 async function loadGraveReleases(force=false){
   if(graveReleasesLoaded&&!force)return;
@@ -709,7 +712,8 @@ async function loadGraveReleases(force=false){
     if(data.current&&(data.releases||[]).includes(data.current))select.value=data.current;
     else if(select.options.length)select.selectedIndex=0;
     button.disabled=!select.value;
-    status.textContent=`installed: ${data.current||data.checkout||'development checkout'}`;
+    macUpdateChannel=(data.channel==='edge'?'edge':'release');
+    status.textContent=`installed: ${data.current||data.checkout||'development checkout'} · channel: ${macUpdateChannel}`;
   }catch(e){
     select.innerHTML='<option value="">release lookup failed</option>';
     status.textContent=e.message;button.disabled=true;
@@ -725,9 +729,11 @@ $('install-grave-release').onclick=async()=>{
     const r=await fetch('api/admin/upgrade',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({tag})}),data=await r.json();
     if(!r.ok)throw new Error(data.output||`HTTP ${r.status}`);
-    status.textContent=`${tag} queued — reconnecting after raise…`;
+    status.textContent=`${tag} queued — reconnecting after raise…`; if(macosCompanion)macUpdateStatus();
   }catch(e){status.textContent=e.message;button.disabled=false;}
 };
+async function macUpdateStatus(retry=true){try{const r=await fetch('api/admin/update-status',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);const x=await r.json();if(x.state) $('grave-release-state').textContent=`update: ${x.state}${x.message?` — ${x.message}`:''}`;if(x.state==='queued'||x.state==='running')setTimeout(()=>macUpdateStatus(true),1500);}catch(_){if(retry)setTimeout(()=>macUpdateStatus(false),3000);}}
+$('update-macos-channel').onclick=async()=>{const status=$('grave-release-state'),button=$('update-macos-channel');button.disabled=true;try{const r=await fetch('api/admin/upgrade',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({channel:macUpdateChannel})}),data=await r.json();if(!r.ok)throw new Error(data.output||`HTTP ${r.status}`);status.textContent='configured update queued — reconnecting…';macUpdateStatus();}catch(e){status.textContent=e.message;}finally{button.disabled=false;}};
 function render(s){
   // Replacing live regions above the viewport can make iOS WebKit discard its
   // document scroll anchor and jump to the top. Preserve the window position
@@ -756,6 +762,8 @@ function render(s){
   portableCompanion=s.platform==='container';
   document.body.classList.toggle('macos',macosCompanion);
   document.body.classList.toggle('portable',portableCompanion);
+  if(macosCompanion&&!macUpdateSeen){macUpdateSeen=true;macUpdateStatus(true);}
+  if(macosCompanion)document.querySelector('[data-panel="actions"] h2').textContent='⬆ Update Gravedecay';
   if(portableCompanion&&activeTab!=='work'){
     activeTab='work';localStorage.setItem('grave-tab',activeTab);
   }
@@ -769,7 +777,7 @@ function render(s){
   if(modeChanged)schedule();
   const k=JSON.stringify([cfg.panel_order,cfg.hidden_panels,activeTab]);
   if(k!==layoutKey){layoutKey=k;applyLayout();}
-  if(activeTab==='system'&&!macosCompanion&&!portableCompanion)loadGraveReleases();
+  if(activeTab==='system'&&!portableCompanion)loadGraveReleases();
   // 📁 Files is a built-in tile: opens the native file-manager modal.
   const tiles=(s.platform==='macos'?[]:[{name:'📁 Files',url:FILES_URL}]).concat(allApps());
   $('apps').innerHTML=tiles.filter(a=>!cfg.hidden_apps.includes(a.name)).map(a=>{
