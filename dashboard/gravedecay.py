@@ -956,6 +956,66 @@ def cached(key, ttl, fn):
     return val
 
 
+def _summary_links():
+    """Public, origin-relative destinations.  Keep this list deliberately
+    boring: it is consumed by native clients and must not expose configured
+    app tiles or user-supplied URLs."""
+    links = {"dashboard": (BASE or "") + "/", "network": "/net/"}
+    if not MACOS:
+        links.update({"t3": "/", "terminal": "/term/"})
+    return links
+
+
+def _summary():
+    """Small local-only status contract for thin clients.
+
+    Do not route this through state(): state intentionally includes expensive
+    collectors and owner-facing detail.  This calls only local, bounded
+    collectors and omits names, logs, paths, and container/session contents.
+    """
+    system = collect_system()
+    mode = "developer"
+    frozen = False
+    tmux = []
+    services = collect_services()
+    containers_problem = 0
+    if not MACOS:
+        mode = "developer" if unit_state("t3code").get("active") == "active" else "gaming"
+        tmux = collect_tmux()
+        try:
+            with open("/sys/fs/cgroup/grave-torpor/cgroup.freeze") as f:
+                frozen = f.read().strip() == "1"
+        except OSError:
+            pass
+        # Gaming deliberately stops developer services and Docker.  Only a
+        # genuine systemd failure is a problem in that mode.
+        if mode != "gaming":
+            docker = collect_docker()
+            containers_problem = sum(1 for row in docker["containers"]
+                                     if row.get("state") not in ("running", "created"))
+    disks = system.get("disks") or []
+    temps = system.get("temps") or {}
+    return {
+        "product": "gravedecay", "api_version": 1,
+        "observed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "node": {"host": HOST, "platform": "macos" if MACOS else "linux",
+                 "mode": mode, "uptime_s": system.get("uptime_s")},
+        "resources": {"cpu_pct": (system.get("cpu") or {}).get("pct"),
+                      "memory_pct": (system.get("mem") or {}).get("pct"),
+                      "disk_pct": disks[0].get("pct") if disks else None,
+                      "cpu_temp_c": temps.get("cpu"), "gpu_temp_c": temps.get("gpu")},
+        "activity": {"sessions_live": 0 if frozen else len(tmux),
+                     "sessions_frozen": len(tmux) if frozen else 0},
+        "health": {"services_failed": sum(1 for row in services if row.get("active") == "failed"),
+                   "containers_problem": containers_problem},
+        "links": _summary_links(),
+    }
+
+
+def summary():
+    return cached("summary", 5, _summary)
+
+
 def collect_github():
     def fetch():
         rc, out, _ = sh(["gh", "api", "user", "--jq", ".login"], timeout=10)
@@ -2129,7 +2189,7 @@ class Handler(BaseHTTPRequestHandler):
         p = self._route()
         if p is None:
             return
-        if MACOS and p not in ("/", "/healthz", "/api/state", "/manifest.webmanifest", "/sw.js", "/offline.html", "/apple-touch-icon.png", "/icon-180.png", "/icon-192.png", "/icon-512.png"):
+        if MACOS and p not in ("/", "/healthz", "/api/state", "/api/v1/summary", "/manifest.webmanifest", "/sw.js", "/offline.html", "/apple-touch-icon.png", "/icon-180.png", "/icon-192.png", "/icon-512.png"):
             self._send(404, '{"error":"unavailable in macOS companion"}')
             return
         if p == "/api/action-stream":
@@ -2147,6 +2207,8 @@ class Handler(BaseHTTPRequestHandler):
             }))
         elif p == "/api/state":
             self._send(200, json.dumps(state(self.headers)))
+        elif p == "/api/v1/summary":
+            self._send(200, json.dumps(summary()))
         elif p == "/api/admin/releases":
             if self._forbidden():
                 return

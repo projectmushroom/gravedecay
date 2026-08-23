@@ -1,0 +1,76 @@
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+import Quickshell
+import Quickshell.Io
+import qs.Commons
+import qs.Ui
+import "Model.js" as Model
+
+Panel {
+  id: root
+  moduleName: "projectmushroom.gravedecay"
+  ipcTarget: moduleName
+  manageIpc: false
+  property var settings: ({})
+  property var nodes: []
+  property int selected: 0
+  property bool refreshing: false
+  property string statusOutput: ""
+  property string curlOutput: ""
+  readonly property int refreshIntervalSec: Math.max(30, Math.min(60, Number(settings.refreshIntervalSec || 45)))
+  readonly property color foreground: bar ? bar.foreground : Color.foreground
+  readonly property color urgent: bar ? bar.urgent : Color.urgent
+  readonly property color dim: Qt.darker(foreground, 1.55)
+  readonly property var current: nodes.length ? nodes[Math.max(0, Math.min(selected, nodes.length - 1))] : null
+
+  function refresh() {
+    if (refreshing) return
+    refreshing = true; discovered = []; statusOutput = ""; status.running = true
+  }
+  function parseStatus() {
+    var parsed; try { parsed = JSON.parse(statusOutput) } catch (_) { nodes = []; refreshing = false; return }
+    pending = Model.candidates(parsed); probeNext()
+  }
+  property var pending: []
+  property var discovered: []
+  function probeNext() {
+    if (!pending.length) { nodes = discovered; selected = Math.min(selected, Math.max(0, nodes.length - 1)); refreshing = false; return }
+    probing = pending.shift(); curlOutput = ""; curl.command = ["curl", "--silent", "--show-error", "--fail", "--connect-timeout", "2", "--max-time", "3", "https://" + probing.dns + "/grave/api/v1/summary"]; curl.running = true
+  }
+  property var probing: null
+  function open(path) { if (current && current.summary && current.summary.links[path]) Qt.openUrlExternally("https://" + current.dns + current.summary.links[path]) }
+  function fmt(value, suffix) { return value === null || value === undefined ? "—" : Number(value).toFixed(1) + suffix }
+
+  onOpenedChanged: if (opened) refresh()
+  Timer { interval: root.refreshIntervalSec * 1000; running: true; repeat: true; onTriggered: root.refresh() }
+  Process { id: status; command: ["tailscale", "status", "--json"]; stdout: SplitParser { onRead: data => root.statusOutput += data }; onExited: root.parseStatus() }
+  Process { id: curl; stdout: SplitParser { onRead: data => root.curlOutput += data }; onExited: { var value = Model.summary(root.curlOutput); if (value) { var node = root.probing; node.summary = value; root.discovered.push(node) }; root.probeNext() } }
+
+  BarIconButton {
+    id: button; anchors.fill: parent; bar: root.bar
+    iconComponent: Component { GraveIcon { color: root.nodes.length ? (root.current && root.current.summary.health.services_failed + root.current.summary.health.containers_problem ? root.urgent : root.foreground) : root.dim } }
+    tooltipText: "Gravedecay: " + root.nodes.length + " reachable appliances"
+    onPressed: function(buttonCode) { if (buttonCode === Qt.RightButton || buttonCode === Qt.MiddleButton) root.refresh(); else root.toggle() }
+  }
+  KeyboardPanel {
+    id: panel; anchorItem: button; owner: root; bar: root.bar; open: root.opened
+    contentWidth: panel.fittedContentWidth(Style.space(330))
+    contentHeight: panel.fittedContentHeight(content.implicitHeight, Style.space(420))
+    PanelKeyCatcher {
+      anchors.fill: parent; onCloseRequested: root.close(); onMoveRequested: function(dx, dy) { if (dy && root.nodes.length) root.selected = (root.selected + dy + root.nodes.length) % root.nodes.length }; onTextKey: function(text) { if (text === "r" || text === "R") root.refresh() }
+      ColumnLayout { id: content; anchors.fill: parent; spacing: Style.space(8)
+        RowLayout { Layout.fillWidth: true; Text { text: "Gravedecay"; color: root.foreground; font.bold: true; font.pixelSize: Style.font.title }; Item { Layout.fillWidth: true }; PanelActionButton { iconText: "󰑐"; onClicked: root.refresh() } }
+        Dropdown { visible: root.nodes.length > 1; width: parent.width; showLabel: false; options: root.nodes.map(function(n) { return { value: n.id, label: n.name } }); onChanged: function(value) { for (var i = 0; i < root.nodes.length; i++) if (root.nodes[i].id === value) root.selected = i } }
+        Text { visible: !root.nodes.length && !root.refreshing; text: "No reachable Gravedecay appliances"; color: root.dim }
+        Text { visible: root.refreshing; text: "Discovering tailnet appliances…"; color: root.dim }
+        ColumnLayout { visible: !!root.current; Layout.fillWidth: true; spacing: Style.space(4)
+          Text { text: root.current ? root.current.summary.node.host + " · " + root.current.summary.node.mode : ""; color: root.foreground; font.bold: true }
+          Text { text: root.current ? "CPU " + root.fmt(root.current.summary.resources.cpu_pct, "%") + "  RAM " + root.fmt(root.current.summary.resources.memory_pct, "%") + "  Disk " + root.fmt(root.current.summary.resources.disk_pct, "%") : ""; color: root.dim }
+          Text { text: root.current ? "Sessions " + root.current.summary.activity.sessions_live + " live / " + root.current.summary.activity.sessions_frozen + " frozen · Problems " + (root.current.summary.health.services_failed + root.current.summary.health.containers_problem) : ""; color: root.current && root.current.summary.health.services_failed + root.current.summary.health.containers_problem ? root.urgent : root.dim }
+          RowLayout { PanelActionButton { iconText: "Dashboard"; onClicked: root.open("dashboard") }; PanelActionButton { iconText: "T3"; visible: root.current && root.current.summary.links.t3; onClicked: root.open("t3") }; PanelActionButton { iconText: "Terminal"; visible: root.current && root.current.summary.links.terminal; onClicked: root.open("terminal") }; PanelActionButton { iconText: "Network"; onClicked: root.open("network") } }
+        }
+      }
+    }
+  }
+}

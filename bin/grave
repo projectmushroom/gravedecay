@@ -1312,6 +1312,8 @@ cmd_doctor() { # grave doctor [--no-page]
   fi
   if systemctl is-active --quiet gravedecay; then
     check "gravedecay answering"         curl -sf -o /dev/null "http://127.0.0.1:$DASH_PORT/healthz"
+    check "dashboard summary API contract" bash -c \
+      "curl -sf 'http://127.0.0.1:$DASH_PORT/api/v1/summary' | jq -e '.product == \"gravedecay\" and .api_version == 1' >/dev/null"
     check "dashboard running installed build" bash -c \
       "test \"\$(sha256sum '$GRAVE_ROOT/scripts/gravedecay.py' | cut -d' ' -f1)\" = \"\$(curl -sf 'http://127.0.0.1:$DASH_PORT/healthz' | jq -r .build)\""
     # The PWA shell left the Python file; a stale index.html is the same
