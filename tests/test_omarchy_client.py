@@ -59,9 +59,9 @@ class OmarchyClientContractTests(unittest.TestCase):
             bindir, home = root / "bin", root / "home"
             bindir.mkdir()
             log = root / "calls"
-            for name in ("omarchy", "omarchy-shell"):
+            for name in ("omarchy", "omarchy-shell", "sleep"):
                 script = bindir / name
-                script.write_text("#!/bin/sh\nif [ \"$1 $2\" = \"plugin list\" ]; then echo '[{\"id\":\"projectmushroom.gravedecay\"}]'; else echo \"$0 $*\" >> \"$CALLS\"; fi\nexit 0\n")
+                script.write_text("#!/bin/sh\nif [ \"$(basename \"$0\")\" = sleep ]; then exit 0; fi\nif [ \"$1 $2\" = \"plugin list\" ]; then [ \"${CATALOG:-1}\" = 1 ] && echo '[{\"id\":\"projectmushroom.gravedecay\"}]' || echo '[]'; else echo \"$0 $*\" >> \"$CALLS\"; fi\nexit 0\n")
                 script.chmod(0o755)
             env = dict(os.environ, PATH=str(bindir) + os.pathsep + os.environ["PATH"],
                        HOME=str(home), CALLS=str(log))
@@ -72,6 +72,11 @@ class OmarchyClientContractTests(unittest.TestCase):
             dest = home / ".config" / "omarchy" / "plugins" / "projectmushroom.gravedecay"
             self.assertTrue((dest / "manifest.json").is_file())
             self.assertFalse(list(dest.parent.glob(".projectmushroom.gravedecay.backup.*")))
+            (dest / "old-payload").write_text("keep")
+            missing = dict(env, CATALOG="0")
+            self.assertNotEqual(subprocess.run(command + ["--update"], env=missing, capture_output=True).returncode, 0)
+            self.assertEqual((dest / "old-payload").read_text(), "keep")
+            self.assertFalse(list(dest.parent.glob(".projectmushroom.gravedecay.*")))
             (dest / "manifest.json").write_text('{"id":"foreign"}')
             self.assertNotEqual(subprocess.run(command + ["--update"], env=env, capture_output=True).returncode, 0)
 

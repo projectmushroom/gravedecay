@@ -48,7 +48,13 @@ for (( attempt = 0; attempt < 40; attempt++ )); do
   fi
   sleep 0.05
 done
-(( discovered )) || { echo "plugin '$id' is not known after rescan" >&2; exit 1; }
+if (( ! discovered )); then
+  echo "plugin '$id' is not known after rescan" >&2
+  rollback
+  rm -rf "$stage"
+  trap - ERR
+  exit 1
+fi
 omarchy plugin enable "$id"
 rm -rf "$backup"
 trap - ERR
