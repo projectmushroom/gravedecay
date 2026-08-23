@@ -103,6 +103,60 @@ class DashboardContractTests(unittest.TestCase):
         self.assertEqual(health["sw"], hashlib.sha256(
             (ROOT / "dashboard/static/offline.html").read_bytes()).hexdigest()[:12])
 
+    def test_summary_is_small_cached_and_mount_aware(self):
+        names = ("collect_system", "collect_services", "collect_tmux", "unit_state", "collect_docker")
+        saved = {name: getattr(DASHBOARD, name) for name in names}
+        DASHBOARD._ttl_cache.pop("summary", None)
+        calls = []
+        DASHBOARD.collect_system = lambda: {"uptime_s": 12, "cpu": {"pct": 1.5},
+                                             "mem": {"pct": 2.5}, "disks": [{"pct": 3.5}],
+                                             "temps": {"cpu": None, "gpu": 4.5}}
+        DASHBOARD.collect_services = lambda: [{"unit": "private-name", "active": "failed"}]
+        DASHBOARD.collect_tmux = lambda: [{"name": "secret"}]
+        DASHBOARD.unit_state = lambda unit: {"active": "active"}
+        DASHBOARD.collect_docker = lambda: (calls.append(1) or {"containers": [{"name": "secret", "state": "created"}, {"name": "secret", "state": "running", "status": "Up 1 minute (unhealthy)"}]})
+        try:
+            with self.get("/grave/api/v1/summary") as response:
+                self.assertEqual(response.headers["Cache-Control"], "no-store")
+                body = json.loads(response.read())
+            again = DASHBOARD.summary()
+        finally:
+            for name, fn in saved.items():
+                setattr(DASHBOARD, name, fn)
+        self.assertEqual(body["product"], "gravedecay")
+        self.assertEqual(body["api_version"], 1)
+        self.assertEqual(body["links"]["dashboard"], "/grave/")
+        self.assertEqual(body["activity"], {"sessions_live": 1, "sessions_frozen": 0})
+        self.assertEqual(body["health"], {"services_failed": 1, "containers_problem": 2})
+        self.assertNotIn("secret", json.dumps(body))
+        self.assertEqual(len(calls), 1)
+        self.assertIs(again, DASHBOARD.summary())
+        self.assertEqual(again["product"], "gravedecay")
+
+    def test_summary_gaming_and_macos_are_not_failures(self):
+        linux = DASHBOARD
+        names = ("collect_system", "collect_services", "collect_tmux", "unit_state", "collect_docker")
+        saved = {name: getattr(linux, name) for name in names}
+        linux._ttl_cache.pop("summary", None)
+        linux.collect_system = lambda: {"uptime_s": 1, "cpu": {}, "mem": {}, "disks": [], "temps": {}}
+        linux.collect_services = lambda: [{"active": "inactive"}]
+        linux.collect_tmux = lambda: []
+        linux.unit_state = lambda unit: {"active": "inactive"}
+        linux.collect_docker = lambda: (_ for _ in ()).throw(AssertionError("gaming must not call docker"))
+        try:
+            body = linux.summary()
+        finally:
+            for name, fn in saved.items(): setattr(linux, name, fn)
+        self.assertEqual(body["node"]["mode"], "gaming")
+        self.assertEqual(body["health"], {"services_failed": 0, "containers_problem": 0})
+        mac = load_dashboard({"GRAVEDECAY_PLATFORM": "macos"})
+        mac._ttl_cache.pop("summary", None)
+        mac.collect_system = lambda: {"uptime_s": 1, "cpu": {}, "mem": {}, "disks": [], "temps": {}}
+        mac.collect_services = lambda: [{"active": "inactive"}]
+        body = mac.summary()
+        self.assertEqual(body["links"], {"dashboard": "/grave/", "network": "/net/"})
+        self.assertEqual(body["health"], {"services_failed": 0, "containers_problem": 0})
+
     def test_pwa_shell_is_a_file_raise_installs_beside_the_python(self):
         # The dashboard page is the existing dashboard-static/ install, not a
         # 1600-line string inside the Python. raise.sh already copies static/*

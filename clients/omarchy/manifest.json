@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "projectmushroom.gravedecay",
+  "name": "Gravedecay",
+  "version": "1.0.0",
+  "author": "Project Mushroom",
+  "license": "MIT",
+  "description": "Tailnet Gravedecay appliance summary.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {"barWidget": "Panel.qml"},
+  "barWidget": {
+    "displayName": "Gravedecay",
+    "description": "Discover and show Gravedecay appliances on this tailnet.",
+    "category": "Network",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {"refreshIntervalSec": 45},
+    "schema": [{"key": "refreshIntervalSec", "type": "integer", "label": "Refresh interval (seconds)", "min": 30, "max": 60, "step": 5, "defaultValue": 45}]
+  }
+}

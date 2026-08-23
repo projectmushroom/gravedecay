@@ -492,8 +492,9 @@ is in `docs/SECRETS.md`.
 | [docs/STEAMOS.md](docs/STEAMOS.md) | Raising on stock SteamOS (immutable rootfs): durable toolchain, update-survival |
 | [docs/AWS.md](docs/AWS.md) | Raising on EC2 (Amazon Linux 2023): package gaps, `--profile aws`, security group |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Why native-first, layout, mode model |
+| [docs/API.md](docs/API.md) | Versioned, read-only summary contract for thin clients |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, tailnet-only, T3 Connect trade-offs, sudoers scope, terminal trust |
-| [docs/CLIENTS.md](docs/CLIENTS.md) | Clients: official T3 apps (tailnet or T3 Connect), the native Apple shell |
+| [docs/CLIENTS.md](docs/CLIENTS.md) | Clients: official T3 apps, native Apple shell, and Omarchy widget |
 | [docs/SECRETS.md](docs/SECRETS.md) | Secrets + MCP wiring for agent CLIs |
 | [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md) | Notifications: Web Push to the PWA + ntfy — agents, failing units, and doctor page your phone |
 | [docs/PORTS.md](docs/PORTS.md) | Every port, documented or it doesn't exist |

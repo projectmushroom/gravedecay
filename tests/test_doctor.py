@@ -55,6 +55,11 @@ class DoctorContractTests(unittest.TestCase):
         self.assertIn("dashboard-static/offline.html", GRAVE)
         self.assertIn("jq -r .sw", GRAVE)
 
+    def test_doctor_checks_the_versioned_summary_contract(self):
+        self.assertIn('check "dashboard summary API contract"', GRAVE)
+        self.assertIn('/api/v1/summary', GRAVE)
+        self.assertIn('.product == \\"gravedecay\\" and .api_version == 1', GRAVE)
+
     def test_workspace_doctor_runs_through_the_root_helper(self):
         # Regression #45: run unprivileged the workspace doctor hits root-owned
         # 0700 paths and fails on a healthy box. Route it through sudo like every

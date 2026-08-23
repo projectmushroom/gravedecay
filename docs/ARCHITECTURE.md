@@ -33,6 +33,10 @@ listeners, restrictive umasks, `NoNewPrivileges`, and CPU/task/memory ceilings.
 Stopping or restarting one instance addresses only that workspace; enabled
 instances participate in boot and developer/gaming transitions.
 
+Thin native clients consume the dashboard's loopback-backed, path-routed
+`/grave/api/v1/summary` contract. It is a bounded local status sample, not a
+second control plane: it excludes integrations, repositories, logs, and names.
+
 Project grants are registry records, not shared filesystem permissions. A grant
 clones into that workspace's private `repos/<project>` as its Unix identity;
 two collaborators therefore have independent indexes, branches, remotes, and

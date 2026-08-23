@@ -23,6 +23,13 @@ over the same origins and never require new listening ports on the box.
   distribution details live in `clients/apple/README.md`; CI is
   `.github/workflows/apple.yml` (Linux + macOS matrix).
 
+- **Omarchy 4 / Quattro** — `clients/omarchy/` is a native Quickshell bar
+  widget. It reads local `tailscale status --json`, probes online peers at
+  `/grave/api/v1/summary`, and keeps only reachable summaries in shell memory.
+  It needs Tailscale and `curl`; see its README for installation and local
+  development. It never stores tailnet inventory, credentials, or remote
+  content, and it cannot control an appliance.
+
 House rules that apply to any future client:
 
 - Talk to the box only through its tailnet HTTPS origin — never add or
