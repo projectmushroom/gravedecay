@@ -23,6 +23,8 @@ class OmarchyClientContractTests(unittest.TestCase):
         self.assertIn("omarchy-shell shell rescanPlugins", installer)
         self.assertIn('omarchy plugin enable "$id"', installer)
         self.assertNotIn('omarchy plugin enable "$id" --yes', installer)
+        self.assertIn("jq -r '.id // empty'", installer)
+        self.assertNotIn("python3", installer)
         self.assertIn("refusing to overwrite", installer)
         self.assertIn(".backup.", installer)
         self.assertNotIn(".previous", installer)
@@ -33,6 +35,8 @@ class OmarchyClientContractTests(unittest.TestCase):
         self.assertIn('["curl", "--silent"', panel)
         self.assertIn('/grave/api/v1/summary', panel)
         self.assertIn('"--max-filesize", "65536"', panel)
+        self.assertIn("StdioCollector", panel)
+        self.assertNotIn("SplitParser", panel)
         self.assertNotIn('bash -c', panel)
 
     def test_qml_lifecycle_and_controls_use_panel_contract(self):
@@ -44,7 +48,7 @@ class OmarchyClientContractTests(unittest.TestCase):
         self.assertIn("implicitHeight: button.implicitHeight", panel)
         self.assertIn("focusTarget: keyCatcher", panel)
         self.assertIn("triggeredOnStart: true", panel)
-        self.assertIn("value: root.selectedId", panel)
+        self.assertIn("onSelectedIdChanged() { nodePicker.value = root.selectedId }", panel)
         self.assertIn('Button { text: "Dashboard"', panel)
 
     def test_local_installer_is_repeatable_and_never_leaves_scan_backup(self):

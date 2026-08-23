@@ -13,12 +13,7 @@ command -v omarchy >/dev/null || { echo "Omarchy 4/Quattro is required" >&2; exi
 omarchy plugin validate "$here"
 if [[ -e $dest ]]; then
   [[ $update == true && -f $dest/manifest.json ]] || { echo "refusing to overwrite $dest (pass --update for this plugin)" >&2; exit 1; }
-  existing=$(python3 - "$dest/manifest.json" <<'PY'
-import json, sys
-try: print(json.load(open(sys.argv[1])).get("id", ""))
-except (OSError, ValueError): pass
-PY
-)
+  existing=$(jq -r '.id // empty' "$dest/manifest.json" 2>/dev/null || true)
   [[ $existing == "$id" ]] || { echo "refusing to overwrite a different plugin" >&2; exit 1; }
 fi
 mkdir -p "$plugins"
