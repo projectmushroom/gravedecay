@@ -1,0 +1,13 @@
+[Unit]
+Description=gravedecay multi-user loopback boundary
+After=nftables.service ufw.service firewalld.service
+Wants=nftables.service
+Before=gravedecay-gateway.service gravedecay-t3@.service gravedecay-term@.service gravedecay-dashboard@.service
+
+[Service]
+Type=oneshot
+ExecStart=@GRAVE_BIN@ __boundary-apply
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

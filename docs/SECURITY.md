@@ -25,6 +25,12 @@ people—not mutually hostile or public tenants.
    appliance owner's primary group. Workspace users must not read Serve
    configuration, because its random backend path is the gateway's local
    anti-spoofing capability. `grave doctor` enforces the socket mode.
+   A separate root-owned nftables `inet gravedecay` output chain rejects every
+   non-root socket owner dialing TCP ports 4711–4713 or 4810–5109. This is
+   required in multi-user mode: it protects T3 and ttyd, which cannot validate
+   an HTTP header themselves, and is atomically reapplied by a required
+   systemd boundary unit. Dashboard backends also require a random gateway
+   capability header (except `/healthz`).
 3. **SSH**: key-only (`PasswordAuthentication no` — doctor-enforced),
    plus Tailscale SSH as a fallback door. Note: Tailscale SSH intercepts
    port 22 *over the tailnet*; plain sshd remains reachable via LAN IPs only.
@@ -121,7 +127,10 @@ other human users, tighten it.
 The following shared-terminal behavior applies only to default single-user
 mode. Multi-user mode routes `/term` to a ttyd/tmux instance running as the
 caller's dedicated Unix user; the gateway denies unknown/disabled callers and
-prevents backend selection.
+prevents backend selection. Direct non-root loopback access to both the shared
+legacy terminal port and every workspace terminal port is rejected by the
+multi-user nftables boundary; legacy T3 and terminal services are disabled on
+every multi-user re-raise.
 
 `/term` (ttyd → the shared `tmux -L agents` socket) is an interactive shell as
 your user for **anyone who can reach it** — ttyd does not check the

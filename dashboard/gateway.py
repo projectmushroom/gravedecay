@@ -8,6 +8,7 @@ REGISTRY=Path(os.environ.get("GRAVE_WORKSPACE_REGISTRY",ROOT/"config/workspaces.
 HOST="127.0.0.1"; PORT=int(os.environ.get("GRAVE_GATEWAY_PORT","4710"))
 ADMIN_DASH_PORT=int(os.environ.get("GRAVE_ADMIN_DASH_PORT","4712"))
 TOKEN_FILE=Path(os.environ.get("GRAVE_GATEWAY_TOKEN_FILE",ROOT/"config/secrets/gateway-token"))
+ADMIN_TOKEN_FILE=Path(os.environ.get("GRAVE_ADMIN_TOKEN_FILE",ROOT/"config/secrets/admin-dashboard.env"))
 AUDIT=Path(os.environ.get("GRAVE_AUDIT_LOG",ROOT/"logs/audit.jsonl"))
 MAX_HEADER=65536
 # Only the start of a body is buffered — enough to read the action out of a small
@@ -36,6 +37,27 @@ def registry():
     data=json.loads(REGISTRY.read_text())
     if data.get("version") != 1: raise ValueError("unsupported registry")
     return data["workspaces"]
+
+def backend_token(w):
+    """Read the root-owned service environment instead of the owner-readable
+    registry.  Each backend accepts only its own token, injected below."""
+    env=ROOT/"config/workspace-services"/(w["slug"]+".env")
+    try:
+        for line in env.read_text().splitlines():
+            if line.startswith("GRAVEDECAY_BACKEND_TOKEN="):
+                token=line.partition("=")[2].strip().strip('"')
+                if len(token) >= 32: return token
+    except OSError: pass
+    return ""
+
+def admin_token():
+    try:
+        for line in ADMIN_TOKEN_FILE.read_text().splitlines():
+            if line.startswith("GRAVEDECAY_BACKEND_TOKEN="):
+                token=line.partition("=")[2].strip().strip('"')
+                if len(token) >= 32: return token
+    except OSError: pass
+    return ""
 
 def resolve(headers):
     login=headers.get("tailscale-user-login","")
@@ -143,10 +165,14 @@ class Handler(socketserver.BaseRequestHandler):
         # Appliance mutations execute in the legacy owner dashboard service,
         # whose Unix account alone has the scoped sudoers grant. Developers
         # are denied above; the admin workspace otherwise keeps private state.
-        port=ADMIN_DASH_PORT if kind=="dash" and admin_request(method,path,rest) and w["role"]=="admin" else w["ports"][kind]
-        stripped={"tailscale-user-login","tailscale-user-id","x-grave-workspace","x-grave-role","x-forwarded-host","x-forwarded-user"}
+        owner_admin=kind=="dash" and admin_request(method,path,rest) and w["role"]=="admin"
+        port=ADMIN_DASH_PORT if owner_admin else w["ports"][kind]
+        capability=admin_token() if owner_admin else backend_token(w)
+        if not capability:
+            audit("backend_unavailable",w["id"],w["slug"],"missing_capability"); self.request.sendall(response(502,"workspace service unavailable")); return
+        stripped={"tailscale-user-login","tailscale-user-id","x-grave-workspace","x-grave-role","x-forwarded-host","x-forwarded-user","x-grave-backend-token"}
         forwarded=[line for line in raw_headers if line.partition(":")[0].strip().lower() not in stripped]
-        forwarded += [f"X-Grave-Workspace: {w['slug']}",f"X-Grave-Role: {w['role']}",f"X-Forwarded-User: {w['id']}"]
+        forwarded += [f"X-Grave-Workspace: {w['slug']}",f"X-Grave-Role: {w['role']}",f"X-Forwarded-User: {w['id']}",f"X-Grave-Backend-Token: {capability}"]
         request=(f"{method} {upstream_path} {version}\r\n"+"\r\n".join(forwarded)+"\r\n\r\n").encode("iso-8859-1")+rest
         try:
             with socket.create_connection(("127.0.0.1",port),timeout=5) as backend:

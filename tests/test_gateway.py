@@ -6,6 +6,7 @@ GATEWAY=Path(__file__).parents[1]/"dashboard/gateway.py"
 class Echo(socketserver.BaseRequestHandler):
     def handle(self):
         data=self.request.recv(65536)
+        self.server.last_request=data
         if b"Upgrade: websocket" in data:
             self.request.sendall(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
             payload=self.request.recv(1024); self.request.sendall(payload); return
@@ -31,10 +32,13 @@ class GatewayTests(unittest.TestCase):
         for i,(uid,login,slug,role) in enumerate((("123","a@example.com","alice","admin"),("456","b@example.com","bob","developer"))):
             p=ports[i*3:i*3+3]
             workspaces.append({"id":"ts:"+uid,"login":login,"slug":slug,"role":role,"enabled":True,"projects":[],"provider":{"llm":True},"ports":{"t3":p[0],"term":p[1],"dash":p[2]}})
-        (self.root/"config").mkdir(); (self.root/"logs").mkdir()
+        (self.root/"config").mkdir(); (self.root/"logs").mkdir(); (self.root/"config/workspace-services").mkdir()
         (self.root/"config/workspaces.json").write_text(json.dumps({"version":1,"workspaces":workspaces}))
         status=self.root/"status.json"; status.write_text(json.dumps({"User":{"123":{"LoginName":"a@example.com"},"456":{"LoginName":"b@example.com"}}}))
         token="a"*64; (self.root/"config/secrets").mkdir(); (self.root/"config/secrets/gateway-token").write_text(token)
+        (self.root/"config/secrets/admin-dashboard.env").write_text("GRAVEDECAY_BACKEND_TOKEN="+"c"*64+"\n")
+        for workspace in workspaces:
+            (self.root/"config/workspace-services"/(workspace["slug"]+".env")).write_text("GRAVEDECAY_BACKEND_TOKEN="+("b" if workspace["slug"]=="alice" else "d")*64+"\n")
         probe=socket.socket(); probe.bind(("127.0.0.1",0)); self.port=probe.getsockname()[1]; probe.close(); self.prefix=f"/_grave_proxy/{token}"
         env={**os.environ,"GRAVE_ROOT":str(self.root),"GRAVE_GATEWAY_PORT":str(self.port),"GRAVE_ADMIN_DASH_PORT":str(ports[2]),"GRAVE_TAILSCALE_STATUS":str(status)}
         self.proc=subprocess.Popen([GATEWAY],env=env)
@@ -68,6 +72,11 @@ class GatewayTests(unittest.TestCase):
     def test_spoofed_workspace_headers_cannot_select_upstream(self):
         out=self.request("/", "b@example.com",extra="X-Grave-Workspace: alice\r\nX-Forwarded-User: ts:123\r\n")
         self.assertIn(b"bob-t3",out); self.assertNotIn(b"alice-t3",out)
+
+    def test_gateway_replaces_spoofed_backend_capability(self):
+        self.request("/", "b@example.com",extra="X-Grave-Backend-Token: forged\r\n")
+        self.assertIn(b"X-Grave-Backend-Token: "+b"d"*64,self.servers[3].last_request)
+        self.assertNotIn(b"forged",self.servers[3].last_request)
     def test_missing_unknown_and_mismatched_identity_are_denied(self):
         self.assertIn(b"401",self.request("/"))
         self.assertIn(b"401",self.request("/","nobody@example.com"))
@@ -87,6 +96,7 @@ class GatewayTests(unittest.TestCase):
     def test_admin_action_routes_to_privileged_owner_dashboard(self):
         out=self.request("/grave/api/action-stream?action=reboot","a@example.com")
         self.assertIn(b"alice-dash",out)
+        self.assertIn(b"X-Grave-Backend-Token: "+b"c"*64,self.servers[2].last_request)
     def test_pairing_token_creation_is_audited_on_the_action_stream_get(self):
         # #50: the dashboard mints pairing tokens via GET action-stream (a
         # developer-allowed action), which the old POST-body check never saw.

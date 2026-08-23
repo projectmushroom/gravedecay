@@ -8,8 +8,11 @@ case "${1:-} ${2:-}" in
     exit 0 ;;
   "status --json")
     cat <<'JSON'
-{"Self": {"UserID": 100, "DNSName": "e2ebox.tail-e2e.ts.net."}, "User": {"100": {"LoginName": "mole@example.com"}}}
+{"Self": {"UserID": 100, "DNSName": "e2ebox.tail-e2e.ts.net."}, "User": {"100": {"LoginName": "mole@example.com"}, "200": {"LoginName": "bob@example.com"}}}
 JSON
+    exit 0 ;;
+  "serve status")
+    printf '|-- / proxy http://127.0.0.1:4710/_grave_proxy/test\n'
     exit 0 ;;
 esac
 exit 0

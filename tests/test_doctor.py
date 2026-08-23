@@ -1,4 +1,6 @@
 import pathlib
+import re
+import subprocess
 import unittest
 
 
@@ -64,8 +66,28 @@ class DoctorContractTests(unittest.TestCase):
         # Regression #45: run unprivileged the workspace doctor hits root-owned
         # 0700 paths and fails on a healthy box. Route it through sudo like every
         # other `grave users` operation.
-        self.assertIn('check "workspace registry and ownership" sudo -n "$0" __users doctor', GRAVE)
+        self.assertIn('workspace_doctor_ok; then ok "workspace registry and ownership"', GRAVE)
+        self.assertIn('report=$(sudo -n "$0" __users doctor 2>&1) && return', GRAVE)
         self.assertNotIn('"$(dirname "$0")/grave-workspaces" doctor', GRAVE)
+
+    def test_multi_user_doctor_enforces_the_root_loopback_boundary(self):
+        self.assertIn('check "multi-user loopback boundary active"', GRAVE)
+        self.assertIn('check "multi-user loopback boundary enabled"', GRAVE)
+        self.assertIn('check "identity gateway enabled"', GRAVE)
+        self.assertIn('check "multi-user loopback boundary rules"', GRAVE)
+        self.assertIn('check "legacy T3 disabled"', GRAVE)
+        self.assertIn('check "legacy terminal disabled"', GRAVE)
+        self.assertIn('__boundary-status', GRAVE)
+        self.assertIn('"${MULTI_USER:-0}" == 1 && "$u" == gravedecay-term', GRAVE)
+
+    def test_legacy_disable_checks_execute_shell_negation(self):
+        for name, unit in (("legacy_t3_disabled", "t3code"),
+                           ("legacy_terminal_disabled", "gravedecay-term")):
+            body = re.search(rf"^{name}\(\) \{{.*?^\}}", GRAVE, re.S | re.M).group(0)
+            disabled = subprocess.run(["bash", "-c", f"systemctl() {{ return 1; }}\n{body}\n{name}"], capture_output=True)
+            enabled = subprocess.run(["bash", "-c", f"systemctl() {{ return 0; }}\n{body}\n{name}"], capture_output=True)
+            self.assertEqual(disabled.returncode, 0, unit)
+            self.assertNotEqual(enabled.returncode, 0, unit)
 
 
 if __name__ == "__main__":

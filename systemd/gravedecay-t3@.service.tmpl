@@ -2,6 +2,8 @@
 Description=gravedecay T3 workspace %i
 After=network-online.target tailscaled.service
 Wants=network-online.target
+Requires=gravedecay-boundary.service
+After=gravedecay-boundary.service
 
 [Service]
 Type=simple

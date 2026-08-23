@@ -94,4 +94,73 @@ as_mole grave doctor
 docker exec "$CTR" curl -sf http://127.0.0.1:4712/healthz >/dev/null
 docker exec "$CTR" curl -sf -o /dev/null http://127.0.0.1:4711/
 docker exec "$CTR" curl -sf -o /dev/null http://127.0.0.1:4713/
+
+echo "=== phase 6: multi-user loopback boundary ==="
+as_mole grave multiuser enable 100 mole@example.com mole --profile generic
+docker exec "$CTR" grave __users doctor
+# Prove the owner workspace backends are genuinely live before a second Unix
+# user is expected to be unable to reach them.
+docker exec "$CTR" curl -sf --max-time 5 http://127.0.0.1:4810/ >/dev/null
+docker exec "$CTR" curl -sf --max-time 5 http://127.0.0.1:4910/ >/dev/null
+docker exec "$CTR" curl -sf --max-time 5 http://127.0.0.1:5010/healthz >/dev/null
+docker exec "$CTR" grave users add 200 bob@example.com bob --no-llm
+# A second workspace identity cannot dial any owner workspace backend or legacy
+# service, even with a forged capability. The root gateway still routes it.
+for port in 4810 4910 5010 4711 4712 4713; do
+  if docker exec "$CTR" runuser -u grave-bob -- curl -sf --max-time 2 \
+    -H 'X-Grave-Backend-Token: forged' "http://127.0.0.1:$port/" >/dev/null; then
+    echo "FATAL: grave-bob reached protected backend :$port"
+    exit 1
+  fi
+done
+if docker exec "$CTR" runuser -u mole -- curl -sf --max-time 2 http://127.0.0.1:4712/api/state >/dev/null; then
+  echo "FATAL: appliance owner reached legacy dashboard directly"
+  exit 1
+fi
+token=$(docker exec "$CTR" sh -c 'cat /srv/dev/config/secrets/gateway-token')
+gateway_ready=0
+for _ in $(seq 1 10); do
+  if docker exec "$CTR" curl -sf --max-time 2 -H 'Tailscale-User-Login: bob@example.com' \
+      "http://127.0.0.1:4710/_grave_proxy/$token/grave/healthz" >/dev/null; then
+    gateway_ready=1
+    break
+  fi
+  sleep 1
+done
+if (( ! gateway_ready )); then
+  echo "FATAL: root gateway could not route to grave-bob dashboard"
+  exit 1
+fi
+docker exec "$CTR" systemctl is-active --quiet gravedecay-boundary.service
+docker exec "$CTR" grave __boundary-status
+if docker exec "$CTR" systemctl is-enabled --quiet t3code; then
+  echo "FATAL: multi-user re-raise re-enabled legacy T3"
+  exit 1
+fi
+if docker exec "$CTR" systemctl is-active --quiet t3code; then
+  echo "FATAL: multi-user re-raise left legacy T3 active"
+  exit 1
+fi
+if docker exec "$CTR" systemctl is-enabled --quiet gravedecay-term; then
+  echo "FATAL: multi-user re-raise re-enabled legacy terminal"
+  exit 1
+fi
+if docker exec "$CTR" systemctl is-active --quiet gravedecay-term; then
+  echo "FATAL: multi-user re-raise left legacy terminal active"
+  exit 1
+fi
+as_mole grave doctor
+
+echo "=== phase 7: single-user restoration removes multi-user boundary ==="
+docker exec "$CTR" sed -i 's/^MULTI_USER=.*/MULTI_USER=0/' /etc/gravedecay/grave.conf
+as_mole bash -c './raise.sh --profile generic </dev/null'
+if docker exec "$CTR" systemctl is-active --quiet gravedecay-boundary.service; then
+  echo "FATAL: single-user restoration left boundary active"
+  exit 1
+fi
+if docker exec "$CTR" test -e /etc/systemd/system/gravedecay.service.d/multiuser-boundary.conf; then
+  echo "FATAL: single-user restoration left dashboard boundary drop-in"
+  exit 1
+fi
+docker exec "$CTR" curl -sf --max-time 5 http://127.0.0.1:4712/api/state >/dev/null
 echo "=== appliance smoke: PASS ==="

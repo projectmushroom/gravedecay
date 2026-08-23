@@ -1193,6 +1193,10 @@ cmd_doctor() { # grave doctor [--no-page]
   local u
   for u in "${ALWAYS_ON[@]}"; do
     systemctl cat "$u.service" >/dev/null 2>&1 || continue   # unit not on this host
+    # The owner terminal is deliberately replaced by per-workspace terminals
+    # in multi-user mode; its disabled state is enforced below as a boundary
+    # invariant, rather than being misreported as a boot-readiness failure.
+    [[ "${MULTI_USER:-0}" == 1 && "$u" == gravedecay-term ]] && continue
     check "$u enabled (starts at boot)"  systemctl is-enabled --quiet "$u"
   done
   # DEV_SERVICES enablement IS the boot-mode toggle: `grave bootmode gaming`
@@ -1311,7 +1315,18 @@ cmd_doctor() { # grave doctor [--no-page]
     say "  ${YLW}– a relay tunnel is running outside the appliance T3 instance (desktop app?) — the box is exposed beyond the declared Connect mode${RST}"
   fi
   if systemctl is-active --quiet gravedecay; then
-    check "gravedecay answering"         curl -sf -o /dev/null "http://127.0.0.1:$DASH_PORT/healthz"
+    if [[ "${MULTI_USER:-0}" == 1 ]]; then
+      check "gravedecay maintenance health" sudo -n "$0" __dashboard-health
+      check "dashboard summary API contract" dashboard_summary_ok
+      check "dashboard running installed build" dashboard_build_ok
+      check "dashboard serving installed shell" dashboard_shell_ok
+      check "dashboard self-updater installed" systemctl cat gravedecay-upgrade.service
+      check "selectable release updater installed" systemctl cat 'gravedecay-upgrade@.service'
+      check "dashboard PWA owns app origin" dashboard_manifest_ok
+      check "dashboard offline shell ready" dashboard_sw_ok
+      check "dashboard serving installed offline page" dashboard_offline_ok
+    else
+      check "gravedecay answering"         curl -sf -o /dev/null "http://127.0.0.1:$DASH_PORT/healthz"
     check "dashboard summary API contract" bash -c \
       "curl -sf 'http://127.0.0.1:$DASH_PORT/api/v1/summary' | jq -e '.product == \"gravedecay\" and .api_version == 1' >/dev/null"
     check "dashboard running installed build" bash -c \
@@ -1332,6 +1347,7 @@ cmd_doctor() { # grave doctor [--no-page]
     # the browser only re-installs a worker whose served bytes changed.
     check "dashboard serving installed offline page" bash -c \
       "test \"\$(sha256sum '$GRAVE_ROOT/scripts/dashboard-static/offline.html' | cut -d' ' -f1 | cut -c-12)\" = \"\$(curl -sf 'http://127.0.0.1:$DASH_PORT/healthz' | jq -r .sw)\""
+    fi
   else
     say "  ${YLW}– gravedecay stopped${RST}"
   fi
@@ -1395,7 +1411,11 @@ cmd_doctor() { # grave doctor [--no-page]
     check "push VAPID key is private"   bash -c "[[ \$(stat -c %a '$GRAVE_ROOT/config/secrets/vapid.pem') == 600 ]]"
     # The dashboard does the Web Push crypto — ask it, don't guess: 501 here
     # means python3-cryptography vanished (e.g. after an OS update).
-    check "web push sender ready"       bash -c "curl -sf 'http://127.0.0.1:$DASH_PORT/api/push-key' | jq -e .ok"
+    if [[ "${MULTI_USER:-0}" == 1 ]]; then
+      check "web push sender ready"     dashboard_push_ok
+    else
+      check "web push sender ready"     bash -c "curl -sf 'http://127.0.0.1:$DASH_PORT/api/push-key' | jq -e .ok"
+    fi
   fi
   if [[ -e "$NOTIFY_ENV" ]] || push_ready; then
     check "failure notifier installed"  systemctl cat 'gravedecay-notify@.service'
@@ -1408,13 +1428,21 @@ cmd_doctor() { # grave doctor [--no-page]
     # service-env files and grave-<slug>-owned homes, which the invoking owner
     # can't traverse — run unprivileged it raises PermissionError and fails on a
     # healthy box. Same path as every other `grave users` operation.
-    check "workspace registry and ownership" sudo -n "$0" __users doctor
+    if workspace_doctor_ok; then ok "workspace registry and ownership"; else
+      bad "workspace registry and ownership"; FAILURES=$((FAILURES+1))
+    fi
   fi
   if [[ "${MULTI_USER:-0}" == 1 ]]; then
     check "identity gateway loopback health" curl -sf -o /dev/null "http://127.0.0.1:${GATEWAY_PORT:-4710}/healthz"
     check "gateway capability is private" bash -c "[[ \$(stat -c %a '$GRAVE_ROOT/config/secrets/gateway-token') == 600 ]]"
     check "gateway is the Serve origin" bash -c "tailscale serve status | grep -q '127.0.0.1:${GATEWAY_PORT:-4710}'"
     check "Tailscale LocalAPI hidden from workspaces" bash -c "[[ \$(stat -c %a /run/tailscale/tailscaled.sock) == 660 ]]"
+    check "multi-user loopback boundary active" systemctl is-active --quiet gravedecay-boundary.service
+    check "multi-user loopback boundary enabled" systemctl is-enabled --quiet gravedecay-boundary.service
+    check "identity gateway enabled" systemctl is-enabled --quiet gravedecay-gateway.service
+    check "multi-user loopback boundary rules" sudo -n "$0" __boundary-status
+    check "legacy T3 disabled" legacy_t3_disabled
+    check "legacy terminal disabled" legacy_terminal_disabled
   fi
   echo
   if (( FAILURES > 0 && ! no_page )); then
@@ -1424,6 +1452,81 @@ cmd_doctor() { # grave doctor [--no-page]
     ( cmd_notify --event doctor --priority high --link "/grave/?tab=system" "doctor: $FAILURES check(s) failed" "on $(hostname) — run: grave doctor" ) || true
   fi
   if (( FAILURES == 0 )); then say "${GRN}${BLD}All checks passed.${RST}"; else say "${RED}${BLD}$FAILURES check(s) failed.${RST}"; exit 1; fi
+}
+
+cmd_dashboard_health() {
+  [[ $EUID == 0 ]] || { bad "internal dashboard health helper requires root"; exit 1; }
+  curl -sf -o /dev/null "http://127.0.0.1:$DASH_PORT/healthz"
+}
+
+cmd_dashboard_probe() {
+  [[ $EUID == 0 ]] || { bad "internal dashboard probe requires root"; exit 1; }
+  local path="$1" include=""
+  case "$path" in
+    health) path=/healthz ;;
+    summary) path=/api/v1/summary ;;
+    manifest) path=/manifest.webmanifest ;;
+    sw) path=/sw.js; include=1 ;;
+    push-key) path=/api/push-key ;;
+    *) bad "unknown dashboard probe"; exit 2 ;;
+  esac
+  local token
+  token=$(sed -n 's/^GRAVEDECAY_BACKEND_TOKEN=//p' "$GRAVE_ROOT/config/secrets/admin-dashboard.env" | head -1)
+  [[ "$path" == /healthz || ${#token} -ge 32 ]] || { bad "dashboard capability missing"; exit 1; }
+  {
+    printf 'url = "http://127.0.0.1:%s%s"\nfail\nsilent\nshow-error\n' "$DASH_PORT" "$path"
+    [[ -z "$include" ]] || printf 'include\n'
+    [[ "$path" != /healthz ]] && printf 'header = "X-Grave-Backend-Token: %s"\n' "$token"
+  } | curl --config -
+}
+
+dashboard_probe() { sudo -n "$0" __dashboard-probe "$1"; }
+dashboard_summary_ok() { dashboard_probe summary | jq -e '.product == "gravedecay" and .api_version == 1' >/dev/null; }
+dashboard_build_ok() { [[ "$(sha256sum "$GRAVE_ROOT/scripts/gravedecay.py" | cut -d' ' -f1)" == "$(dashboard_probe health | jq -r .build)" ]]; }
+dashboard_shell_ok() { [[ "$(sha256sum "$GRAVE_ROOT/scripts/dashboard-static/index.html" | cut -d' ' -f1)" == "$(dashboard_probe health | jq -r .shell)" ]]; }
+dashboard_manifest_ok() { dashboard_probe manifest | grep -q '"scope": "/"'; }
+dashboard_sw_ok() { dashboard_probe sw | grep -qi '^Service-Worker-Allowed: /'; }
+dashboard_offline_ok() { [[ "$(sha256sum "$GRAVE_ROOT/scripts/dashboard-static/offline.html" | cut -d' ' -f1 | cut -c-12)" == "$(dashboard_probe health | jq -r .sw)" ]]; }
+dashboard_push_ok() { dashboard_probe push-key | jq -e .ok >/dev/null; }
+legacy_t3_disabled() { ! systemctl is-enabled --quiet t3code && ! systemctl is-active --quiet t3code; }
+legacy_terminal_disabled() { ! systemctl is-enabled --quiet gravedecay-term && ! systemctl is-active --quiet gravedecay-term; }
+workspace_doctor_ok() {
+  local report
+  report=$(sudo -n "$0" __users doctor 2>&1) && return
+  # Unlike routine probes this reports the exact root-helper invariant, so
+  # doctor failures are actionable without rerunning an internal command.
+  printf '%s\n' "$report" >&2
+  return 1
+}
+
+cmd_boundary_apply() {
+  [[ $EUID == 0 ]] || { bad "internal boundary helper requires root"; exit 1; }
+  command -v nft >/dev/null || { bad "multi-user mode requires nftables; install nftables and rerun raise.sh"; exit 1; }
+  nft list ruleset >/dev/null || { bad "nftables kernel enforcement is unavailable"; exit 1; }
+  local delete=""
+  nft list table inet gravedecay >/dev/null 2>&1 && delete='delete table inet gravedecay'
+  {
+    [[ -z "$delete" ]] || printf '%s\n' "$delete"
+    cat <<'EOF'
+add table inet gravedecay
+add chain inet gravedecay output { type filter hook output priority filter; policy accept; }
+add rule inet gravedecay output meta skuid != 0 tcp dport { 4711-4713, 4810-5109 } reject
+EOF
+  } | nft -f -
+  cmd_boundary_status
+}
+
+cmd_boundary_status() {
+  [[ $EUID == 0 ]] || { bad "internal boundary helper requires root"; exit 1; }
+  local chain
+  chain=$(nft list chain inet gravedecay output)
+  grep -Fq 'type filter hook output priority filter; policy accept;' <<<"$chain"
+  grep -Eq 'meta skuid != 0 tcp dport \{ 4711-4713, 4810-5109 \} reject' <<<"$chain"
+}
+
+cmd_boundary_remove() {
+  [[ $EUID == 0 ]] || { bad "internal boundary helper requires root"; exit 1; }
+  command -v nft >/dev/null && nft delete table inet gravedecay >/dev/null 2>&1 || true
 }
 
 # ---------------------------------------------------------------- backup ----
@@ -1581,38 +1684,85 @@ cmd_multiuser() {
       conf_backup="$migration/grave.conf"; cp "$CONF" "$conf_backup"
       tailscale serve get-config "$migration/serve.json" >/dev/null 2>&1 || true
       HOME="$owner_home" cmd_backup
-      GRAVE_ROOT="$GRAVE_ROOT" GRAVE_WORKSPACE_START=0 "$helper" add "$identity" "$login" "$slug" --role admin
+      # Provider access is opt-in per workspace.  Preserve an existing shared
+      # provider only when this appliance actually has a provider credential;
+      # otherwise a migrated owner must not acquire an unusable entitlement.
+      local provider_lines provider_arg=()
+      provider_lines=$(grep -E '^(OPENAI_API_KEY|ANTHROPIC_API_KEY)=' "$GRAVE_ROOT/config/secrets/t3.env" 2>/dev/null || true)
+      [[ -n "$provider_lines" ]] || provider_arg=(--no-llm)
+      GRAVE_ROOT="$GRAVE_ROOT" GRAVE_WORKSPACE_START=0 "$helper" add "$identity" "$login" "$slug" --role admin "${provider_arg[@]}"
       local target="$GRAVE_ROOT/workspaces/$slug"
       [[ -d "$GRAVE_ROOT/agents/t3code" ]] && cp -a --reflink=auto "$GRAVE_ROOT/agents/t3code/." "$target/state/t3/"
-      [[ -d "$GRAVE_ROOT/repos" ]] && cp -a --reflink=auto "$GRAVE_ROOT/repos/." "$target/repos/"
+      # The appliance checkout itself is commonly a top-level repos symlink.
+      # Never copy a link into a workspace: it escapes that workspace's home
+      # and makes adoption/doctor either follow or reject an unsafe checkout.
+      if [[ -d "$GRAVE_ROOT/repos" ]]; then
+        for repo in "$GRAVE_ROOT"/repos/*; do
+          [[ -d "$repo" && ! -L "$repo" ]] || continue
+          cp -a --reflink=auto "$repo" "$target/repos/"
+        done
+      fi
       for d in .config/gh .codex .claude; do [[ -e "$owner_home/$d" ]] && { mkdir -p "$target/$(dirname "$d")"; cp -a "$owner_home/$d" "$target/$d"; }; done
       [[ -f "$owner_home/.gitconfig" ]] && cp -a "$owner_home/.gitconfig" "$target/.gitconfig"
       [[ -f "$GRAVE_ROOT/config/secrets/linear.env" ]] && cp -a "$GRAVE_ROOT/config/secrets/linear.env" "$target/config/secrets/linear.env"
       [[ -f "$GRAVE_ROOT/config/gravedecay-settings.json" ]] && cp -a "$GRAVE_ROOT/config/gravedecay-settings.json" "$target/config/gravedecay-settings.json"
-      local provider_lines
-      provider_lines=$(grep -E '^(OPENAI_API_KEY|ANTHROPIC_API_KEY)=' "$GRAVE_ROOT/config/secrets/t3.env" 2>/dev/null || true)
+      # These capabilities are consumed by root gateway/systemd only.  Create
+      # them while this migration helper is root so the owner never races a
+      # readable initial value before the re-raise installs the boundary.
+      local gateway_token="$GRAVE_ROOT/config/secrets/gateway-token" admin_token="$GRAVE_ROOT/config/secrets/admin-dashboard.env"
+      [[ -s "$gateway_token" ]] || python3 -c 'import secrets; print(secrets.token_hex(32))' >"$gateway_token"
+      [[ -s "$admin_token" ]] || printf 'GRAVEDECAY_BACKEND_TOKEN=%s\n' "$(python3 -c 'import secrets; print(secrets.token_hex(32))')" >"$admin_token"
+      chown root:root "$gateway_token" "$admin_token"; chmod 600 "$gateway_token" "$admin_token"
+      # The owner re-raise is intentionally limited to the installed scoped
+      # sudo grant.  It may tee files under /etc/systemd/system, but cannot
+      # create a new directory there, so create this root-owned drop-in
+      # directory while the migration helper still has root authority.
+      install -d -m 755 -o root -g root /etc/systemd/system/gravedecay.service.d
       [[ -n "$provider_lines" && ! -e "$GRAVE_ROOT/config/secrets/provider.env" ]] && { printf '%s\n' "$provider_lines" >"$GRAVE_ROOT/config/secrets/provider.env"; chmod 600 "$GRAVE_ROOT/config/secrets/provider.env"; }
       chown -R "grave-$slug:grave-$slug" "$target"
       chown root:root "$GRAVE_ROOT/config/workspace-services/$slug.env"; chmod 600 "$GRAVE_ROOT/config/workspace-services/$slug.env"
       local repo name url
       for repo in "$target"/repos/*; do
-        [[ -d "$repo/.git" ]] || continue; name=$(basename "$repo"); url=$(git -C "$repo" remote get-url origin 2>/dev/null || true)
+        [[ -d "$repo/.git" && ! -L "$repo" ]] || continue; name=$(basename "$repo"); url=$(git -C "$repo" remote get-url origin 2>/dev/null || true)
         [[ -n "$url" ]] && GRAVE_ROOT="$GRAVE_ROOT" "$helper" adopt "$slug" "$name" "$url"
       done
       if grep -q '^MULTI_USER=' "$CONF"; then sed -i 's/^MULTI_USER=.*/MULTI_USER=1/' "$CONF"; else printf '\nMULTI_USER=1\nGATEWAY_PORT=4710\n' >>"$CONF"; fi
-      if sudo -u "$owner" -H "$REPO_DIR/raise.sh" --profile "$profile"; then
+      if sudo -u "$owner" -H env -u SUDO_USER -u SUDO_UID -u SUDO_GID USER="$owner" "$REPO_DIR/raise.sh" --profile "$profile"; then
         systemctl disable --now t3code gravedecay-term >/dev/null 2>&1 || true
         printf '{"state":"enabled","owner":"%s","backup":"%s"}\n' "$slug" "$migration" >"$GRAVE_ROOT/config/multiuser-migration.json"
         audit_msg="multi-user enabled owner=$slug"; log "$audit_msg"; ok "$audit_msg"
       else
         cp "$conf_backup" "$CONF"
-        sudo -u "$owner" -H "$REPO_DIR/raise.sh" --profile "$profile" || true
+        sudo -u "$owner" -H env -u SUDO_USER -u SUDO_UID -u SUDO_GID USER="$owner" "$REPO_DIR/raise.sh" --profile "$profile" || true
         printf '{"state":"rolled-back","workspace_retained":"%s"}\n' "$slug" >"$GRAVE_ROOT/config/multiuser-migration.json"
         bad "migration failed; single-user config restored and workspace retained"; exit 1
       fi
       ;;
     *) say "usage: grave multiuser [status|enable <tailscale-id> <login> <slug> --profile <profile>]"; exit 1 ;;
   esac
+}
+
+cmd_multiuser_serve() {
+  [[ $EUID == 0 && "${MULTI_USER:-0}" == 1 ]] || { bad "internal multi-user Serve helper requires root and MULTI_USER=1"; exit 1; }
+  [[ "${GATEWAY_PORT:-}" =~ ^[0-9]+$ ]] && (( GATEWAY_PORT >= 1024 && GATEWAY_PORT <= 65535 )) \
+    || { bad "unsafe gateway port"; exit 1; }
+  local token
+  token=$(<"$GRAVE_ROOT/config/secrets/gateway-token")
+  [[ ${#token} -ge 32 ]] || { bad "gateway capability missing"; exit 1; }
+  # Serve paths are persistent: remove legacy mounts in the same root-owned
+  # operation that reads the private capability and installs the sole origin.
+  tailscale serve --https=443 --set-path=/grave off >/dev/null 2>&1 || true
+  tailscale serve --https=443 --set-path=/term off  >/dev/null 2>&1 || true
+  tailscale serve --bg --https=443 "http://127.0.0.1:$GATEWAY_PORT/_grave_proxy/$token" >/dev/null
+}
+
+cmd_multiuser_cleanup() {
+  [[ $EUID == 0 ]] || { bad "internal multi-user cleanup requires root"; exit 1; }
+  systemctl disable --now gravedecay-boundary.service >/dev/null 2>&1 || true
+  cmd_boundary_remove
+  rm -f /etc/systemd/system/gravedecay.service.d/multiuser-boundary.conf
+  rmdir /etc/systemd/system/gravedecay.service.d 2>/dev/null || true
+  systemctl daemon-reload
 }
 
 # ------------------------------------------------------------- uninstall ----
@@ -1638,7 +1788,7 @@ UNINSTALL_UNITS=(
   gravedecay-gamewatch.service gravedecay-keepalive.service
   gravedecay-selfheal.service gravedecay-net.service
   gravedecay-term.service t3code.service
-  gravedecay-gateway.service gravedecay.service
+  gravedecay-gateway.service gravedecay-boundary.service gravedecay.service
   gravedecay-notify@.service
   gravedecay-t3@.service gravedecay-term@.service gravedecay-dashboard@.service
 )
@@ -1885,10 +2035,13 @@ cmd_uninstall() { # grave uninstall [--purge] [--yes] [--dry-run]
   done
   [[ -e /etc/systemd/system/tailscaled.service.d/gravedecay-localapi.conf ]] \
     && files+=(/etc/systemd/system/tailscaled.service.d/gravedecay-localapi.conf)
+  [[ -e /etc/systemd/system/gravedecay.service.d/multiuser-boundary.conf ]] \
+    && files+=(/etc/systemd/system/gravedecay.service.d/multiuser-boundary.conf)
   ((${#files[@]})) && uninst_do "${#files[@]} unit file(s) removed from /etc/systemd/system" \
     sudo rm -f "${files[@]}"
   # The drop-in dir is ours only when empty — tailscaled may carry others.
   (( UNINSTALL_DRY )) || sudo rmdir /etc/systemd/system/tailscaled.service.d 2>/dev/null || true
+  (( UNINSTALL_DRY )) || sudo rmdir /etc/systemd/system/gravedecay.service.d 2>/dev/null || true
   uninst_do "systemd daemon reloaded" sudo systemctl daemon-reload
   (( UNINSTALL_DRY )) || sudo systemctl reset-failed 2>/dev/null || true
 
@@ -1902,6 +2055,8 @@ cmd_uninstall() { # grave uninstall [--purge] [--yes] [--dry-run]
   systemctl is-active --quiet tailscaled 2>/dev/null \
     && uninst_try "tailscaled restarted without the gravedecay drop-in" \
          sudo systemctl restart tailscaled
+  uninst_try "multi-user loopback boundary removed" \
+    sudo "$0" __boundary-remove
 
   # ---- 4. containers ----
   hdr "Docker"
@@ -2086,6 +2241,13 @@ EOF
 
 # ------------------------------------------------------------------ main ----
 case "${1:-help}" in
+  __dashboard-health) cmd_dashboard_health ;;
+  __dashboard-probe) shift; cmd_dashboard_probe "${1:-}" ;;
+  __boundary-apply) cmd_boundary_apply ;;
+  __boundary-status) cmd_boundary_status ;;
+  __boundary-remove) cmd_boundary_remove ;;
+  __multiuser-serve) cmd_multiuser_serve ;;
+  __multiuser-cleanup) cmd_multiuser_cleanup ;;
   __auto-thaw) shift || true; cmd_auto_thaw_root "$@" ;;
   status)     cmd_status ;;
   gaming)     shift || true; cmd_gaming "$@" ;;
@@ -2132,7 +2294,16 @@ case "${1:-help}" in
     esac ;;
   multiuser)  shift || true; exec sudo -n "$0" __multiuser "$@" ;;
   __multiuser) shift || true; cmd_multiuser "$@" ;;
-  __users)    shift || true; [[ $EUID == 0 ]] || { bad "internal users helper requires root"; exit 1; }; exec "$(dirname "$0")/grave-workspaces" "$@" ;;
+  __users)    shift || true; [[ $EUID == 0 ]] || { bad "internal users helper requires root"; exit 1; }
+              # Every lifecycle call (not just raise-time reapply) must carry
+              # the appliance's resolved toolchain into workspace unit envs.
+              # This keeps later additions correct on /usr/local and immutable
+              # Homebrew hosts where the old /usr/bin defaults do not exist.
+              export GRAVE_T3_BIN="$(command -v t3 2>/dev/null || true)"
+              export GRAVE_TTYD_BIN="$(command -v ttyd 2>/dev/null || true)"
+              export GRAVE_TOOL_PATH="${TOOL_PATH:-}"
+              export GRAVE_BIN="$0"
+              exec "$(dirname "$0")/grave-workspaces" "$@" ;;
   backup)     shift || true; cmd_backup "$@" ;;
   restore)    shift || true; cmd_restore "$@" ;;
   uninstall)  shift || true; cmd_uninstall "$@" ;;

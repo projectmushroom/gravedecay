@@ -7,9 +7,9 @@ listening — add a row in the same commit that adds a listener.
 |---|---|---|---|
 | 22 | all | sshd (key-only) | LAN + tailnet (tailnet 22 is intercepted by Tailscale SSH) |
 | 4710 | 127.0.0.1 | multi-user identity gateway (opt-in) | `tailscale serve` → HTTPS origin |
-| 4711 | 127.0.0.1 | t3code | `tailscale serve` → https `/` |
-| 4712 | 127.0.0.1 | gravedecay (Linux systemd or macOS user LaunchAgent) | `tailscale serve` → https `/grave` (the entry point — install the PWA from here) |
-| 4713 | 127.0.0.1 | gravedecay-term (ttyd, custom clipboard-capable frontend — see TERMINAL.md) | `tailscale serve` → https `/term` (shell for the whole tailnet — see SECURITY.md) |
+| 4711 | 127.0.0.1 | t3code | `tailscale serve` → https `/` (disabled in multi-user mode) |
+| 4712 | 127.0.0.1 | gravedecay (Linux systemd or macOS user LaunchAgent) | `tailscale serve` → https `/grave`; multi-user admin actions only via root gateway |
+| 4713 | 127.0.0.1 | gravedecay-term (ttyd, custom clipboard-capable frontend — see TERMINAL.md) | `tailscale serve` → https `/term` (disabled in multi-user mode) |
 | 4714 | 127.0.0.1 | gravedecay-net (gravenet — Linux systemd or macOS user LaunchAgent) | `tailscale serve` → https `/net` (widen bind via `GRAVENET_BIND` drop-in only if LAN clients should load it directly) |
 | `${PORT:-4711}` | 127.0.0.1 | portable Compose nginx gateway (optional) | same-origin `/`, `/grave/`, `/term/`; choose a distinct `PORT` per Compose project |
 | 5432 | 127.0.0.1 | core-postgres | loopback only |
@@ -23,6 +23,10 @@ listening — add a row in the same commit that adds a listener.
 Multi-user mode points Serve at a root-only, randomly generated capability
 path on port 4710. The gateway strips that path and selects one of the fixed
 loopback ports from the workspace registry; callers cannot select a backend.
+Its root-owned nftables boundary rejects any non-root local TCP connection to
+4711–4713 and 4810–5109 (for both IPv4 and IPv6), leaving the root gateway as
+the only backend caller. `grave doctor` verifies the persistent boundary and
+that legacy T3/terminal remain disabled.
 
 The 3000–3999 range is the sandbox for `grave preview` (config: `PREVIEW_RANGE`).
 Dev servers still bind loopback; `grave preview <port>` runs `tailscale serve
