@@ -1,0 +1,12 @@
+.git
+.env
+.env.*
+**/.env
+**/.env.*
+**/.npmrc
+**/.netrc
+**/.git-credentials
+**/secrets/
+**/node_modules/
+playwright-report/
+test-results/

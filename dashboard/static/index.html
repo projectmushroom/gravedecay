@@ -317,6 +317,13 @@ body.macos #boot-mode-head,body.macos #boot-mode-row,body.macos #throttle-head,
 body.macos #throttle-row,body.macos #t3connect-head,body.macos #t3connect-row{display:none!important}
 body.macos .mac-linux-setting,body.macos .linear-create{display:none!important}
 body:not(.macos) .mac-only-setting{display:none!important}
+/* Portable workspaces intentionally cannot observe or control their Docker host. */
+body.portable [data-panel="stats"],body.portable [data-panel="actions"],body.portable [data-panel="services"],
+body.portable [data-panel="docker"],body.portable [data-panel="journal"],body.portable #game-banner,
+body.portable #mode,body.portable .tabs,body.portable #keepalive-head,body.portable #keepalive-row,
+body.portable #boot-mode-head,body.portable #boot-mode-row,body.portable #throttle-head,
+body.portable #throttle-row,body.portable .t3connect-only,body.portable #notify-head,
+body.portable #sec-notify{display:none!important}
 </style></head><body>
 <div id="topcover"></div>
 <div class="topbar">
@@ -388,9 +395,9 @@ body:not(.macos) .mac-only-setting{display:none!important}
     <a class="mini abtn" data-auth="auth-github">🐙 Re-auth GitHub</a>
   </div>
 
-  <div class="sethead mac-linux-setting">T3 Connect — official T3 apps<span class="dim2" title="Links this box's T3 instance to your T3 Connect account so the official T3 Code apps (iOS/Android/desktop) can reach it. 📱 notifications-only keeps the tailnet as the transport and only publishes agent activity (push + Live Activities). 🌐 full relay opens a managed tunnel via relay.t3.codes so the apps connect without Tailscale — session traffic transits T3's relay (see docs/SECURITY.md). Both open a terminal running the sign-in; grave doctor enforces whichever mode you declare." style="margin-left:7px;border:1px solid var(--ring);border-radius:50%;padding:0 5px;cursor:help">ⓘ</span></div>
-  <div class="setrow mac-linux-setting"><span class="setlabel dim2" id="t3c-state">…</span></div>
-  <div class="setrow mac-linux-setting">
+  <div class="sethead mac-linux-setting t3connect-only">T3 Connect — official T3 apps<span class="dim2" title="Links this box's T3 instance to your T3 Connect account so the official T3 Code apps (iOS/Android/desktop) can reach it. 📱 notifications-only keeps the tailnet as the transport and only publishes agent activity (push + Live Activities). 🌐 full relay opens a managed tunnel via relay.t3.codes so the apps connect without Tailscale — session traffic transits T3's relay (see docs/SECURITY.md). Both open a terminal running the sign-in; grave doctor enforces whichever mode you declare." style="margin-left:7px;border:1px solid var(--ring);border-radius:50%;padding:0 5px;cursor:help">ⓘ</span></div>
+  <div class="setrow mac-linux-setting t3connect-only"><span class="setlabel dim2" id="t3c-state">…</span></div>
+  <div class="setrow mac-linux-setting t3connect-only">
     <a class="mini abtn" data-auth="auth-t3publish">📱 notifications only</a>
     <a class="mini abtn" data-auth="auth-t3full">🌐 full relay</a>
     <button class="mini" id="t3c-off">⏸ off</button>
@@ -641,8 +648,8 @@ function statusDot(state){
 }
 // same-origin app paths need the https origin spelled out when gravedecay is
 // viewed on a bare port (localhost:4712) rather than mounted at /grave/
-let macosCompanion=false;
-const appUrl=u=>(macosCompanion&&location.port&&u==='/net/')
+let macosCompanion=false,portableCompanion=false;
+const appUrl=u=>portableCompanion?u:(macosCompanion&&location.port&&u==='/net/')
   ?`http://${location.hostname}:4714/`:(location.port&&location.port!=='443'&&u.startsWith('/'))
   ?`https://${location.hostname}${u}`:u;
 // 'claude' or 'codex' if this tile launches that agent CLI via /term/?arg=…,
@@ -684,7 +691,7 @@ function applyLayout(){
 document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
   activeTab=t.dataset.tab;localStorage.setItem('grave-tab',activeTab);
   if(cfg)applyLayout();
-  if(activeTab==='system'&&!macosCompanion)loadGraveReleases();
+  if(activeTab==='system'&&!macosCompanion&&!portableCompanion)loadGraveReleases();
 });
 async function loadGraveReleases(force=false){
   if(graveReleasesLoaded&&!force)return;
@@ -746,7 +753,12 @@ function render(s){
   const modeChanged=lastMode!==null&&lastMode!==s.mode;
   lastMode=s.mode;
   macosCompanion=s.platform==='macos';
+  portableCompanion=s.platform==='container';
   document.body.classList.toggle('macos',macosCompanion);
+  document.body.classList.toggle('portable',portableCompanion);
+  if(portableCompanion&&activeTab!=='work'){
+    activeTab='work';localStorage.setItem('grave-tab',activeTab);
+  }
   $('prs-heading').textContent=macosCompanion?'🐙 GitHub — open work':'🔀 Pull requests';
   document.body.classList.toggle('gaming',s.mode==='gaming');
   $('game-banner').style.display=s.mode==='gaming'?'block':'none';
@@ -757,7 +769,7 @@ function render(s){
   if(modeChanged)schedule();
   const k=JSON.stringify([cfg.panel_order,cfg.hidden_panels,activeTab]);
   if(k!==layoutKey){layoutKey=k;applyLayout();}
-  if(activeTab==='system'&&!macosCompanion)loadGraveReleases();
+  if(activeTab==='system'&&!macosCompanion&&!portableCompanion)loadGraveReleases();
   // 📁 Files is a built-in tile: opens the native file-manager modal.
   const tiles=(s.platform==='macos'?[]:[{name:'📁 Files',url:FILES_URL}]).concat(allApps());
   $('apps').innerHTML=tiles.filter(a=>!cfg.hidden_apps.includes(a.name)).map(a=>{
@@ -843,7 +855,7 @@ function render(s){
       <td class="dim">${esc(h.last_when)}</td>
       <td class="num dim">${esc(String(h.size_kb))}K</td>
       <td class="num"><a class="viewlog" href="#" data-log="${esc(h.name)}" data-file="${esc(h.logs[0])}" title="view transcript">📜</a>
-      ${live?'':` <a class="resume" href="#" data-resume="${esc(h.name)}" title="resume in its old dir">▶</a>`}</td></tr>`;
+      ${!live&&!portableCompanion?` <a class="resume" href="#" data-resume="${esc(h.name)}" title="resume in its old dir">▶</a>`:''}</td></tr>`;
     }).join('')
     :'<tr><td class="dim">no past sessions yet</td></tr>';
   $('inbox').innerHTML=(s.inbox||[]).length?s.inbox.map(n=>`

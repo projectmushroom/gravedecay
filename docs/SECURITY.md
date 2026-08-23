@@ -129,6 +129,24 @@ your user for **anyone who can reach it** — ttyd does not check the
 you already extend via Tailscale SSH; on a shared tailnet, restrict who can
 reach this node with Tailscale ACLs or disable `gravedecay-term`.
 
+## Portable Docker workspace
+
+The portable Compose deployment is not a way to containerize the trusted host
+appliance. It publishes only nginx on `127.0.0.1`, with app services private to
+its Compose network, drops all capabilities, runs long-lived services without
+root, and has no Docker socket, privileged mode, host namespaces, systemd, or
+in-container Tailscale. The agent HOME volume is outside the dashboard's
+`GRAVE_ROOT` file-manager jail, so browser file operations cannot reach CLI
+credentials.
+
+Use Docker Engine 28.0.0+ for localhost-published ports. On older Engines,
+Docker documented that a loopback published port could be reachable by hosts on
+the same L2 segment; upgrade or deny it in the host firewall. Never put the
+portable gateway behind an unauthenticated public/LAN proxy: a request without
+the Tailscale identity header is treated as local. Use host Tailscale Serve or
+another trusted identity-aware access-control proxy instead. See
+[DOCKER.md](DOCKER.md) for the operational contract.
+
 ## The file manager
 
 The dashboard's 📁 Files modal browses, uploads, downloads, and edits files

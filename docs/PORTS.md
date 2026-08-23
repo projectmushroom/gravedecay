@@ -11,6 +11,7 @@ listening — add a row in the same commit that adds a listener.
 | 4712 | 127.0.0.1 | gravedecay (Linux systemd or macOS user LaunchAgent) | `tailscale serve` → https `/grave` (the entry point — install the PWA from here) |
 | 4713 | 127.0.0.1 | gravedecay-term (ttyd, custom clipboard-capable frontend — see TERMINAL.md) | `tailscale serve` → https `/term` (shell for the whole tailnet — see SECURITY.md) |
 | 4714 | 127.0.0.1 | gravedecay-net (gravenet — Linux systemd or macOS user LaunchAgent) | `tailscale serve` → https `/net` (widen bind via `GRAVENET_BIND` drop-in only if LAN clients should load it directly) |
+| `${PORT:-4711}` | 127.0.0.1 | portable Compose nginx gateway (optional) | same-origin `/`, `/grave/`, `/term/`; choose a distinct `PORT` per Compose project |
 | 5432 | 127.0.0.1 | core-postgres | loopback only |
 | 6379 | 127.0.0.1 | core-redis | loopback only |
 | 3050 | 127.0.0.1 | browsers-playwright | loopback only |

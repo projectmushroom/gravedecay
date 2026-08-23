@@ -41,6 +41,8 @@ PORT = int(os.environ.get("GRAVEDECAY_PORT", os.environ.get("DASH_PORT", "4712")
 GRAVE_ROOT = os.environ.get("GRAVE_ROOT", "/srv/dev")
 PLATFORM = os.environ.get("GRAVEDECAY_PLATFORM", "linux").lower()
 MACOS = PLATFORM == "macos"
+PORTABLE = PLATFORM in ("container", "portable")
+BIND_HOST = "0.0.0.0" if PORTABLE else "127.0.0.1"
 # tmux socket carrying the agent sessions. Single-user uses "agents"; a workspace
 # dashboard is handed its per-workspace socket (grave-<slug>) via TMUX_SOCKET so
 # the sessions panel and kill button see the same sessions the workspace terminal
@@ -133,6 +135,14 @@ def _sanitize_custom_apps(apps):
     return out[:12]
 
 
+def public_scheme(headers):
+    """Use Serve's forwarded HTTPS scheme, while localhost stays HTTP."""
+    scheme = headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip().lower()
+    if scheme in ("http", "https"):
+        return scheme
+    return "https" if headers.get("Tailscale-User-Login") else "http"
+
+
 def load_settings():
     try:
         with open(SETTINGS_PATH) as f:
@@ -164,6 +174,12 @@ def save_settings(data):
         json.dump(merged, f, indent=2)
     os.replace(tmp, SETTINGS_PATH)
     return merged
+
+
+def settings_response(merged):
+    return {"ok": True, "settings": merged,
+            "linear_configured": bool(linear_key()),
+            "notify": None if PORTABLE else notify_state()}
 
 
 def macos_repo_root(value=None):
@@ -236,6 +252,11 @@ ACTIONS = {
 # gate server-side: hiding buttons is not an authorization boundary.
 if MACOS:
     ACTIONS = {}
+elif PORTABLE:
+    # A portable workspace has no authority over its Docker host. Pairing and
+    # tmux session endpoints stay useful; every host-mutating grave action is
+    # absent at the server boundary, not merely hidden by the PWA.
+    ACTIONS = {"t3-pair": ACTIONS["t3-pair"]}
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 # Only one grave action at a time: concurrent mode flips race each other
 # (instrumentation caught a developer run failing mid gaming-kill).
@@ -1722,6 +1743,34 @@ def state(headers):
                 "docker": {"error": "not managed on macOS", "containers": []}, "tmux": [],
                 "torpor": 0, "repos": private["repos"], "repo_scan": private["repo_scan"], "journal": [], "system": collect_system(),
                 "backups": {"count": 0, "latest": None}, "inbox": [], "agent_history": []}
+    if PORTABLE:
+        # Deliberately work-plane only: do not read systemd, the host Docker
+        # daemon, journald, cgroups, or host hardware from a container.
+        viewer = headers.get("Tailscale-User-Login")
+        restricted = viewer is not None and viewer not in ALLOWED_USERS
+        private = {"github": {"login": None, "prs": [], "error": "restricted"},
+                   "linear": {"configured": False, "issues": [], "error": "restricted"},
+                   "ci": {"rows": [], "error": "restricted"}, "usage": None,
+                   "repos": [], "inbox": [], "agent_history": []}
+        if not restricted:
+            gh = collect_github()
+            private = {"github": gh, "linear": collect_linear(), "ci": collect_ci(),
+                       "usage": collect_agent_usage(), "repos": collect_repos(),
+                       "inbox": collect_inbox(), "agent_history": collect_agent_history()}
+        return {"host": HOST, "now": time.strftime("%H:%M:%S"),
+                "viewer": viewer or "local", "platform": "container", "mode": "developer",
+                "boot_mode": None, "gamewatch": None, "keepalive": None,
+                "apps": list(APPS), "settings": load_settings(), "notify": None,
+                "github": private["github"], "linear": private["linear"], "ci": private["ci"],
+                "usage": private["usage"], "services": [],
+                "docker": {"error": "not managed by portable workspace", "containers": []},
+                "tmux": collect_tmux(), "torpor": 0, "repos": private["repos"], "journal": [],
+                "system": {"uptime_s": 0, "temps": {"cpu": None, "gpu": None,
+                           "gpu_mhz": None, "gpu_state": None, "fans": []},
+                           "cpu": {"pct": None, "cores": []}, "load": [0, 0, 0], "ncpu": 0,
+                           "mem": {"pct": 0, "used_kb": 0, "total_kb": 0}, "disks": []},
+                "backups": {"count": 0, "latest": None}, "inbox": private["inbox"],
+                "agent_history": private["agent_history"]}
     t3 = unit_state("t3code")
     mode = "developer" if t3["active"] == "active" else "gaming"
     tmux = collect_tmux()
@@ -2065,7 +2114,7 @@ class Handler(BaseHTTPRequestHandler):
         if action == "t3-pair":
             host = self.headers.get("Host", "")
             if re.fullmatch(r"[A-Za-z0-9.\-:\[\]]+", host or ""):
-                cmd = cmd + ["--base-url", f"https://{host}"]
+                cmd = cmd + ["--base-url", f"{public_scheme(self.headers)}://{host}"]
         import sys
         if not ACTION_LOCK.acquire(blocking=False):
             self._send(409, json.dumps({"ok": False,
@@ -2148,6 +2197,9 @@ class Handler(BaseHTTPRequestHandler):
         elif p == "/api/state":
             self._send(200, json.dumps(state(self.headers)))
         elif p == "/api/admin/releases":
+            if PORTABLE:
+                self._send(404, '{"error":"unavailable in portable workspace"}')
+                return
             if self._forbidden():
                 return
             rc, out, err = sh([GRAVE, "releases", "--json"], timeout=30)
@@ -2286,9 +2338,7 @@ class Handler(BaseHTTPRequestHandler):
                 # Mac project root); no secret value is ever included in them.
                 self._send(400, json.dumps({"ok": False, "output": str(e) or "bad settings payload"}))
                 return
-            self._send(200, json.dumps({"ok": True, "settings": merged,
-                                        "linear_configured": bool(linear_key()),
-                                        "notify": notify_state()}))
+            self._send(200, json.dumps(settings_response(merged)))
         elif p == "/api/linear-issue":
             title = str(data.get("title", "")).strip()
             if not title:
@@ -2305,6 +2355,9 @@ class Handler(BaseHTTPRequestHandler):
             result = push_send(data)
             self._send(200 if result["ok"] else 502, json.dumps(result))
         elif p == "/api/notify-test":
+            if PORTABLE:
+                self._send(404, '{"error":"unavailable in portable workspace"}')
+                return
             # Exercise THE production path end-to-end: grave notify fans out to
             # ntfy and (via loopback push-send) back through this dashboard.
             rc, out, err = sh([GRAVE, "notify", "--priority", "default",
@@ -2320,6 +2373,9 @@ class Handler(BaseHTTPRequestHandler):
             rc, out, err = sh(["tmux", "-L", TMUX_SOCKET, "kill-session", "-t", name])
             self._send(200, json.dumps({"ok": rc == 0, "output": out + err}))
         elif p == "/api/session-resume":
+            if PORTABLE:
+                self._send(404, '{"error":"unavailable in portable workspace"}')
+                return
             # ▶ on a dead session (#110): grave recreates it in its recorded
             # dir (meta.json) and re-attaches the pipe-pane log.
             name = str(data.get("name", ""))
@@ -2344,6 +2400,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps(
                 {"ok": rc == 0, "output": out if rc == 0 else out + err}))
         elif p == "/api/admin/upgrade":
+            if PORTABLE:
+                self._send(404, '{"error":"unavailable in portable workspace"}')
+                return
             tag = str(data.get("tag", ""))
             if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
                 self._send(400, json.dumps({"ok": False, "output": "invalid release tag"}))
@@ -2376,4 +2435,4 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+    ThreadingHTTPServer((BIND_HOST, PORT), Handler).serve_forever()
