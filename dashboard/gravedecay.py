@@ -992,7 +992,8 @@ def _summary():
         if mode != "gaming":
             docker = collect_docker()
             containers_problem = sum(1 for row in docker["containers"]
-                                     if row.get("state") not in ("running", "created"))
+                                     if row.get("state") != "running"
+                                     or "(unhealthy)" in row.get("status", ""))
     disks = system.get("disks") or []
     temps = system.get("temps") or {}
     return {

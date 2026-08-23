@@ -114,7 +114,7 @@ class DashboardContractTests(unittest.TestCase):
         DASHBOARD.collect_services = lambda: [{"unit": "private-name", "active": "failed"}]
         DASHBOARD.collect_tmux = lambda: [{"name": "secret"}]
         DASHBOARD.unit_state = lambda unit: {"active": "active"}
-        DASHBOARD.collect_docker = lambda: (calls.append(1) or {"containers": [{"name": "secret", "state": "exited"}]})
+        DASHBOARD.collect_docker = lambda: (calls.append(1) or {"containers": [{"name": "secret", "state": "created"}, {"name": "secret", "state": "running", "status": "Up 1 minute (unhealthy)"}]})
         try:
             with self.get("/grave/api/v1/summary") as response:
                 self.assertEqual(response.headers["Cache-Control"], "no-store")
@@ -127,7 +127,7 @@ class DashboardContractTests(unittest.TestCase):
         self.assertEqual(body["api_version"], 1)
         self.assertEqual(body["links"]["dashboard"], "/grave/")
         self.assertEqual(body["activity"], {"sessions_live": 1, "sessions_frozen": 0})
-        self.assertEqual(body["health"], {"services_failed": 1, "containers_problem": 1})
+        self.assertEqual(body["health"], {"services_failed": 1, "containers_problem": 2})
         self.assertNotIn("secret", json.dumps(body))
         self.assertEqual(len(calls), 1)
         self.assertIs(again, DASHBOARD.summary())
