@@ -981,7 +981,9 @@ def _summary_links():
     """Public, origin-relative destinations.  Keep this list deliberately
     boring: it is consumed by native clients and must not expose configured
     app tiles or user-supplied URLs."""
-    links = {"dashboard": (BASE or "") + "/", "network": "/net/"}
+    links = {"dashboard": (BASE or "") + "/"}
+    if not PORTABLE:
+        links["network"] = "/net/"
     if not MACOS:
         links.update({"t3": "/", "terminal": "/term/"})
     return links
@@ -994,6 +996,19 @@ def _summary():
     collectors and owner-facing detail.  This calls only local, bounded
     collectors and omits names, logs, paths, and container/session contents.
     """
+    if PORTABLE:
+        tmux = collect_tmux()
+        return {
+            "product": "gravedecay", "api_version": 1,
+            "observed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "node": {"host": HOST, "platform": "container", "mode": "developer", "uptime_s": None},
+            "resources": {"cpu_pct": None, "memory_pct": None, "disk_pct": None,
+                          "cpu_temp_c": None, "gpu_temp_c": None},
+            "activity": {"sessions_live": len(tmux), "sessions_frozen": 0},
+            "health": {"services_failed": 0, "containers_problem": 0},
+            "links": _summary_links(),
+        }
+
     system = collect_system()
     mode = "developer"
     frozen = False

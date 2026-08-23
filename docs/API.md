@@ -24,4 +24,7 @@ response intentionally contains no repository names, session/container names,
 logs, accounts, configured app URLs, or other private content. On Linux,
 `gaming` is intentional: stopped developer units and Docker do not contribute
 to `health`; only units in the `failed` state do. The macOS companion reports
-only its `dashboard` and `network` paths.
+only its `dashboard` and `network` paths. `node.platform` is `linux`, `macos`,
+or `container`. Portable (`container`) summaries intentionally return `null`
+host resource and uptime values, retain `dashboard`, `t3`, and `terminal`
+links, and omit `network`.

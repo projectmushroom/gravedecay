@@ -77,6 +77,22 @@ class PortableDockerContractTests(unittest.TestCase):
         self.assertEqual(dash.public_scheme({"Tailscale-User-Login": "me@example.com"}), "https")
         self.assertEqual(dash.public_scheme({"X-Forwarded-Proto": "https"}), "https")
 
+    def test_summary_stays_within_the_portable_work_plane(self):
+        dash = load_dashboard({"GRAVEDECAY_PLATFORM": "container"})
+        for name in ("collect_system", "collect_services", "unit_state", "collect_docker"):
+            setattr(dash, name, lambda name=name: (_ for _ in ()).throw(AssertionError(name)))
+        dash.collect_tmux = lambda: [{"name": "one"}, {"name": "two"}]
+
+        body = dash._summary()
+
+        self.assertEqual(body["node"], {"host": dash.HOST, "platform": "container",
+                                        "mode": "developer", "uptime_s": None})
+        self.assertEqual(body["resources"], {"cpu_pct": None, "memory_pct": None, "disk_pct": None,
+                                              "cpu_temp_c": None, "gpu_temp_c": None})
+        self.assertEqual(body["activity"], {"sessions_live": 2, "sessions_frozen": 0})
+        self.assertEqual(body["health"], {"services_failed": 0, "containers_problem": 0})
+        self.assertEqual(body["links"], {"dashboard": "/grave/", "t3": "/", "terminal": "/term/"})
+
     def test_build_context_drops_local_credentials(self):
         ignore = (ROOT / ".dockerignore").read_text()
         self.assertIn(".git", ignore)
