@@ -205,6 +205,7 @@ def macos_repo_root(value=None):
 
 
 GRAVE = os.environ.get("GRAVEDECAY_GRAVE", "/usr/local/bin/grave")
+MACOS_GRAVE = os.path.join(GRAVE_ROOT, "scripts", "grave")
 # On a managed-toolchain host (SteamOS) t3 shares grave's durable bin dir
 # (~/.local/bin), but package hosts diverge: grave installs to /usr/local/bin
 # while npm puts t3 in /usr/bin, so grave's sibling alone is not enough.
@@ -988,7 +989,7 @@ def _summary_links():
     boring: it is consumed by native clients and must not expose configured
     app tiles or user-supplied URLs."""
     links = {"dashboard": (BASE or "") + "/"}
-    if not PORTABLE:
+    if not PORTABLE and (not MACOS or any(a.get("url") == "/net/" for a in APPS)):
         links["network"] = "/net/"
     if not MACOS:
         links.update({"t3": "/", "terminal": "/term/"})
@@ -2275,7 +2276,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self._backend_forbidden(p):
             return
-        if MACOS and p not in ("/", "/healthz", "/api/state", "/api/v1/summary", "/manifest.webmanifest", "/sw.js", "/offline.html", "/apple-touch-icon.png", "/icon-180.png", "/icon-192.png", "/icon-512.png"):
+        if MACOS and p not in ("/", "/healthz", "/api/state", "/api/v1/summary", "/api/admin/releases", "/api/admin/update-status", "/manifest.webmanifest", "/sw.js", "/offline.html", "/apple-touch-icon.png", "/icon-180.png", "/icon-192.png", "/icon-512.png"):
             self._send(404, '{"error":"unavailable in macOS companion"}')
             return
         if p == "/api/action-stream":
@@ -2301,11 +2302,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if self._forbidden():
                 return
-            rc, out, err = sh([GRAVE, "releases", "--json"], timeout=30)
+            rc, out, err = sh([MACOS_GRAVE if MACOS else GRAVE, "releases", "--json"], timeout=30)
             if rc:
                 self._send(502, json.dumps({"ok": False, "output": ANSI.sub("", out + err)}))
             else:
                 self._send(200, out)
+        elif p == "/api/admin/update-status":
+            if not MACOS: self._send(404, '{"error":"unavailable outside macOS companion"}'); return
+            if self._forbidden(): return
+            rc, out, err = sh([MACOS_GRAVE, "update-status"], timeout=10)
+            self._send(200 if not rc else 502, out if not rc else json.dumps({"ok": False, "output": ANSI.sub("", out + err)}))
         elif p == "/api/agent-log":
             # Session transcript viewer (#110). Owner-gated like the file
             # manager — transcripts show everything an agent saw or did. Both
@@ -2381,7 +2387,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self._backend_forbidden(p):
             return
-        if MACOS and p != "/api/settings":
+        if MACOS and p not in ("/api/settings", "/api/admin/upgrade"):
             self._send(404, '{"error":"unavailable in macOS companion"}')
             return
         viewer = self.headers.get("Tailscale-User-Login")
@@ -2402,6 +2408,9 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(length)) if length else {}
         except ValueError:
             self._send(400, json.dumps({"ok": False, "output": "bad payload"}))
+            return
+        if not isinstance(data, dict):
+            self._send(400, json.dumps({"ok": False, "output": "JSON object required"}))
             return
         if p == "/api/fs":
             self._send(200, json.dumps(fs_op(data)))
@@ -2504,12 +2513,15 @@ class Handler(BaseHTTPRequestHandler):
             if PORTABLE:
                 self._send(404, '{"error":"unavailable in portable workspace"}')
                 return
-            tag = str(data.get("tag", ""))
-            if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag):
-                self._send(400, json.dumps({"ok": False, "output": "invalid release tag"}))
-                return
-            unit = f"gravedecay-upgrade@{tag}.service"
-            rc, out, err = sh(["sudo", "-n", "systemctl", "--no-block", "start", unit])
+            if MACOS:
+                if set(data) == {"tag"} and isinstance(data["tag"], str) and re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", data["tag"]): cmd = [MACOS_GRAVE, "upgrade", "--tag", data["tag"]]
+                elif set(data) == {"channel"} and data["channel"] in ("release", "edge"): cmd = [MACOS_GRAVE, "upgrade", "--" + data["channel"]]
+                else: self._send(400, json.dumps({"ok":False,"output":"invalid release request"})); return
+                rc, out, err = sh(cmd, timeout=15)
+            else:
+                tag = str(data.get("tag", ""))
+                if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag): self._send(400, json.dumps({"ok":False,"output":"invalid release tag"})); return
+                unit = f"gravedecay-upgrade@{tag}.service"; rc, out, err = sh(["sudo", "-n", "systemctl", "--no-block", "start", unit])
             self._send(200 if rc == 0 else 500, json.dumps({
                 "ok": rc == 0,
                 "output": "upgrade queued; the dashboard will reconnect" if rc == 0

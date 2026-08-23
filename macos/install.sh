@@ -4,11 +4,13 @@
 set -eu
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=${GRAVEDECAY_MAC_ROOT:-"$HOME/Library/Application Support/Gravedecay"}
-WANT_DASH=1 WANT_NET=1 SERVE=1 DRY=0
+WANT_DASH=1 WANT_NET=1 SERVE=1 DRY=0 NO_BOOTSTRAP=0 EXPLICIT_COMPONENT=0 EXPLICIT_SERVE=0
+ORIGIN=https://github.com/projectmushroom/gravedecay.git
 usage(){ echo "usage: $0 [--dashboard-only|--network-only] [--no-serve] [--root PATH] [--dry-run]"; }
 while [ $# -gt 0 ]; do case "$1" in
-  --dashboard-only) WANT_NET=0;; --network-only) WANT_DASH=0;; --no-serve) SERVE=0;;
-  --root) [ $# -ge 2 ] || { echo "--root needs a path" >&2; exit 2; }; shift; ROOT=$1;; --dry-run) DRY=1;; -h|--help) usage; exit 0;; *) usage >&2; exit 2;; esac; shift; done
+  --dashboard-only) WANT_NET=0; EXPLICIT_COMPONENT=1;; --network-only) WANT_DASH=0; EXPLICIT_COMPONENT=1;; --no-serve) SERVE=0; EXPLICIT_SERVE=1;;
+  --root) [ $# -ge 2 ] || { echo "--root needs a path" >&2; exit 2; }; shift; ROOT=$1;; --dry-run) DRY=1;;
+  --no-bootstrap) NO_BOOTSTRAP=1;; -h|--help) usage; exit 0;; *) usage >&2; exit 2;; esac; shift; done
 [ "$WANT_DASH" = 1 ] || [ "$WANT_NET" = 1 ] || { echo "choose only one component mode" >&2; exit 2; }
 [ "$(uname -s)" = Darwin ] || { echo "macOS installer requires Darwin" >&2; exit 1; }
 PYTHON=$(command -v python3 || true)
@@ -17,11 +19,44 @@ ROOT=$("$PYTHON" -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$ROOT
 HOME_CANON=$("$PYTHON" -c 'import os; print(os.path.realpath(os.environ["HOME"]))')
 case "$ROOT" in "$HOME_CANON"/*) ;; *) echo "--root must be an absolute descendant of $HOME" >&2; exit 2;; esac
 case "$ROOT" in *[\&\|\<\>]* ) echo "--root must not contain XML/sed-sensitive characters" >&2; exit 2;; esac
+SOURCE="$ROOT/repos/gravedecay"; UPDATER=${GRAVEDECAY_UPDATER:-0}
+if [ -f "$ROOT/config/components" ]; then
+  OLD_DASH=$(sed -n 's/^dashboard=//p' "$ROOT/config/components"); OLD_NET=$(sed -n 's/^network=//p' "$ROOT/config/components"); OLD_SERVE=$(sed -n 's/^serve=//p' "$ROOT/config/components")
+  case "$OLD_DASH:$OLD_NET:$OLD_SERVE" in 1:1:[01]|1:0:[01]|0:1:[01]) ;; *) echo "invalid component metadata" >&2; exit 2;; esac
+  [ "$EXPLICIT_COMPONENT" = 1 ] || { WANT_DASH=$OLD_DASH; WANT_NET=$OLD_NET; }
+  [ "$EXPLICIT_SERVE" = 1 ] || SERVE=$OLD_SERVE
+fi
+case "$WANT_DASH:$WANT_NET:$SERVE" in 1:1:[01]|1:0:[01]|0:1:[01]) ;; *) echo "invalid component metadata" >&2; exit 2;; esac
+if [ "$NO_BOOTSTRAP" = 0 ] && [ ! -d "$SOURCE/.git" ] && [ "$DRY" = 0 ]; then
+  mkdir -p "$ROOT/repos" "$ROOT/staging"; BOOT="$ROOT/staging/bootstrap-$$"
+  CURRENT=$(CDPATH= cd -- "$HERE/.." && pwd)
+  if git -C "$CURRENT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    [ "$(git -C "$CURRENT" remote get-url origin 2>/dev/null || true)" = "$ORIGIN" ] || { echo "current source origin is not trusted" >&2; exit 1; }
+    [ -z "$(git -C "$CURRENT" status --porcelain)" ] || { echo "current source has local changes; refusing bootstrap" >&2; exit 1; }
+    git clone --quiet "$CURRENT" "$BOOT" && git -C "$BOOT" remote set-url origin "$ORIGIN" || { echo "could not bootstrap managed source" >&2; exit 1; }
+  else
+    git clone --quiet "$ORIGIN" "$BOOT" || { echo "could not bootstrap managed source" >&2; exit 1; }
+    BOOT_TAG=$(git -C "$BOOT" tag -l 'v*' | "$PYTHON" -c 'import re,sys; x=[s.strip() for s in sys.stdin if re.fullmatch(r"v\d+\.\d+\.\d+",s.strip())]; print(max(x,key=lambda v:tuple(map(int,v[1:].split(".")))) if x else "")')
+    [ -z "$BOOT_TAG" ] || git -C "$BOOT" checkout -q "$BOOT_TAG"
+  fi
+  mv "$BOOT" "$SOURCE"
+  set -- --root "$ROOT" --no-bootstrap; [ "$WANT_DASH" = 1 ] && [ "$WANT_NET" = 0 ] && set -- "$@" --dashboard-only; [ "$WANT_NET" = 1 ] && [ "$WANT_DASH" = 0 ] && set -- "$@" --network-only; [ "$SERVE" = 0 ] && set -- "$@" --no-serve
+  exec "$SOURCE/macos/install.sh" "$@"
+fi
+[ "$NO_BOOTSTRAP" = 1 ] || [ "$DRY" = 1 ] || [ ! -d "$SOURCE/.git" ] || {
+  CURRENT=$(CDPATH= cd -- "$HERE/.." && pwd); [ "$CURRENT" = "$SOURCE" ] || {
+    [ "$(git -C "$SOURCE" remote get-url origin 2>/dev/null || true)" = "$ORIGIN" ] && [ -z "$(git -C "$SOURCE" status --porcelain)" ] || { echo "managed source is untrusted or dirty" >&2; exit 1; }
+    set -- --root "$ROOT"; [ "$WANT_DASH" = 1 ] && [ "$WANT_NET" = 0 ] && set -- "$@" --dashboard-only; [ "$WANT_NET" = 1 ] && [ "$WANT_DASH" = 0 ] && set -- "$@" --network-only; [ "$SERVE" = 0 ] && set -- "$@" --no-serve; exec "$SOURCE/macos/install.sh" "$@"
+  }
+}
+[ "$NO_BOOTSTRAP" = 1 ] || [ "$DRY" = 1 ] || [ "$(git -C "$SOURCE" remote get-url origin 2>/dev/null || true)" = "$ORIGIN" ] || { echo "managed source origin is not trusted" >&2; exit 1; }
 TAILSCALE=$(command -v tailscale || true)
 [ -n "$TAILSCALE" ] || [ ! -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ] || TAILSCALE=/Applications/Tailscale.app/Contents/MacOS/Tailscale
 [ "$SERVE" = 0 ] || [ -n "$TAILSCALE" ] || { echo "Tailscale CLI is required to publish Serve paths" >&2; exit 1; }
 ALLOWED_USERS=""
-if [ "$SERVE" = 1 ]; then
+if [ "$SERVE" = 1 ] && [ "$UPDATER" = 1 ] && [ -f "$ROOT/config/allowed-user" ]; then
+  ALLOWED_USERS=$(cat "$ROOT/config/allowed-user")
+elif [ "$SERVE" = 1 ]; then
   # Serve forwards an authenticated Tailscale login.  Bind private project and
   # integration data to the identity currently signed in on this Mac; do not
   # guess from a hostname or permit an empty allow-list.  The JSON mapping is
@@ -45,13 +80,30 @@ except Exception:
   esac
   ALLOWED_USERS=$TAILSCALE_LOGIN
 fi
+[ "$SERVE" = 0 ] || case "$ALLOWED_USERS" in ""|*[!A-Za-z0-9._+@-]*) echo "Invalid preserved local Tailscale login; refusing to enable Serve" >&2; exit 1;; esac
 UID_NOW=$(id -u); AGENTS="$HOME/Library/LaunchAgents"
 run(){ if [ "$DRY" = 1 ]; then printf 'dry-run: '; printf '%s ' "$@"; printf '\n'; else "$@"; fi; }
 APPS=""; [ "$WANT_NET" = 0 ] || APPS="📡 Network=/net/"
 render(){ template=$1; target=$2; if [ "$DRY" = 1 ]; then echo "dry-run: render $template -> $target"; else sed "s|@PYTHON@|$PYTHON|g;s|@ROOT@|$ROOT|g;s|@APPS@|$APPS|g;s|@ALLOWED_USERS@|$ALLOWED_USERS|g" "$template" > "$target"; plutil -lint "$target" >/dev/null; fi; }
 unload(){ label=$1; plist="$AGENTS/$label.plist"; [ -e "$plist" ] && run launchctl bootout "gui/$UID_NOW" "$plist" || true; run rm -f "$plist"; }
 serve_off(){ path=$1; [ -z "$TAILSCALE" ] || run "$TAILSCALE" serve --https=443 --set-path="$path" off; }
-[ "$DRY" = 1 ] || { run mkdir -p "$ROOT/scripts" "$ROOT/web/net" "$ROOT/logs" "$ROOT/config" "$AGENTS"; : > "$ROOT/.gravedecay-macos"; }
+[ "$DRY" = 1 ] || { run mkdir -p "$ROOT/scripts" "$ROOT/web/net" "$ROOT/logs" "$ROOT/config" "$ROOT/repos" "$ROOT/staging" "$AGENTS"; : > "$ROOT/.gravedecay-macos"; }
+if [ "$DRY" = 0 ]; then
+  run cp "$HERE/grave" "$ROOT/scripts/grave"; run cp "$HERE/updater.py" "$ROOT/scripts/updater.py"; run chmod 700 "$ROOT/scripts/grave" "$ROOT/scripts/updater.py"
+  "$PYTHON" - "$ROOT" "$SOURCE" "${GRAVEDECAY_UPDATE_CHANNEL:-release}" <<'PY'
+import json, os, subprocess, sys
+root, source, channel = sys.argv[1:]
+def git(*args): return subprocess.run(["git", "-C", source, *args], text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout.strip()
+current = git("describe", "--tags", "--exact-match", "HEAD") if os.path.isdir(os.path.join(source, ".git")) and channel != "edge" else ""
+checkout = current or (git("branch", "--show-current") or git("rev-parse", "--short", "HEAD"))
+kind = "edge" if channel == "edge" else ("release" if current else "development")
+with open(os.path.join(root, "config", "release.json.tmp"), "w") as f: json.dump({"current":current,"checkout":checkout,"channel":channel,"kind":kind,"origin":"https://github.com/projectmushroom/gravedecay.git"}, f)
+os.replace(os.path.join(root, "config", "release.json.tmp"), os.path.join(root, "config", "release.json"))
+PY
+  if [ "$SERVE" = 1 ] && [ "$UPDATER" != 1 ]; then printf '%s\n' "$ALLOWED_USERS" > "$ROOT/config/allowed-user"; chmod 600 "$ROOT/config/allowed-user"; fi
+  HOOK="$HOME/.local/bin/grave"; mkdir -p "$HOME/.local/bin"
+  if [ ! -e "$HOOK" ] || [ "$(readlink "$HOOK" 2>/dev/null || true)" = "$ROOT/scripts/grave" ]; then ln -snf "$ROOT/scripts/grave" "$HOOK"; else echo "grave hook not installed: $HOOK is already owned by another command" >&2; fi
+fi
 if [ "$WANT_DASH" = 1 ]; then
   run cp "$HERE/../dashboard/gravedecay.py" "$ROOT/scripts/gravedecay.py"
   run mkdir -p "$ROOT/scripts/dashboard-static"
@@ -67,6 +119,11 @@ if [ "$WANT_NET" = 1 ]; then
   run launchctl bootout "gui/$UID_NOW" "$AGENTS/io.gravedecay.network.plist" || true
   run launchctl bootstrap "gui/$UID_NOW" "$AGENTS/io.gravedecay.network.plist"
 else unload io.gravedecay.network; serve_off /net; fi
+if [ "$UPDATER" != 1 ]; then
+  render "$HERE/LaunchAgents/io.gravedecay.updater.plist.tmpl" "$AGENTS/io.gravedecay.updater.plist"
+  run launchctl bootout "gui/$UID_NOW" "$AGENTS/io.gravedecay.updater.plist" || true
+  run launchctl bootstrap "gui/$UID_NOW" "$AGENTS/io.gravedecay.updater.plist"
+fi
 health(){ port=$1; i=0; while [ "$i" -lt 20 ]; do curl -fsS "http://127.0.0.1:$port/healthz" >/dev/null && return 0; i=$((i+1)); sleep 1; done; return 1; }
 if [ "$DRY" = 0 ]; then [ "$WANT_DASH" = 0 ] || health 4712; [ "$WANT_NET" = 0 ] || health 4714; fi
 if [ "$SERVE" = 1 ]; then
@@ -77,4 +134,4 @@ else
   [ "$WANT_NET" = 0 ] || serve_off /net
 fi
 [ "$DRY" = 1 ] || printf 'dashboard=%s\nnetwork=%s\nserve=%s\n' "$WANT_DASH" "$WANT_NET" "$SERVE" > "$ROOT/config/components"
-echo "Installed macOS dashboard/network companion at $ROOT. T3 is intentionally unmanaged."
+echo "Installed macOS dashboard/network companion at $ROOT. Add $HOME/.local/bin to PATH to use grave. T3 is intentionally unmanaged."

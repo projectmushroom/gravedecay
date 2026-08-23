@@ -18,6 +18,11 @@ smaller: a self-contained work-plane, not an appliance control plane.
 | Control plane | `grave` (bash, `/usr/local/bin`) | One entrypoint for modes, doctor, logs, backup |
 | Self-updater | `gravedecay-upgrade.service`, detached oneshot | Survives the dashboard restart caused by its own re-raise |
 
+The macOS companion is separate and user-scoped: its fixed
+`io.gravedecay.updater` LaunchAgent stages `$GRAVE_ROOT/repos/gravedecay` and
+reruns `macos/install.sh`, never `raise.sh`; it preserves its two loopback
+agents/Serve selection and does not include T3 or the Linux control plane.
+
 ## Portable Docker work-plane
 
 `docker/portable` runs T3, Claude/Codex CLIs, ttyd/tmux, and the dashboard as

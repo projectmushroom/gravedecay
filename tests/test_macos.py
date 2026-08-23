@@ -1,4 +1,7 @@
 import importlib.util
+import importlib.machinery
+import contextlib
+import io
 import os
 import pathlib
 import socket
@@ -10,6 +13,7 @@ import urllib.request
 import json
 import threading
 import unittest
+import shutil
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -35,6 +39,9 @@ class MacosContractTests(unittest.TestCase):
         self.assertEqual(state["platform"], "macos")
         self.assertEqual(state["docker"]["containers"], [])
         self.assertEqual(state["tmux"], [])
+        self.assertEqual(dash._summary_links(), {"dashboard": "/grave/", "network": "/net/"})
+        no_net = load(ROOT / "dashboard/gravedecay.py", {"GRAVEDECAY_PLATFORM": "macos", "GRAVEDECAY_APPS": ""})
+        self.assertEqual(no_net._summary_links(), {"dashboard": "/grave/"})
 
     def test_macos_nested_repo_inventory_is_canonical_bounded_and_safe(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -333,6 +340,193 @@ class MacosContractTests(unittest.TestCase):
             self.assertNotEqual(refused.returncode, 0)
             self.assertIn("refusing to enable Serve", refused.stderr)
 
+    def test_macos_self_update_is_user_scoped_and_fixed_path(self):
+        install = (ROOT / "macos/install.sh").read_text()
+        helper = (ROOT / "macos/grave").read_text()
+        updater = (ROOT / "macos/updater.py").read_text()
+        dash = (ROOT / "dashboard/gravedecay.py").read_text()
+        plist = (ROOT / "macos/LaunchAgents/io.gravedecay.updater.plist.tmpl").read_text()
+        self.assertIn("repos/gravedecay", install)
+        self.assertIn("EXPLICIT_COMPONENT", install)
+        self.assertIn("GRAVEDECAY_UPDATE_CHANNEL", install)
+        self.assertNotIn("sudo", install + helper + updater)
+        self.assertIn("v(\\d+)", helper)  # exact semantic tags only
+        self.assertIn("tags.sort", helper)  # numeric ordering, not lexicographic
+        self.assertIn("managed checkout origin is not trusted", helper)
+        self.assertIn("update.lock", updater)
+        self.assertIn("prior payload restored", updater)
+        self.assertIn("65536", updater)
+        self.assertIn("under(backup)", updater)
+        self.assertIn("GRAVEDECAY_GRAVE", (ROOT / "macos/LaunchAgents/io.gravedecay.dashboard.plist.tmpl").read_text())
+        self.assertIn("io.gravedecay.updater", plist)
+        self.assertIn("MACOS_GRAVE", dash)
+        self.assertIn('"/api/admin/update-status"', dash)
+        self.assertIn("invalid release request", dash)
+        self.assertIn("update-macos-channel", (ROOT / "dashboard/static/index.html").read_text())
+        self.assertIn("io.gravedecay.updater", (ROOT / "macos/uninstall.sh").read_text())
+
+    def test_macos_update_helper_queues_once_and_updater_preserves_public_modes(self):
+        def load_script(name, path, env):
+            old = dict(os.environ); os.environ.update(env)
+            try:
+                loader = importlib.machinery.SourceFileLoader(name, str(path))
+                spec = importlib.util.spec_from_loader(name, loader); module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module); return module
+            finally: os.environ.clear(); os.environ.update(old)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp, "grave"); (root / "config").mkdir(parents=True); (root / ".gravedecay-macos").write_text("")
+            helper = load_script("mac_helper", ROOT / "macos/grave", {"HOME": tmp, "GRAVE_ROOT": str(root)})
+            helper.releases = lambda: {"channel": "edge", "releases": ["v2.0.0"]}
+            calls = []
+            old_run = helper.subprocess.run
+            helper.subprocess.run = lambda args, **_: calls.append(args) or type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            helper.upgrade([])
+            helper.subprocess.run = old_run
+            self.assertEqual(json.loads((root / "config/update-request.json").read_text())["channel"], "edge")
+            self.assertEqual(calls[0][1], "kickstart"); self.assertNotIn("-k", calls[0])
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit): helper.upgrade(["--edge", "--tag", "v2.0.0"])
+            for components, expected in (("dashboard=1\nnetwork=1\nserve=1\n", []),
+                                         ("dashboard=1\nnetwork=0\nserve=0\n", ["--dashboard-only", "--no-serve"]),
+                                         ("dashboard=0\nnetwork=1\nserve=1\n", ["--network-only"])):
+                (root / "config/components").write_text(components)
+                updater = load_script("mac_updater_" + str(len(expected)), ROOT / "macos/updater.py", {"GRAVE_ROOT": str(root)})
+                self.assertEqual(updater.args_for_components(), expected)
+            (root / "config/components").write_text("dashboard=1\nnetwork=1\nserve=x\n")
+            with self.assertRaises(RuntimeError): updater.args_for_components()
+
+    def test_helper_orders_all_semver_tags_rejects_missing_and_keeps_edge_distinct(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=pathlib.Path(tmp,"root"); (root/"config").mkdir(parents=True); (root/".gravedecay-macos").write_text("")
+            helper=importlib.util.module_from_spec(spec:=importlib.util.spec_from_loader("semver_helper",importlib.machinery.SourceFileLoader("semver_helper",str(ROOT/"macos/grave")))); old=dict(os.environ); os.environ.update({"GRAVE_ROOT":str(root),"HOME":tmp})
+            try: spec.loader.exec_module(helper)
+            finally: os.environ.clear();os.environ.update(old)
+            helper.trusted=lambda:None
+            class R:
+                def __init__(self,out=""): self.stdout=out; self.returncode=0; self.stderr=""
+            def fake(*a,**_):
+                if a[:3]==("tag","-l","v*"): return R("v0.9.0\nv0.10.0\n")
+                if a[:3]==("describe","--tags","--exact-match"): return R("v0.10.0\n")
+                return R("abc123\n")
+            helper.git=fake; helper.write(helper.META,{"channel":"edge","checkout":"main abc123"})
+            info=helper.releases(); self.assertEqual(info["releases"],["v0.10.0","v0.9.0"]); self.assertEqual(info["current"],""); self.assertEqual(info["checkout"],"main abc123")
+            helper.releases=lambda:{"channel":"release","releases":["v0.10.0"]}
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit): helper.upgrade(["--tag","v9.9.9"])
+
+    def test_updater_executes_fetch_failure_and_post_cutover_rollback(self):
+        def module(root, name):
+            old = dict(os.environ); os.environ["GRAVE_ROOT"] = str(root)
+            try:
+                loader = importlib.machinery.SourceFileLoader(name, str(ROOT / "macos/updater.py"))
+                spec = importlib.util.spec_from_loader(name, loader); value = importlib.util.module_from_spec(spec); loader.exec_module(value); return value
+            finally: os.environ.clear(); os.environ.update(old)
+        def setup(root):
+            (root / "config").mkdir(parents=True); (root / "staging").mkdir(); (root / ".gravedecay-macos").write_text("")
+            (root / "repos/gravedecay/.git").mkdir(parents=True)
+            (root / "config/components").write_text("dashboard=1\nnetwork=0\nserve=0\n")
+            (root / "config/update-request.json").write_text(json.dumps({"channel":"release","tag":None,"requested_at":int(time.time())}))
+        class R:
+            def __init__(self, rc=0, out=""): self.returncode, self.stdout = rc, out
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp, "root"); setup(root); updater = module(root, "fetch_failure")
+            def failed_fetch(*args, **_):
+                if args[1:3] == ("remote", "get-url"): return R(out=updater.ORIGIN)
+                if args[1:3] == ("status", "--porcelain"): return R()
+                if args[1] == "clone": return R(1, "offline")
+                return R()
+            updater.run = failed_fetch; old_home=os.environ.get("HOME"); os.environ["HOME"]=tmp
+            try: updater.main()
+            finally: os.environ["HOME"]=old_home or ""
+            self.assertEqual(json.loads((root / "config/update-status.json").read_text())["state"], "failed")
+            self.assertFalse((root / "config/update.lock").exists()); self.assertFalse((root / "config/update-request.json").exists())
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp, "root"); setup(root); updater = module(root, "rollback")
+            def fake_run(*args, **_):
+                if args[1:3] == ("remote", "get-url"): return R(out=updater.ORIGIN)
+                if args[1:3] == ("status", "--porcelain"): return R()
+                if args[1] == "clone" or args[1] == "checkout": return R()
+                if args[1:4] == ("tag", "-l", "v*"): return R(out="v1.0.0\n")
+                return R()
+            installs=[]; updater.run=fake_run
+            def failing_install(repo, extra, channel):
+                installs.append((repo, extra, channel))
+                return R(1, "bad restart") if len(installs) == 1 else R()
+            updater.install = failing_install
+            old_home=os.environ.get("HOME"); os.environ["HOME"]=tmp
+            try: updater.main()
+            finally: os.environ["HOME"]=old_home or ""
+            result=json.loads((root / "config/update-status.json").read_text())
+            self.assertEqual(result["state"], "failed"); self.assertTrue(result["restored"])
+            self.assertTrue((root / "repos/gravedecay/.git").is_dir()); self.assertEqual(installs[0][1], ["--dashboard-only","--no-serve"])
+
+    def test_second_updater_does_not_remove_first_workers_lock_or_request(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=pathlib.Path(tmp,"root"); (root/"config/update.lock").mkdir(parents=True); (root/".gravedecay-macos").write_text("")
+            request=root/"config/update-request.json"; request.write_text(json.dumps({"channel":"release","tag":None,"requested_at":int(time.time())}))
+            old=dict(os.environ); os.environ.update({"GRAVE_ROOT":str(root),"HOME":tmp})
+            try:
+                loader=importlib.machinery.SourceFileLoader("contended_updater",str(ROOT/"macos/updater.py")); spec=importlib.util.spec_from_loader("contended_updater",loader); updater=importlib.util.module_from_spec(spec);loader.exec_module(updater);updater.main()
+            finally: os.environ.clear();os.environ.update(old)
+            self.assertTrue((root/"config/update.lock").is_dir()); self.assertTrue(request.exists())
+
+    def test_first_bootstrap_from_clean_linked_worktree_is_idempotent_and_safe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path=pathlib.Path(tmp); source=tmp_path/"source"; shutil.copytree(ROOT,source,ignore=shutil.ignore_patterns(".git","node_modules","__pycache__"))
+            subprocess.run(["git","init","-q",str(source)],check=True); subprocess.run(["git","-C",str(source),"config","user.email","test@example.test"],check=True); subprocess.run(["git","-C",str(source),"config","user.name","Test"],check=True); subprocess.run(["git","-C",str(source),"add","."],check=True); subprocess.run(["git","-C",str(source),"commit","-qm","fixture"],check=True); subprocess.run(["git","-C",str(source),"remote","add","origin","https://github.com/projectmushroom/gravedecay.git"],check=True)
+            linked=tmp_path/"linked"; subprocess.run(["git","-C",str(source),"worktree","add","--detach",str(linked),"HEAD"],check=True,stdout=subprocess.DEVNULL)
+            self.assertTrue((linked/".git").is_file())
+            fake=tmp_path/"bin";fake.mkdir(); log=tmp_path/"launchctl.log"
+            for name, body in {"uname":"echo Darwin", "plutil":"exit 0", "curl":"exit 0", "tailscale":"exit 0", "launchctl":f'printf "%s\\n" "$*" >> "{log}"'}.items():
+                p=fake/name;p.write_text("#!/bin/sh\n"+body+"\n");p.chmod(0o755)
+            home=tmp_path/"home";home.mkdir(); root=home/"Grave Root"; env=dict(os.environ,HOME=str(home),PATH=f"{fake}:/usr/bin:/bin")
+            install=["sh",str(linked/"macos/install.sh"),"--no-serve","--root",str(root)]
+            first=subprocess.run(install,env=env,capture_output=True,text=True); self.assertEqual(first.returncode,0,first.stderr)
+            self.assertTrue((root/"repos/gravedecay/.git").exists()); self.assertTrue((root/".gravedecay-macos").exists()); self.assertEqual((root/"config/components").read_text(),"dashboard=1\nnetwork=1\nserve=0\n")
+            meta=json.loads((root/"config/release.json").read_text()); self.assertEqual(meta["current"],""); self.assertEqual(meta["kind"],"development")
+            self.assertTrue((root/"scripts/grave").is_file()); self.assertTrue((root/"scripts/updater.py").is_file()); self.assertTrue((home/"Library/LaunchAgents/io.gravedecay.updater.plist").is_file()); self.assertEqual((home/".local/bin/grave").resolve(),(root/"scripts/grave").resolve())
+            second=subprocess.run(install,env=env,capture_output=True,text=True); self.assertEqual(second.returncode,0,second.stderr)
+            (root/"config/components").write_text("dashboard=1\nnetwork=0\nserve=0\n")
+            preserved=subprocess.run(install,env=env,capture_output=True,text=True); self.assertEqual(preserved.returncode,0,preserved.stderr); self.assertEqual((root/"config/components").read_text(),"dashboard=1\nnetwork=0\nserve=0\n")
+            before=log.read_text(); updater=subprocess.run(["sh",str(root/"repos/gravedecay/macos/install.sh"),"--no-serve","--root",str(root)],env=dict(env,GRAVEDECAY_UPDATER="1"),capture_output=True,text=True); self.assertEqual(updater.returncode,0,updater.stderr)
+            self.assertNotIn("io.gravedecay.updater",log.read_text()[len(before):])
+            for kind, mutate, expected in (("dirty",lambda p:(p/"README.md").write_text("dirty"),"current source has local changes"),("untrusted",lambda p:subprocess.run(["git","-C",str(p),"remote","set-url","origin","https://example.test/nope.git"],check=True),"current source origin is not trusted")):
+                badroot=home/("bad-"+kind); mutate(linked); result=subprocess.run(["sh",str(linked/"macos/install.sh"),"--no-serve","--root",str(badroot)],env=env,capture_output=True,text=True); self.assertNotEqual(result.returncode,0); self.assertIn(expected,result.stderr); subprocess.run(["git","-C",str(linked),"reset","--hard","HEAD"],check=True,stdout=subprocess.DEVNULL); subprocess.run(["git","-C",str(linked),"remote","set-url","origin","https://github.com/projectmushroom/gravedecay.git"],check=True)
+
+    def test_macos_release_routes_are_owner_csrf_gated_and_fixed_argv(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=pathlib.Path(tmp,"app"); (root/"config").mkdir(parents=True); calls=[]
+            dash=load(ROOT/"dashboard/gravedecay.py", {"GRAVEDECAY_PLATFORM":"macos","GRAVE_ROOT":str(root),"GRAVEDECAY_ALLOWED_USERS":"owner@example.test"})
+            def fake(command, timeout=10):
+                calls.append(command)
+                if command[-1]=="--json": return 0, json.dumps({"current":"","checkout":"edge abc","channel":"edge","releases":["v0.10.0","v0.9.0"]}),""
+                if command[-1]=="update-status": return 0, '{"state":"running"}',""
+                return 0,"queued",""
+            dash.sh=fake; server=dash.ThreadingHTTPServer(("127.0.0.1",0),dash.Handler); thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start(); origin=f"http://127.0.0.1:{server.server_port}"
+            try:
+                def get(path, headers={}): return urllib.request.urlopen(urllib.request.Request(origin+path,headers=headers),timeout=2)
+                def post(path, data, headers={}): return urllib.request.urlopen(urllib.request.Request(origin+path,data=json.dumps(data).encode(),headers={"Content-Type":"application/json",**headers},method="POST"),timeout=2)
+                self.assertEqual(get("/api/admin/releases").status,200); self.assertEqual(get("/api/admin/releases",{"Tailscale-User-Login":"owner@example.test"}).status,200); self.assertEqual(get("/api/admin/update-status").status,200)
+                with self.assertRaises(urllib.error.HTTPError) as denied: get("/api/admin/releases",{"Tailscale-User-Login":"other@example.test"})
+                self.assertEqual(denied.exception.code,403)
+                with self.assertRaises(urllib.error.HTTPError) as denied_status: get("/api/admin/update-status",{"Tailscale-User-Login":"other@example.test"})
+                self.assertEqual(denied_status.exception.code,403)
+                with self.assertRaises(urllib.error.HTTPError) as denied_post: post("/api/admin/upgrade",{"channel":"edge"},{"Sec-Fetch-Site":"same-origin","Tailscale-User-Login":"other@example.test"})
+                self.assertEqual(denied_post.exception.code,403)
+                self.assertEqual(post("/api/admin/upgrade",{"channel":"edge"},{"Sec-Fetch-Site":"same-origin"}).status,200)
+                self.assertEqual(calls[-1],[dash.MACOS_GRAVE,"upgrade","--edge"])
+                self.assertEqual(post("/api/admin/upgrade",{"channel":"edge"},{"Sec-Fetch-Site":"same-origin","Tailscale-User-Login":"owner@example.test"}).status,200)
+                self.assertEqual(post("/api/admin/upgrade",{"tag":"v0.10.0"},{"Sec-Fetch-Site":"same-origin"}).status,200)
+                with self.assertRaises(urllib.error.HTTPError) as bad: post("/api/admin/upgrade",{"tag":"v0.10.0;rm"},{"Sec-Fetch-Site":"same-origin"})
+                self.assertEqual(bad.exception.code,400)
+                with self.assertRaises(urllib.error.HTTPError) as array: post("/api/admin/upgrade",[],{"Sec-Fetch-Site":"same-origin"})
+                self.assertEqual(array.exception.code,400)
+                with self.assertRaises(urllib.error.HTTPError) as cross: post("/api/admin/upgrade",{"channel":"edge"},{"Sec-Fetch-Site":"cross-site"})
+                self.assertEqual(cross.exception.code,403)
+                with self.assertRaises(urllib.error.HTTPError) as unavailable: post("/api/action",{}, {"Sec-Fetch-Site":"same-origin"})
+                self.assertEqual(unavailable.exception.code,404)
+            finally: server.shutdown();server.server_close();thread.join(timeout=2)
+
     def test_marked_servers_smoke_without_launchd_or_tailscale(self):
         """Real local processes, temporary state only: no launchctl/Serve calls."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -361,7 +555,7 @@ class MacosContractTests(unittest.TestCase):
                 self.assertIn('"platform": "macos"', body)
                 with self.assertRaises(urllib.error.HTTPError) as denied:
                     urllib.request.urlopen(f"http://127.0.0.1:{dash_port}/api/admin/releases", timeout=1)
-                self.assertEqual(denied.exception.code, 404)
+                self.assertEqual(denied.exception.code, 502)  # installed helper is absent in this source-only smoke
                 time.sleep(.2)
                 with urllib.request.urlopen(f"http://127.0.0.1:{net_port}/events", timeout=2) as stream:
                     event = stream.readline().decode() + stream.readline().decode()

@@ -190,6 +190,12 @@ templates, and the dashboard refresh — and doctor verifies the result.
 Releases are plain git tags (`v0.1.0`, …) with notes on GitHub: pin to them
 for stability, or ride main if the box is also where you hack on gravedecay.
 
+On macOS, rerun `macos/install.sh` once on an older companion to bootstrap its
+user updater. Then use `grave releases`, `grave upgrade --release`, `grave
+upgrade --tag vX.Y.Z`, or `grave upgrade --edge` (or the dashboard panel).
+See [MACOS.md](docs/MACOS.md): no new port; T3, Tailscale login, Docker, SSH,
+and Linux services remain unmanaged.
+
 ### Uninstalling
 
 ```sh
