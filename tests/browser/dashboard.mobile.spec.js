@@ -129,6 +129,42 @@ test('macOS renders its local work tab and repository-root setting', async ({ pa
   await expect(page.locator('#set-linear')).toBeVisible();
 });
 
+test('portable workspace stays on its work plane and preserves gateway URLs', async ({ page }) => {
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.message));
+  await page.evaluate(() => localStorage.setItem('grave-tab', 'system'));
+  await page.goto('./?tab=system');
+  await page.evaluate(async () => {
+    const state = await (await fetch('api/state')).json();
+    state.platform = 'container';
+    state.mode = 'developer';
+    state.notify = null;
+    state.apps = [
+      { name: '⌨️ T3 Code', url: '/' },
+      { name: '🖥️ Terminal', url: '/term/?arg=shell' },
+      { name: '🤖 Claude', url: '/term/?arg=claude' },
+    ];
+    state.settings.hidden_panels = [];
+    render(state);
+  });
+  await expect(page.locator('body')).toHaveClass(/portable/);
+  await expect(page.locator('[data-tab="work"]')).toHaveClass(/active/);
+  await expect(page.locator('[data-tab="system"]')).toBeHidden();
+  for (const panel of ['stats', 'actions', 'services', 'docker', 'journal']) {
+    await expect(page.locator(`[data-panel="${panel}"]`)).toBeHidden();
+  }
+  await expect(page.locator('[data-panel="repos"]')).toBeVisible();
+  await expect(page.locator('#apps')).toContainText('T3 Code');
+  await expect(page.locator('#apps a').filter({ hasText: 'Terminal' })).toHaveAttribute('href', '/term/?arg=shell');
+  expect(await page.locator('#apps a').filter({ hasText: 'Terminal' }).evaluate(a =>
+    new URL(a.href).port === location.port)).toBe(true);
+  await page.locator('#gear').click();
+  expect(await page.locator('.t3connect-only').evaluateAll(rows =>
+    rows.every(row => getComputedStyle(row).display === 'none'))).toBe(true);
+  await expect(page.locator('#notify-head')).toBeHidden();
+  expect(pageErrors).toEqual([]);
+});
+
 test('gamewatch off presents a dev-only UI and can be opted back in', async ({ page }) => {
   await page.locator('[data-tab="system"]').click();
   await page.evaluate(async () => {

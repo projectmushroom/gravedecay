@@ -2,10 +2,10 @@
 
 ## The one idea
 
-Coding agents need real processes, real files, and real builds — so everything
-an agent touches runs **natively on the host**. Docker exists only for backing
-services your projects need (databases, browsers). This is the opposite of
-"containerize everything," on purpose.
+The full appliance runs everything an agent touches **natively on the host**;
+Docker there is only for backing services your projects need (databases,
+browsers). A separate [`docker/portable`](DOCKER.md) deployment is intentionally
+smaller: a self-contained work-plane, not an appliance control plane.
 
 ## Layers
 
@@ -17,6 +17,20 @@ services your projects need (databases, browsers). This is the opposite of
 | Backing services | Docker compose stacks in `$GRAVE_ROOT/docker/` | Postgres, Redis, Playwright — disposable, loopback-bound |
 | Control plane | `grave` (bash, `/usr/local/bin`) | One entrypoint for modes, doctor, logs, backup |
 | Self-updater | `gravedecay-upgrade.service`, detached oneshot | Survives the dashboard restart caused by its own re-raise |
+
+## Portable Docker work-plane
+
+`docker/portable` runs T3, Claude/Codex CLIs, ttyd/tmux, and the dashboard as
+an unprivileged application container behind an unprivileged nginx gateway.
+Only nginx publishes one host-loopback port; its same-origin routes are `/`,
+`/grave/`, and `/term/`. Project-scoped named volumes hold the workspace and a
+separate agent HOME. The dashboard's `container` platform disables all host
+observation and control server-side as well as in the UI.
+
+The stack does not mount the Docker socket or use privileged, host networking,
+host PID, systemd, or Tailscale. Host Tailscale Serve may proxy to its loopback
+gateway. This makes it portable, but it cannot supply the native appliance's
+firewall, doctor, backup, hardware, or gaming contracts.
 
 In opt-in multi-user mode, Tailscale Serve sends the whole HTTPS origin to the
 identity gateway on loopback :4710 using a root-only random capability path.

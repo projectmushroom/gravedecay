@@ -46,7 +46,9 @@ on first raise; every other system leaves it off unless you opt in.
 
 1. **Native first.** Agent CLIs, the web UI, the terminal, and the dashboard
    run as plain systemd services on the host — agents need real files, real
-   processes, real builds. Docker is only for backing services.
+   processes, real builds. Docker is only for backing services on the full
+   appliance; the deliberately reduced [portable work-plane](docs/DOCKER.md)
+   is the separate exception.
 2. **Tailnet-only.** Everything binds `127.0.0.1`; the only ways in are
    Tailscale (`tailscale serve` for the HTTPS origin, Tailscale SSH as
    fallback) and key-only sshd. Firewall is default-deny. No port
@@ -66,6 +68,10 @@ on first raise; every other system leaves it off unless you opt in.
    not required).
 6. **Doctor is the contract.** Every invariant the platform relies on is a
    `grave doctor` check; a quirk doctor can't see will silently regress.
+
+Need a portable, reduced Docker work-plane rather than the full appliance?
+See [the Docker workspace guide](docs/DOCKER.md). It keeps the same `/`,
+`/grave/`, and `/term/` origin, but intentionally has no host control plane.
 
 ## Quickstart
 
