@@ -47,6 +47,7 @@ jobs:
           xcodebuild -project Gravedecay.xcodeproj -scheme Gravedecay-macOS \
             -configuration Release build CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY='' ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO -skipPackagePluginValidation
           lipo -info ~/Library/Developer/Xcode/DerivedData/Gravedecay-*/Build/Products/Release/Gravedecay.app/Contents/MacOS/Gravedecay
+          lipo -verify_arch arm64 x86_64 ~/Library/Developer/Xcode/DerivedData/Gravedecay-*/Build/Products/Release/Gravedecay.app/Contents/MacOS/Gravedecay
       - name: Build iOS app (simulator)
         working-directory: clients/apple
         run: >

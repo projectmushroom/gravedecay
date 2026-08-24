@@ -35,10 +35,17 @@ final class GraveSummaryTests: XCTestCase {
         XCTAssertEqual(GravePresentation.condition(summary: healthy, reachable: true), .healthy)
         XCTAssertEqual(GravePresentation.condition(summary: nil, reachable: true), .unreachable)
         XCTAssertEqual(GravePresentation.uptime(-1), "0h 0m")
+        XCTAssertEqual(GravePresentation.uptime(1e308), "106751991167300d 15h")
+        XCTAssertEqual(GravePresentation.uptime(.infinity), "—")
         XCTAssertEqual(GravePresentation.age(Date.now.addingTimeInterval(-10)), "10s ago")
         XCTAssertEqual(GravePresentation.age(Date.now.addingTimeInterval(-90)), "1m ago")
         XCTAssertEqual(GravePresentation.age(Date.now.addingTimeInterval(-7_200)), "2h ago")
         XCTAssertEqual(GravePresentation.age(Date.now.addingTimeInterval(-172_800)), "2d ago")
         XCTAssertEqual(GravePresentation.age(Date.now.addingTimeInterval(60)), "just now")
+    }
+
+    func testProblemCountSaturates() {
+        let summary = GraveSummary.decode(#"{"product":"gravedecay","api_version":1,"node":{"host":"grave","platform":"macos","mode":"developer","uptime_s":0},"resources":{},"activity":{"sessions_live":0,"sessions_frozen":0},"health":{"services_failed":9223372036854775807,"containers_problem":9223372036854775807},"links":{}}"#.data(using: .utf8)!)!
+        XCTAssertEqual(summary.problems, Int.max)
     }
 }

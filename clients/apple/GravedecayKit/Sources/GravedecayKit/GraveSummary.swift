@@ -66,7 +66,10 @@ public struct GraveSummary: Codable, Equatable, Sendable {
         return result
     }
 
-    public var problems: Int { max(0, health.services_failed) + max(0, health.containers_problem) }
+    public var problems: Int {
+        let failed = max(0, health.services_failed), containers = max(0, health.containers_problem)
+        return failed > Int.max - containers ? Int.max : failed + containers
+    }
 }
 
 public enum GravePresentation {
@@ -84,7 +87,8 @@ public enum GravePresentation {
     public static func temperature(_ value: Double?) -> String { value.map { String(format: "%.0f°C", $0) } ?? "—" }
     public static func uptime(_ seconds: Double?) -> String {
         guard let seconds else { return "—" }
-        let value = max(0, Int(seconds)); let days = value / 86_400; let hours = (value % 86_400) / 3_600
+        guard seconds.isFinite else { return "—" }
+        let value = seconds >= Double(Int.max) ? Int.max : max(0, Int(seconds)); let days = value / 86_400; let hours = (value % 86_400) / 3_600
         return days > 0 ? "\(days)d \(hours)h" : "\(hours)h \((value % 3_600) / 60)m"
     }
     public static func age(_ date: Date?, now: Date = .now) -> String {

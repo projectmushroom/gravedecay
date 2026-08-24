@@ -98,7 +98,12 @@ final class GraveMenuModel: ObservableObject {
 
     func open(_ path: String?) { guard let grave = selected, let url = GravePresentation.link(host: grave.candidate.dns, path: path) else { return }; NSWorkspace.shared.open(url) }
 
-    private static let noRedirectSession = URLSession(configuration: .ephemeral, delegate: NoRedirectDelegate(), delegateQueue: nil)
+    private static let noRedirectSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 3
+        configuration.timeoutIntervalForResource = 3
+        return URLSession(configuration: configuration, delegate: NoRedirectDelegate(), delegateQueue: nil)
+    }()
 }
 
 private final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate {
