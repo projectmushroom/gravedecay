@@ -16,8 +16,10 @@ over the same origins and never require new listening ports on the box.
   The official apps drive T3 only — the dashboard (system overview, controls,
   files, terminal, gravenet) stays on the tailnet origin / PWA.
 
-- **iOS / macOS** — `clients/apple/`. SwiftUI app with webview panes for T3
-  and the dashboard, a native SwiftTerm terminal speaking the ttyd protocol
+- **iOS / macOS** — `clients/apple/`. iOS uses webview panes for T3 and the
+  dashboard; macOS 15+ is a standalone native SwiftUI dashboard and menu-bar
+  app, opening those web surfaces explicitly in the default browser. Both use
+  a native SwiftTerm terminal speaking the ttyd protocol
   (the same one `web/term/app.js` documents), and an optional embedded
   Tailscale node (TailscaleKit) so a device needs no VPN profile. Build and
   distribution details live in `clients/apple/README.md`; CI is

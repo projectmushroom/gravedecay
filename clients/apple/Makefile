@@ -3,8 +3,9 @@
 
 XCODEGEN ?= xcodegen
 LIBTAILSCALE_REPO ?= https://github.com/tailscale/libtailscale
+SIGNING ?= CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY=''
 
-.PHONY: project project-embedded tailscale test clean
+.PHONY: project project-embedded tailscale test package-dmg clean
 
 ## Generate Gravedecay.xcodeproj (no TailscaleKit — Tailscale VPN app mode).
 project:
@@ -33,6 +34,12 @@ vendor/libtailscale:
 ## Run the platform-independent core tests (works on macOS and Linux).
 test:
 	swift test --package-path GravedecayKit
+
+## Build a Universal 2 Release app, then a mountable DMG.  Set BUILD_DIR to
+## keep Xcode output out of DerivedData; NOTARY_PROFILE optionally notarizes.
+package-dmg: project
+	xcodebuild -project Gravedecay.xcodeproj -scheme Gravedecay-macOS -configuration Release build $(SIGNING) ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO -skipPackagePluginValidation
+	APP="$$(find "$(HOME)/Library/Developer/Xcode/DerivedData" -path '*/Build/Products/Release/Gravedecay.app' -print -quit)" scripts/package-macos-dmg.sh
 
 clean:
 	rm -rf Gravedecay.xcodeproj App/Generated Vendor vendor \

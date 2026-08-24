@@ -1,17 +1,17 @@
 # Gravedecay for iOS & macOS
 
-One native app for the box's three web surfaces — T3 (`/`), the dashboard
-(`/grave/`), and the terminal — plus a **native SwiftTerm terminal** that
-speaks the ttyd 1.7.7 websocket protocol directly (same protocol as
-`web/term/app.js`, see docs/TERMINAL.md), and an optional **embedded
-Tailscale node** so the app needs no VPN profile at all.
+iOS is a compact client for the box's web surfaces and native SwiftTerm
+terminal. macOS is a standalone, Universal 2 native application: it lives in
+the Dock and menu bar, renders its System, Work, Network, Appliances, and
+Settings surfaces in SwiftUI, and uses no local Python service or webview.
+T3 and a box's full legacy dashboard deliberately open in the default browser.
 
 ## Layout
 
 | Piece | What |
 |---|---|
 | `GravedecayKit/` | SwiftPM package: ttyd protocol + flow control, box URL layout, websocket transport. Platform-independent, tested on Linux and macOS in CI. |
-| `App/Sources/` | SwiftUI app (one codebase, iOS 17+ / macOS 15+). Webview panes, native terminal, settings, and the macOS menu bar. |
+| `App/Sources/` | SwiftUI app (iOS 17+ / macOS 15+). iOS web panes; macOS-native dashboard, menu bar, browser hand-offs, and SwiftTerm. |
 | `project.yml` | XcodeGen spec — base build, connectivity via the Tailscale VPN app. |
 | `project-embedded.yml` | Overlay adding TailscaleKit (in-app tailnet node). |
 
@@ -31,12 +31,16 @@ make project-embedded
 The app code adapts via `#if canImport(TailscaleKit)` — both projects build
 from the same sources.
 
-## macOS menu bar
+## Native macOS app
 
-The macOS app is menu-bar-only (`LSUIElement`): it has no Dock icon, but
-**Open Gravedecay** brings forward the normal native app window (T3,
-dashboard, and terminal). On launch, opening the menu, manual refresh, and
-about every 45 seconds it runs `tailscale status --json`, preferring
+The macOS app is a normal Dock app with a menu-bar summary. Its native
+window reads unprivileged macOS system state, scans a chosen work folder for
+Git repositories, reads GitHub CLI authentication status, optionally reads
+assigned Linear issues using an app-owned Keychain key, discovers tailnet
+appliances, and hosts the native terminal. It opens T3 and legacy dashboards
+in the default browser; `WebPane` is compiled only for iOS.
+
+On launch, opening the menu, manual refresh, and about every 45 seconds it runs `tailscale status --json`, preferring
 `/usr/local/bin/tailscale` then the CLI inside Tailscale.app. It sets
 `TAILSCALE_BE_CLI=1` and never changes Tailscale login, Serve, or preferences.
 
@@ -94,8 +98,11 @@ lipo -info ~/Library/Developer/Xcode/DerivedData/Gravedecay-*/Build/Products/Rel
 
 ## Distribution notes
 
-- macOS: this first workflow is unsigned local Release output; Developer ID,
-  notarization, and DMG packaging are intentionally not included yet.
+`make package-dmg` creates an unsigned, mountable Universal 2 DMG at
+`build/Gravedecay-macOS.dmg`; CI publishes that artifact. Set
+`NOTARY_PROFILE` to a configured `notarytool` Keychain profile to submit and
+staple a release DMG. Developer ID signing is intentionally opt-in through
+the normal Xcode `CODE_SIGN_IDENTITY` environment/build setting.
 - iOS personal: development signing / TestFlight ($99 dev account).
 - iOS public (EU): AltStore PAL self-publishing — Apple notarization only,
   host the signed package ourselves.

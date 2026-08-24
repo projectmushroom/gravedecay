@@ -10,8 +10,12 @@ struct GravedecayApp: App {
 
     var body: some Scene {
         WindowGroup(id: "main") {
+            #if os(macOS)
+            MacNativeContentView(graves: graveMenu)
+            #else
             ContentView()
                 .environmentObject(model)
+            #endif
         }
         #if os(macOS)
         MenuBarExtra("Gravedecay", systemImage: menuIcon) {
@@ -70,6 +74,7 @@ struct ContentView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
+        #if os(iOS)
         if let box = model.box {
             TabView {
                 WebPane(url: box.t3URL, proxy: model.proxy)
@@ -94,6 +99,9 @@ struct ContentView: View {
         } else {
             SetupView()
         }
+        #else
+        EmptyView()
+        #endif
     }
 }
 

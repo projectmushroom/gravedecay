@@ -63,7 +63,8 @@ targets:
       path: App/Generated/Info-macOS.plist
       properties:
         CFBundleDisplayName: Gravedecay
-        LSUIElement: true
+        # A normal Dock application that also has a menu-bar extra.
+        LSUIElement: false
     entitlements:
       path: App/Generated/Gravedecay-macOS.entitlements
       properties:

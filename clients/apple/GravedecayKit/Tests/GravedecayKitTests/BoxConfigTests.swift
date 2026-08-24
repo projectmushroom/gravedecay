@@ -35,4 +35,9 @@ final class BoxConfigTests: XCTestCase {
         XCTAssertEqual(box.terminalWebSocketURL(arg: "agents").absoluteString,
                        "wss://box.ts.net/term/ws?arg=agents")
     }
+
+    func testGitPorcelainCount() {
+        XCTAssertEqual(WorkStatus.changedFileCount(""), 0)
+        XCTAssertEqual(WorkStatus.changedFileCount(" M one\n?? two\n"), 2)
+    }
 }

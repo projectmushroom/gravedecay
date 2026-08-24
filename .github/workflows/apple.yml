@@ -48,6 +48,19 @@ jobs:
             -configuration Release build CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY='' ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO -skipPackagePluginValidation
           lipo -info ~/Library/Developer/Xcode/DerivedData/Gravedecay-*/Build/Products/Release/Gravedecay.app/Contents/MacOS/Gravedecay
           lipo ~/Library/Developer/Xcode/DerivedData/Gravedecay-*/Build/Products/Release/Gravedecay.app/Contents/MacOS/Gravedecay -verify_arch arm64 x86_64
+      - name: Package and inspect DMG
+        working-directory: clients/apple
+        run: |
+          APP="$(find ~/Library/Developer/Xcode/DerivedData -path '*/Build/Products/Release/Gravedecay.app' -print -quit)" scripts/package-macos-dmg.sh
+          hdiutil attach build/Gravedecay-macOS.dmg -nobrowse -readonly
+          test -d /Volumes/Gravedecay/Gravedecay.app
+          hdiutil detach /Volumes/Gravedecay
+      - name: Upload macOS DMG
+        if: matrix.runner == 'macos-15'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Gravedecay-macOS-unsigned
+          path: clients/apple/build/Gravedecay-macOS.dmg
       - name: Build iOS app (simulator)
         working-directory: clients/apple
         run: >
