@@ -19,6 +19,9 @@ struct GravedecayApp: App {
             #endif
         }
         #if os(macOS)
+        .defaultSize(width: 1040, height: 680)
+        #endif
+        #if os(macOS)
         MenuBarExtra("Gravedecay", systemImage: menuIcon) {
             GraveMenuView(model: graveMenu)
                 .onAppear { graveMenu.refresh() }
@@ -59,7 +62,7 @@ private struct GraveMenuView: View {
             Divider()
             Button("Open Gravedecay") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
             Button("Quit Gravedecay") { NSApp.terminate(nil) }
-        }.padding().frame(width: 390)
+        }.padding().frame(width: 390).graveRoot()
     }
     private var condition: GravePresentation.Condition { GravePresentation.condition(summary: model.selected?.summary, reachable: model.selected?.reachable ?? false) }
     static func icon(for condition: GravePresentation.Condition) -> String { switch condition { case .unreachable: return "wifi.slash"; case .warning: return "exclamationmark.triangle.fill"; case .active: return "bolt.circle.fill"; case .frozen: return "snowflake"; case .healthy: return "checkmark.circle.fill" } }
