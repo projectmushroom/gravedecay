@@ -20,6 +20,7 @@ struct GravedecayApp: App {
         }
         #if os(macOS)
         .defaultSize(width: 1040, height: 680)
+        .windowStyle(.hiddenTitleBar)
         #endif
         #if os(macOS)
         MenuBarExtra("Gravedecay", systemImage: menuIcon) {
@@ -29,8 +30,8 @@ struct GravedecayApp: App {
         .menuBarExtraStyle(.window)
         Settings {
             MacSettingsView(model: macDashboard)
-                .frame(width: 420)
-                .padding()
+                .frame(width: 520, height: 620)
+                .graveRoot()
         }
         #endif
     }
@@ -46,30 +47,30 @@ private struct GraveMenuView: View {
     @Environment(\.openWindow) private var openWindow
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack { Label("Gravedecay", systemImage: "cross.case.fill").font(.headline); Spacer(); Button("Refresh", systemImage: "arrow.clockwise") { model.refresh() }.accessibilityLabel("Refresh appliances") }
-            if model.graves.count > 1 { Picker("Appliance", selection: $model.selectedID) { ForEach(model.graves) { Text($0.candidate.name).tag(Optional($0.id)) } }.pickerStyle(.menu) }
+            HStack { Image(systemName: "cross.case.fill").foregroundStyle(GraveTheme.ink); Text("GRAVEDECAY").tracking(1.2).foregroundStyle(GraveTheme.amber); Spacer(); Button("↻ REFRESH") { model.refresh() }.buttonStyle(GraveButton()).accessibilityLabel("Refresh appliances") }.font(.system(size: 11, weight: .bold, design: .monospaced))
+            if model.graves.count > 1 { Picker("APPLIANCE", selection: $model.selectedID) { ForEach(model.graves) { Text($0.candidate.name.uppercased()).tag(Optional($0.id)) } }.pickerStyle(.menu).tint(GraveTheme.amber).font(.system(size: 10, design: .monospaced)) }
             if let grave = model.selected, let summary = grave.summary {
                 VStack(alignment: .leading, spacing: 5) {
-                    Label(title(for: condition), systemImage: Self.icon(for: condition)).foregroundStyle(color(for: condition))
-                    Text("\(summary.node.host) · \(summary.node.mode) · \(summary.node.platform)").font(.subheadline)
-                    Text("CPU \(GravePresentation.percent(summary.resources.cpu_pct))   Memory \(GravePresentation.percent(summary.resources.memory_pct))   Disk \(GravePresentation.percent(summary.resources.disk_pct))").accessibilityLabel("CPU \(GravePresentation.percent(summary.resources.cpu_pct)), memory \(GravePresentation.percent(summary.resources.memory_pct)), disk \(GravePresentation.percent(summary.resources.disk_pct))")
-                    Text("Temp CPU \(GravePresentation.temperature(summary.resources.cpu_temp_c)) · GPU \(GravePresentation.temperature(summary.resources.gpu_temp_c))")
-                    Text("\(summary.activity.sessions_live) active · \(summary.activity.sessions_frozen) frozen · \(summary.problems) problems")
-                    Text("Uptime \(GravePresentation.uptime(summary.node.uptime_s)) · observed \(GravePresentation.age(summary.observed_at))").foregroundStyle(.secondary)
+                    HStack { Rectangle().fill(color(for: condition)).frame(width: 8, height: 8); Text(title(for: condition).uppercased()) }.foregroundStyle(color(for: condition))
+                    Text("\(summary.node.host) // \(summary.node.mode) // \(summary.node.platform)").foregroundStyle(GraveTheme.muted)
+                    HStack(spacing: 6) { menuTile("CPU", GravePresentation.percent(summary.resources.cpu_pct), GraveTheme.good); menuTile("MEM", GravePresentation.percent(summary.resources.memory_pct), GraveTheme.ink2); menuTile("DISK", GravePresentation.percent(summary.resources.disk_pct), GraveTheme.amber) }.accessibilityLabel("CPU \(GravePresentation.percent(summary.resources.cpu_pct)), memory \(GravePresentation.percent(summary.resources.memory_pct)), disk \(GravePresentation.percent(summary.resources.disk_pct))")
+                    Text("TEMP CPU \(GravePresentation.temperature(summary.resources.cpu_temp_c)) // GPU \(GravePresentation.temperature(summary.resources.gpu_temp_c))").foregroundStyle(GraveTheme.muted)
+                    Text("\(summary.activity.sessions_live) ACTIVE // \(summary.activity.sessions_frozen) FROZEN // \(summary.problems) PROBLEMS").foregroundStyle(summary.problems > 0 ? GraveTheme.crit : GraveTheme.ink2)
+                    Text("UP \(GravePresentation.uptime(summary.node.uptime_s)) // SEEN \(GravePresentation.age(summary.observed_at))").foregroundStyle(GraveTheme.muted)
                     HStack { link("Dashboard", summary.links.dashboard); link("T3", summary.links.t3); link("Terminal", summary.links.terminal); link("Network", summary.links.network) }
-                }
-            } else { Text(message).foregroundStyle(.secondary) }
-            Divider()
-            Button("Open Gravedecay") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
-            Button("Quit Gravedecay") { NSApp.terminate(nil) }
+                }.font(.system(size: 9, design: .monospaced))
+            } else { Text(message.uppercased()).font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.muted) }
+            Rectangle().fill(GraveTheme.ring).frame(height: 1)
+            HStack { Button("OPEN APP") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }; Button("QUIT") { NSApp.terminate(nil) } }.buttonStyle(GraveButton())
         }.padding().frame(width: 390).graveRoot()
     }
     private var condition: GravePresentation.Condition { GravePresentation.condition(summary: model.selected?.summary, reachable: model.selected?.reachable ?? false) }
     static func icon(for condition: GravePresentation.Condition) -> String { switch condition { case .unreachable: return "wifi.slash"; case .warning: return "exclamationmark.triangle.fill"; case .active: return "bolt.circle.fill"; case .frozen: return "snowflake"; case .healthy: return "checkmark.circle.fill" } }
     private func title(for condition: GravePresentation.Condition) -> String { switch condition { case .unreachable: return "Unreachable (last summary)"; case .warning: return "Reachable · Warning"; case .active: return "Reachable · Active"; case .frozen: return "Reachable · Frozen"; case .healthy: return "Reachable · Healthy" } }
-    private func color(for condition: GravePresentation.Condition) -> Color { switch condition { case .warning: return .orange; case .active: return .blue; case .frozen: return .cyan; case .healthy: return .green; case .unreachable: return .secondary } }
+    private func color(for condition: GravePresentation.Condition) -> Color { switch condition { case .warning: return GraveTheme.amber; case .active, .healthy: return GraveTheme.good; case .frozen: return GraveTheme.accentSoft; case .unreachable: return GraveTheme.muted } }
     private var message: String { switch model.state { case .scanning: return "Discovering tailnet appliances…"; case .missingTailscale: return "Tailscale CLI not found. Install the Tailscale app."; case .loggedOut: return "Tailscale is logged out. Sign in with the Tailscale app."; case .noAppliances: return "No reachable Gravedecay appliances found."; default: return "Waiting to discover appliances…" } }
-    @ViewBuilder private func link(_ title: String, _ path: String?) -> some View { if let grave = model.selected, GravePresentation.link(host: grave.candidate.dns, path: path) != nil { Button(title) { model.open(path) } } }
+    @ViewBuilder private func link(_ title: String, _ path: String?) -> some View { if let grave = model.selected, GravePresentation.link(host: grave.candidate.dns, path: path) != nil { Button(title.uppercased()) { model.open(path) }.buttonStyle(GraveButton()) } }
+    private func menuTile(_ label: String, _ value: String, _ color: Color) -> some View { VStack(alignment: .leading, spacing: 2) { Text(label).foregroundStyle(GraveTheme.muted); Text(value).foregroundStyle(color) }.frame(maxWidth: .infinity, alignment: .leading).padding(6).background(GraveTheme.inset).overlay(Rectangle().stroke(GraveTheme.hairline)) }
 }
 #endif
 

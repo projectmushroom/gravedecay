@@ -48,7 +48,9 @@ targets:
   Gravedecay-macOS:
     type: application
     platform: macOS
-    sources: [App/Sources]
+    sources:
+      - path: App/Sources
+        excludes: [WebPane.swift]
     dependencies:
       - package: GravedecayKit
       - package: SwiftTerm

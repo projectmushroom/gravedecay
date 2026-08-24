@@ -18,13 +18,14 @@ struct MacNativeContentView: View {
     var body: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("☠").font(.system(size: 38)); Text("gravedecay").font(.system(size: 15, weight: .bold, design: .monospaced)).foregroundStyle(GraveTheme.ink)
+                Image(systemName: "cross.case.fill").font(.system(size: 32, weight: .light)).foregroundStyle(GraveTheme.ink).shadow(color: GraveTheme.good.opacity(0.45), radius: 8)
+                Text("gravedecay").font(.system(size: 15, weight: .bold, design: .monospaced)).foregroundStyle(GraveTheme.ink)
                 Text("MACOS NATIVE // ONLINE").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.good).padding(.bottom, 18)
                 ForEach([(Section.system,"THIS MAC","desktopcomputer"),(Section.work,"WORK","folder"),(Section.network,"NETWORK","network"),(Section.appliances,"APPLIANCES","server.rack"),(Section.terminal,"TERMINAL","terminal"),(Section.settings,"SETTINGS","gearshape")], id: \.0) { item in
                     Button { selection = item.0 } label: { HStack { Text(selection == item.0 ? "[" : " "); Image(systemName: item.2); Text(item.1).tracking(1); Spacer(); Text(selection == item.0 ? "]" : " ") }.frame(height: 30) }.buttonStyle(.plain).foregroundStyle(selection == item.0 ? GraveTheme.amber : GraveTheme.muted)
                 }
                 Spacer(); Text("NO WEBVIEW // NO DAEMON").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.muted)
-            }.padding(18).frame(width: 210).background(GraveTheme.inset).overlay(alignment: .trailing) { Rectangle().fill(GraveTheme.ring).frame(width: 1) }
+            }.padding(18).padding(.top, 22).frame(width: 210).background(GraveTheme.inset).overlay(alignment: .trailing) { Rectangle().fill(GraveTheme.ring).frame(width: 1) }
             VStack(spacing: 0) {
                 HStack { Text(title).font(.system(size: 14, weight: .bold, design: .monospaced)).tracking(1.4).foregroundStyle(GraveTheme.ink); Spacer(); Text(model.snapshot?.model ?? "SCANNING").font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.muted); Button("↻ REFRESH") { model.refresh(); graves.refresh() }.buttonStyle(GraveButton()) }.padding(.horizontal, 22).frame(height: 54).background(GraveTheme.surface).overlay(alignment: .bottom) { Rectangle().fill(GraveTheme.ring).frame(height: 1) }
                 Group {
@@ -40,7 +41,7 @@ struct MacNativeContentView: View {
             }.background(GraveTheme.page)
         }
         .task { model.refresh(); graves.refresh() }
-        .frame(minWidth: 900, minHeight: 600).graveRoot()
+        .frame(minWidth: 900, minHeight: 600).graveRoot().background(GraveTheme.page.ignoresSafeArea())
     }
     private var title: String { switch selection { case .system: "SYSTEM // THIS MAC"; case .work: "WORK // REPOSITORIES"; case .network: "NETWORK // INTERFACES"; case .appliances: "TAILNET // APPLIANCES"; case .terminal: "TERMINAL // REMOTE"; case .settings: "SETTINGS // LOCAL" } }
 }
@@ -50,7 +51,7 @@ private struct SystemView: View {
     var body: some View {
         ScrollView { VStack(alignment: .leading, spacing: 20) { Text("HOST VITALS").font(.system(size: 10, weight: .bold, design: .monospaced)).tracking(1.4).foregroundStyle(GraveTheme.amber)
             if let s = snapshot { LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 12)], spacing: 12) {
-                MetricCard(title: "CPU TOTAL", value: s.cpu, detail: "\(s.cores) CORES // LOAD \(s.load)", percent: s.cpuPercent)
+                MetricCard(title: "CPU TOTAL", value: s.cpu, detail: s.cpuDetail, percent: s.cpuPercent)
                 MetricCard(title: "MEMORY PRESSURE", value: s.memory, detail: s.memoryDetail, percent: s.memoryPercent)
                 MetricCard(title: "DISK", value: s.disk, detail: s.diskDetail, percent: s.diskPercent)
                 MetricCard(title: "THERMAL", value: s.thermal, detail: s.thermalDetail, percent: nil)
@@ -73,42 +74,66 @@ private struct MetricCard: View {
 private struct WorkView: View {
     @ObservedObject var model: MacDashboardModel
     var body: some View {
-        ScrollView { VStack(alignment: .leading, spacing: 18) { GravePanel("integrations") { HStack { Text(model.githubStatus); Spacer(); Text(model.linearStatus) }.font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.muted) }
+        ScrollView { VStack(alignment: .leading, spacing: 18) { GravePanel("integrations") { HStack(spacing: 16) { IntegrationBadge(label: model.githubStatus, good: model.githubStatus.contains("authenticated")); IntegrationBadge(label: model.linearStatus, good: model.linearStatus.contains("assigned")); Spacer() } }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 360), spacing: 12)], spacing: 14) {
                 ForEach(model.repositories) { repo in GravePanel(repo.name) { VStack(alignment: .leading, spacing: 6) {
-                        HStack { Text(repo.name).font(.headline); Spacer(); Text(repo.branch).foregroundStyle(.secondary) }
-                        Text(repo.detail).font(.subheadline).foregroundStyle(repo.dirty ? .orange : .secondary)
-                        Text(repo.lastCommit).font(.caption).foregroundStyle(.secondary)
-                        if let github = repo.github { Text(github).font(.caption).foregroundStyle(.secondary) }
-                        if let url = repo.githubURL { Link("Open GitHub", destination: url).font(.caption) }
-                        ForEach(repo.pullRequests) { row in Link("PR #\(row.number) · \(row.state) · \(row.title)", destination: row.url).font(.caption) }
-                        ForEach(repo.issues) { row in Link("Issue #\(row.number) · \(row.state) · \(row.title)", destination: row.url).font(.caption) }
-                        if let ci = repo.latestCI { Link("CI #\(ci.number) · \(ci.state) · \(ci.title)", destination: ci.url).font(.caption) }
+                        HStack { StatusSquare(good: !repo.dirty); Text(repo.name.uppercased()).font(.system(size: 12, weight: .bold, design: .monospaced)).foregroundStyle(GraveTheme.ink); Spacer(); Text("[ \(repo.branch) ]").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.accentSoft) }
+                        Text(repo.detail.uppercased()).font(.system(size: 9, design: .monospaced)).foregroundStyle(repo.dirty ? GraveTheme.amber : GraveTheme.muted)
+                        Text(repo.lastCommit).font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.ink2).lineLimit(1)
+                        if let github = repo.github { Text(github.uppercased()).font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.muted) }
+                        if let url = repo.githubURL { WorkLink(prefix: "GH", title: "OPEN REPOSITORY", state: "REMOTE", url: url, good: true) }
+                        ForEach(repo.pullRequests) { row in WorkLink(prefix: "PR #\(row.number)", title: row.title, state: row.state, url: row.url, good: row.state.lowercased() == "open") }
+                        ForEach(repo.issues) { row in WorkLink(prefix: "ISSUE #\(row.number)", title: row.title, state: row.state, url: row.url, good: row.state.lowercased() == "open") }
+                        if let ci = repo.latestCI { WorkLink(prefix: "CI #\(ci.number)", title: ci.title, state: ci.state, url: ci.url, good: ci.state.lowercased() == "success") }
                     }}
                 }
             }; if model.repositories.isEmpty { Text("[ NO REPOSITORIES // CONFIGURE WORK ROOT ]").foregroundStyle(GraveTheme.muted) }
-            if !model.linearIssues.isEmpty { GravePanel("linear // assigned") { VStack(alignment: .leading) { ForEach(model.linearIssues) { issue in Link("■  \(issue.identifier)  \(issue.title)", destination: issue.url).foregroundStyle(GraveTheme.amber) } } } }
+            if !model.linearIssues.isEmpty { GravePanel("linear // assigned") { VStack(alignment: .leading, spacing: 7) { ForEach(model.linearIssues) { issue in WorkLink(prefix: issue.identifier, title: issue.title, state: "ASSIGNED", url: issue.url, good: true) } } } }
         }.frame(maxWidth: 980).padding(24) }.background(GraveTheme.page)
     }
+}
+
+private struct IntegrationBadge: View {
+    let label: String; let good: Bool
+    var body: some View { HStack(spacing: 6) { StatusSquare(good: good); Text(label.uppercased()).lineLimit(1) }.font(.system(size: 9, weight: .medium, design: .monospaced)).foregroundStyle(good ? GraveTheme.ink2 : GraveTheme.muted).padding(.vertical, 5).padding(.horizontal, 7).background(GraveTheme.inset).overlay(Rectangle().stroke(GraveTheme.hairline)) }
+}
+
+private struct WorkLink: View {
+    let prefix, title, state: String; let url: URL; let good: Bool
+    var body: some View { Link(destination: url) { HStack(spacing: 7) { StatusSquare(good: good); Text(prefix).foregroundStyle(GraveTheme.amber); Text(title).foregroundStyle(GraveTheme.ink2).lineLimit(1); Spacer(); Text(state.uppercased()).foregroundStyle(GraveTheme.muted) }.font(.system(size: 9, design: .monospaced)).padding(.vertical, 2) }.buttonStyle(.plain) }
 }
 
 private struct NetworkView: View {
     @ObservedObject var model: MacDashboardModel
     var body: some View {
-        ScrollView { VStack(spacing: 18) { GravePanel("tailscale topology") { HStack { StatusSquare(good: model.tailnetStatus == "Running"); Text(model.tailnetStatus.uppercased()); Spacer(); Text(model.tailnetName).foregroundStyle(GraveTheme.muted) } }; GravePanel("active interface totals") { Text(model.networkActivity).foregroundStyle(GraveTheme.ink); Text("RX TOTALS IN GREEN // TX TOTALS IN AMBER").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.muted).padding(.top, 5) }; Text("READ-ONLY // TAILSCALE STATE IS NEVER CHANGED").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.muted) }.frame(maxWidth: 980).padding(24) }.background(GraveTheme.page)
+        ScrollView { VStack(alignment: .leading, spacing: 18) { GravePanel("tailscale topology") { HStack { StatusSquare(good: model.tailnetStatus == "Running"); Text(model.tailnetStatus.uppercased()).foregroundStyle(GraveTheme.ink2); Spacer(); Text(model.tailnetName).foregroundStyle(GraveTheme.muted) }.font(.system(size: 10, design: .monospaced)) }
+            Text("ACTIVE INTERFACE TOTALS").font(.system(size: 10, weight: .bold, design: .monospaced)).tracking(1.2).foregroundStyle(GraveTheme.amber)
+            if model.networkInterfaces.isEmpty { ThemedEmpty(title: "NO ACTIVE INTERFACES", detail: "BYTE TOTALS ARE CURRENTLY UNAVAILABLE") }
+            else { LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 12)], spacing: 12) { ForEach(model.networkInterfaces) { InterfaceCard(interface: $0) } } }
+            Text("READ-ONLY // TAILSCALE STATE IS NEVER CHANGED // COUNTERS ARE TOTALS").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.muted)
+        }.frame(maxWidth: 980).padding(24) }.background(GraveTheme.page)
     }
+}
+
+private struct InterfaceCard: View {
+    let interface: NetworkInterface
+    var total: Double { Double(max(1, interface.received + interface.sent)) }
+    var body: some View { GravePanel(interface.name) { VStack(alignment: .leading, spacing: 10) {
+        HStack { VStack(alignment: .leading, spacing: 3) { Text("RX TOTAL").foregroundStyle(GraveTheme.muted); Text(formatBytes(interface.received)).foregroundStyle(GraveTheme.good) }; Spacer(); VStack(alignment: .trailing, spacing: 3) { Text("TX TOTAL").foregroundStyle(GraveTheme.muted); Text(formatBytes(interface.sent)).foregroundStyle(GraveTheme.amber) } }.font(.system(size: 11, weight: .medium, design: .monospaced))
+        GeometryReader { proxy in HStack(spacing: 2) { Rectangle().fill(GraveTheme.good).frame(width: max(2, proxy.size.width * CGFloat(Double(interface.received) / total))); Rectangle().fill(GraveTheme.amber) } }.frame(height: 5).background(GraveTheme.hairline)
+    } } }
 }
 
 private struct AppliancesView: View {
     @ObservedObject var graves: GraveMenuModel
     var body: some View {
         ScrollView { LazyVGrid(columns: [GridItem(.adaptive(minimum: 330), spacing: 12)], spacing: 14) {
-            if graves.graves.isEmpty { ContentUnavailableView("No appliances", systemImage: "server.rack", description: Text("Sign into the Tailscale app, then refresh.")) }
+            if graves.graves.isEmpty { ThemedEmpty(title: "NO APPLIANCES", detail: "SIGN INTO THE TAILSCALE APP, THEN REFRESH") }
             ForEach(graves.graves) { grave in
                 GravePanel(grave.candidate.name) { VStack(alignment: .leading, spacing: 7) {
-                    HStack { Label(grave.candidate.name, systemImage: icon(for: GravePresentation.condition(summary: grave.summary, reachable: grave.reachable))); Spacer(); Text(grave.reachable ? "Online" : "Unreachable").foregroundStyle(grave.reachable ? .green : .secondary) }
-                    if let summary = grave.summary { Text("\(summary.node.platform) · \(summary.problems) problems · CPU \(GravePresentation.percent(summary.resources.cpu_pct))").foregroundStyle(.secondary) }
-                    if let s = grave.summary { HStack { Text("MEM \(GravePresentation.percent(s.resources.memory_pct))"); Text("DISK \(GravePresentation.percent(s.resources.disk_pct))"); Spacer(); Text("UP \(GravePresentation.uptime(s.node.uptime_s))") }.font(.caption).foregroundStyle(GraveTheme.muted); HStack { Text("SESSIONS \(s.activity.sessions_live)"); Text("PROBLEMS \(s.problems)").foregroundStyle(s.problems > 0 ? GraveTheme.crit : GraveTheme.good) } }
+                    HStack { StatusSquare(good: grave.reachable); Image(systemName: icon(for: GravePresentation.condition(summary: grave.summary, reachable: grave.reachable))); Text(grave.candidate.name.uppercased()).fontWeight(.bold); Spacer(); Text(grave.reachable ? "ONLINE" : "UNREACHABLE").foregroundStyle(grave.reachable ? GraveTheme.good : GraveTheme.muted) }.font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.ink)
+                    if let summary = grave.summary { Text("\(summary.node.platform.uppercased()) // CPU \(GravePresentation.percent(summary.resources.cpu_pct))").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.ink2) }
+                    if let s = grave.summary { VStack(alignment: .leading, spacing: 5) { HStack { Text("MEM \(GravePresentation.percent(s.resources.memory_pct))"); Text("DISK \(GravePresentation.percent(s.resources.disk_pct))"); Spacer(); Text("UP \(GravePresentation.uptime(s.node.uptime_s))") }.foregroundStyle(GraveTheme.muted); HStack { Text("SESSIONS \(s.activity.sessions_live)"); Text("PROBLEMS \(s.problems)").foregroundStyle(s.problems > 0 ? GraveTheme.crit : GraveTheme.good) } }.font(.system(size: 9, design: .monospaced)) }
                     HStack { BrowserButton(title: "T3", host: grave.candidate.dns, path: "/"); BrowserButton(title: "DASHBOARD", host: grave.candidate.dns, path: grave.summary?.links.dashboard ?? "/grave/"); Button("TERMINAL") { graves.selectedID = grave.id }.buttonStyle(GraveButton()) }
                 }}.contentShape(Rectangle()).onTapGesture { graves.selectedID = grave.id }
             }
@@ -129,7 +154,7 @@ private struct TerminalDestination: View {
     @ObservedObject var graves: GraveMenuModel
     var body: some View {
         if let grave = graves.selected, let box = BoxConfig(input: grave.candidate.dns) { VStack(spacing: 0) { HStack { StatusSquare(good: grave.reachable); Text("CONNECTED // \(grave.candidate.name.uppercased())"); Spacer() }.font(.system(size: 10, design: .monospaced)).padding(10).background(GraveTheme.surface); TerminalPane(box: box, urlSession: .shared).padding(1).background(GraveTheme.ring) }.padding(20).background(GraveTheme.page) }
-        else { ContentUnavailableView("Choose an appliance", systemImage: "terminal", description: Text("Use the Appliances view after Tailscale discovery completes.")) }
+        else { ThemedEmpty(title: "CHOOSE AN APPLIANCE", detail: "SELECT A TARGET IN APPLIANCES AFTER TAILSCALE DISCOVERY") .padding(24).frame(maxWidth: .infinity, maxHeight: .infinity).background(GraveTheme.page) }
     }
 }
 
@@ -137,7 +162,7 @@ struct MacSettingsView: View {
     @ObservedObject var model: MacDashboardModel
     @State private var root = ""; @State private var linearKey = ""
     var body: some View {
-        ScrollView { VStack(spacing: 20) { GravePanel("work root") { VStack(alignment: .leading, spacing: 9) { TextField("Repository folder", text: $root).textFieldStyle(.plain).padding(8).background(GraveTheme.inset).overlay(Rectangle().stroke(GraveTheme.hairline)); Button("SAVE ROOT") { model.setWorkRoot(root) }.buttonStyle(GraveButton()); if let status = model.workRootStatus { Text(status).foregroundStyle(GraveTheme.crit) } } }; GravePanel("linear // read-only") { VStack(alignment: .leading, spacing: 9) { SecureField("lin_api_…", text: $linearKey).textFieldStyle(.plain).padding(8).background(GraveTheme.inset).overlay(Rectangle().stroke(GraveTheme.hairline)); HStack { Button("SAVE KEY") { model.saveLinearKey(linearKey); linearKey = "" }; Button("REMOVE KEY") { model.removeLinearKey() } }.buttonStyle(GraveButton()); Text(model.keychainStatus).foregroundStyle(GraveTheme.muted) } }; GravePanel("startup") { Toggle("LAUNCH AT LOGIN", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) })); if let error = model.launchAtLoginError { Text(error).foregroundStyle(GraveTheme.crit) } }; GravePanel("about") { Text("NATIVE MACOS 15+ // T3 AND LEGACY DASHBOARDS OPEN IN YOUR BROWSER").foregroundStyle(GraveTheme.muted) } }.frame(maxWidth: 760).padding(24) }.background(GraveTheme.page).onAppear { root = model.workRoot }
+        ScrollView { VStack(spacing: 20) { GravePanel("work root") { VStack(alignment: .leading, spacing: 9) { Text("LOCAL DIRECTORY SCANNED FOR GIT REPOSITORIES").foregroundStyle(GraveTheme.muted); TextField("Repository folder", text: $root).textFieldStyle(.plain).padding(8).background(GraveTheme.inset).overlay(Rectangle().stroke(GraveTheme.hairline)); Button("SAVE ROOT") { model.setWorkRoot(root) }.buttonStyle(GraveButton()); if let status = model.workRootStatus { Text(status).foregroundStyle(GraveTheme.crit) } } }; GravePanel("linear // read-only") { VStack(alignment: .leading, spacing: 9) { Text("THE TOKEN STAYS IN THIS MAC'S KEYCHAIN").foregroundStyle(GraveTheme.muted); SecureField("lin_api_…", text: $linearKey).textFieldStyle(.plain).padding(8).background(GraveTheme.inset).overlay(Rectangle().stroke(GraveTheme.hairline)); HStack { Button("SAVE KEY") { model.saveLinearKey(linearKey); linearKey = "" }; Button("REMOVE KEY") { model.removeLinearKey() } }.buttonStyle(GraveButton()); Text(model.keychainStatus).foregroundStyle(GraveTheme.muted) } }; GravePanel("startup") { Toggle("LAUNCH AT LOGIN", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) })).toggleStyle(.switch).tint(GraveTheme.good); if let error = model.launchAtLoginError { Text(error).foregroundStyle(GraveTheme.crit) } }; GravePanel("about") { Text("NATIVE MACOS 15+ // T3 AND LEGACY DASHBOARDS OPEN IN YOUR BROWSER").foregroundStyle(GraveTheme.muted) } }.font(.system(size: 10, design: .monospaced)).frame(maxWidth: 760).padding(24) }.background(GraveTheme.page).onAppear { root = model.workRoot }
     }
 }
 
@@ -148,9 +173,17 @@ private struct BrowserButton: View {
 
 private struct StatusSquare: View { let good: Bool; var body: some View { Rectangle().fill(good ? GraveTheme.good : GraveTheme.crit).frame(width: 8, height: 8).shadow(color: good ? GraveTheme.good : GraveTheme.crit, radius: 4) } }
 
+private struct ThemedEmpty: View {
+    let title, detail: String
+    var body: some View { GravePanel("status") { VStack(alignment: .leading, spacing: 7) { HStack { StatusSquare(good: false); Text(title).foregroundStyle(GraveTheme.ink) }; Text(detail).foregroundStyle(GraveTheme.muted) }.font(.system(size: 10, design: .monospaced)).frame(maxWidth: .infinity, minHeight: 76, alignment: .leading) } }
+}
+
+private func formatBytes(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .decimal).uppercased() }
+
 struct MacRepository: Identifiable { let path, name, branch, detail, lastCommit: String; let dirty: Bool; let github: String?; let githubURL: URL?; let pullRequests, issues: [GitHubRow]; let latestCI: GitHubRow?; var id: String { path } }
 struct LinearIssue: Identifiable { let identifier, title: String; let url: URL; var id: String { identifier } }
-struct MacSnapshot { let model, os, uptime, cpu, memory, disk, thermal, battery, swap: String; let cores: Int; let load, memoryDetail, diskDetail, thermalDetail, batteryDetail, swapDetail: String; let cpuPercent, memoryPercent, diskPercent, batteryPercent, swapPercent: Double? }
+struct NetworkInterface: Identifiable { let name: String; let received, sent: Int64; var id: String { name } }
+struct MacSnapshot { let model, os, uptime, cpu, memory, disk, thermal, battery, swap: String; let cpuDetail, memoryDetail, diskDetail, thermalDetail, batteryDetail, swapDetail: String; let cpuPercent, memoryPercent, diskPercent, batteryPercent, swapPercent: Double? }
 
 @MainActor
 final class MacDashboardModel: ObservableObject {
@@ -161,7 +194,7 @@ final class MacDashboardModel: ObservableObject {
     @Published private(set) var githubStatus = "Checking GitHub CLI…"
     @Published private(set) var linearStatus = "Linear not configured"
     @Published private(set) var linearIssues: [LinearIssue] = []
-    @Published private(set) var networkActivity = "Checking…"
+    @Published private(set) var networkInterfaces: [NetworkInterface] = []
     @Published private(set) var workRoot: String
     @Published private(set) var keychainStatus = "Stored in this Mac’s Keychain. Assigned issues are read-only."
     @Published private(set) var workRootStatus: String?
@@ -185,13 +218,12 @@ final class MacDashboardModel: ObservableObject {
         do { if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }; launchAtLogin = SMAppService.mainApp.status != .notRegistered; launchAtLoginError = SMAppService.mainApp.status == .requiresApproval ? "Launch at Login needs approval in System Settings." : nil }
         catch { launchAtLogin = SMAppService.mainApp.status != .notRegistered; launchAtLoginError = "Launch at Login: \(error.localizedDescription)" }
     }
-    private func apply(_ result: CollectionResult) { snapshot = result.snapshot; repositories = result.repositories; tailnetStatus = result.tailnetStatus; tailnetName = result.tailnetName; githubStatus = result.githubStatus; linearStatus = result.linearStatus; linearIssues = result.linearIssues; networkActivity = result.networkActivity }
+    private func apply(_ result: CollectionResult) { snapshot = result.snapshot; repositories = result.repositories; tailnetStatus = result.tailnetStatus; tailnetName = result.tailnetName; githubStatus = result.githubStatus; linearStatus = result.linearStatus; linearIssues = result.linearIssues; networkInterfaces = result.networkInterfaces }
 }
 
-private struct CollectionResult { let snapshot: MacSnapshot; let repositories: [MacRepository]; let tailnetStatus, tailnetName, githubStatus, linearStatus, networkActivity: String; let linearIssues: [LinearIssue] }
+private struct CollectionResult { let snapshot: MacSnapshot; let repositories: [MacRepository]; let tailnetStatus, tailnetName, githubStatus, linearStatus: String; let linearIssues: [LinearIssue]; let networkInterfaces: [NetworkInterface] }
 private enum MacCollector {
     @TaskLocal static var activeDeadline: Date?
-    static func percent(in text: String) -> Double? { text.range(of: "[0-9.]+%", options: .regularExpression).flatMap { Double(text[$0].dropLast()) } }
     static func collect(root: String, linearKey: String?, deadline: Date) -> CollectionResult? {
         Self.$activeDeadline.withValue(deadline) { collectBounded(root: root, linearKey: linearKey, deadline: deadline) }
     }
@@ -205,18 +237,32 @@ private enum MacCollector {
             let percent = Int((Double(total - available) / Double(total)) * 100)
             used = "\(percent)%"; diskPercent = Double(percent)
         } else { used = "—"; diskPercent = nil }
-        let memoryRaw = command("/usr/bin/memory_pressure", ["-Q"]) ?? ""
-        let memoryFree = percent(in: memoryRaw); let memoryUsed = memoryFree.map { 100 - $0 }
-        let memory = memoryUsed.map { String(format: "%.0f%%", $0) } ?? "—"
-        let cpu = NativeParsers.cpuUsage(command("/usr/bin/top", ["-l", "1", "-n", "0"]) ?? "") ?? "CPU activity unavailable"
-        let cpuPercent = percent(in: cpu)
+        let memoryStats = NativeParsers.memoryActivity(pressure: command("/usr/bin/memory_pressure", ["-Q"]) ?? "", vmStat: command("/usr/bin/vm_stat", []) ?? "")
+        let cpuStats = NativeParsers.cpuActivity(command("/usr/bin/top", ["-l", "1", "-n", "0"]) ?? "")
         let uptime = GravePresentation.uptime(ProcessInfo.processInfo.systemUptime)
-        let batteryRaw = command("/usr/bin/pmset", ["-g", "batt"]) ?? ""; let batteryPercent = percent(in: batteryRaw)
-        let thermalRaw = command("/usr/bin/pmset", ["-g", "therm"]) ?? ""; let throttled = thermalRaw.contains("Speed_Limit") && !thermalRaw.contains("Speed_Limit = 100")
-        let swapRaw = command("/usr/sbin/sysctl", ["-n", "vm.swapusage"]) ?? ""; let swapNumbers = swapRaw.matches("[0-9.]+M"); let swap = swapNumbers.count > 1 ? swapNumbers[1] : "—"
+        let batteryRaw = command("/usr/bin/pmset", ["-g", "batt"]) ?? ""; let batteryPercent = NativeParsers.batteryPercent(batteryRaw)
+        let thermalStats = NativeParsers.thermalActivity(command("/usr/bin/pmset", ["-g", "therm"]) ?? "")
+        let thermalAvailable = thermalStats.speedLimit != nil || thermalStats.availableCPUs != nil
+        let swapStats = NativeParsers.swapActivity(command("/usr/sbin/sysctl", ["-n", "vm.swapusage"]) ?? "")
         let load = command("/usr/sbin/sysctl", ["-n", "vm.loadavg"])?.replacingOccurrences(of: "{", with: "").replacingOccurrences(of: "}", with: "") ?? "—"
         let installed = ByteCountFormatter.string(fromByteCount: Int64(ProcessInfo.processInfo.physicalMemory), countStyle: .memory)
-        let snapshot = MacSnapshot(model: command("/usr/sbin/sysctl", ["-n", "hw.model"]) ?? "Mac", os: os, uptime: uptime, cpu: cpu, memory: memory, disk: used, thermal: throttled ? "THROTTLED" : "NOMINAL", battery: batteryPercent.map { String(format: "%.0f%%", $0) } ?? "N/A", swap: swap, cores: ProcessInfo.processInfo.processorCount, load: load, memoryDetail: "\(installed) INSTALLED", diskDetail: "\(ByteCountFormatter.string(fromByteCount: total - available, countStyle: .file)) USED", thermalDetail: throttled ? "SYSTEM LIMIT ACTIVE" : "NO LIMITS", batteryDetail: batteryRaw.contains("charging") ? "CHARGING" : batteryRaw.contains("AC Power") ? "AC POWER" : "DISCHARGING", swapDetail: swapNumbers.first.map { "\($0) TOTAL" } ?? "UNAVAILABLE", cpuPercent: cpuPercent, memoryPercent: memoryUsed, diskPercent: diskPercent, batteryPercent: batteryPercent, swapPercent: nil)
+        let cpuDetail = cpuStats.map { "USER \(String(format: "%.1f", $0.user))% // SYS \(String(format: "%.1f", $0.system))% // LOAD \(load) // \(ProcessInfo.processInfo.processorCount) CORES" } ?? "CPU SAMPLE UNAVAILABLE // LOAD \(load) // \(ProcessInfo.processInfo.processorCount) CORES"
+        let compressed = memoryStats.compressedBytes.map { formatBytes($0) } ?? "UNAVAILABLE"
+        let thermalLimits = [thermalStats.speedLimit.map { "CPU LIMIT \($0)%" }, thermalStats.availableCPUs.map { "\($0) AVAILABLE" }].compactMap { $0 }.joined(separator: " // ")
+        let snapshot = MacSnapshot(
+            model: command("/usr/sbin/sysctl", ["-n", "hw.model"]) ?? "Mac", os: os, uptime: uptime,
+            cpu: cpuStats.map { String(format: "%.0f%%", $0.total) } ?? "—",
+            memory: memoryStats.usedPercent.map { String(format: "%.0f%%", $0) } ?? "—", disk: used,
+            thermal: thermalAvailable ? (thermalStats.throttled ? "THROTTLED" : "NOMINAL") : "UNAVAILABLE",
+            battery: batteryPercent.map { String(format: "%.0f%%", $0) } ?? "N/A",
+            swap: swapStats.map { String(format: "%.0f%%", $0.usedPercent) } ?? "—",
+            cpuDetail: cpuDetail, memoryDetail: "\(installed.uppercased()) INSTALLED // \(compressed) COMPRESSED",
+            diskDetail: "\(formatBytes(total - available)) USED",
+            thermalDetail: thermalLimits.isEmpty ? "LIMITS UNAVAILABLE" : thermalLimits,
+            batteryDetail: batteryPercent == nil ? "UNAVAILABLE" : batteryRaw.contains("charging") ? "CHARGING" : batteryRaw.contains("AC Power") ? "AC POWER" : "DISCHARGING",
+            swapDetail: swapStats.map { "\(formatBytes($0.usedBytes)) USED // \(formatBytes($0.totalBytes)) TOTAL" } ?? "UNAVAILABLE",
+            cpuPercent: cpuStats?.total, memoryPercent: memoryStats.usedPercent, diskPercent: diskPercent, batteryPercent: batteryPercent, swapPercent: swapStats?.usedPercent
+        )
         let status = command("/usr/local/bin/tailscale", ["status", "--json"], environment: ["TAILSCALE_BE_CLI": "1"]) ?? command("/Applications/Tailscale.app/Contents/MacOS/Tailscale", ["status", "--json"], environment: ["TAILSCALE_BE_CLI": "1"])
         let tailnet = status.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
         let backend = tailnet?["BackendState"] as? String ?? "Not installed or signed out"
@@ -226,8 +272,8 @@ private enum MacCollector {
         let repos = repositories(at: root, ghAvailable: gh != nil, deadline: deadline)
         guard !Task.isCancelled, Date() < deadline else { return nil }
         let linear = linearIssues(key: linearKey)
-        let network = NativeParsers.interfaceBytes(command("/usr/sbin/netstat", ["-ibn"]) ?? "").prefix(4).map { "\($0.0): ↓\(ByteCountFormatter.string(fromByteCount: $0.1, countStyle: .decimal)) ↑\(ByteCountFormatter.string(fromByteCount: $0.2, countStyle: .decimal))" }.joined(separator: " · ")
-        return CollectionResult(snapshot: snapshot, repositories: repos, tailnetStatus: backend, tailnetName: name, githubStatus: github, linearStatus: linear.0, networkActivity: network.isEmpty ? "Active interface byte totals unavailable" : network, linearIssues: linear.1)
+        let network = NativeParsers.interfaceBytes(command("/usr/sbin/netstat", ["-ibn"]) ?? "").prefix(4).map { NetworkInterface(name: $0.0, received: $0.1, sent: $0.2) }
+        return CollectionResult(snapshot: snapshot, repositories: repos, tailnetStatus: backend, tailnetName: name, githubStatus: github, linearStatus: linear.0, linearIssues: linear.1, networkInterfaces: Array(network))
     }
     static func repositories(at root: String, ghAvailable: Bool, deadline: Date) -> [MacRepository] {
         guard let enumerator = FileManager.default.enumerator(at: URL(fileURLWithPath: root), includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsPackageDescendants]) else { return [] }
@@ -312,10 +358,6 @@ private enum MacCollector {
         guard process.terminationStatus == 0, valid else { return nil }
         return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     }
-}
-
-private extension String {
-    func matches(_ pattern: String) -> [String] { guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }; return regex.matches(in: self, range: NSRange(startIndex..., in: self)).compactMap { Range($0.range, in: self).map { String(self[$0]) } } }
 }
 
 private final class BoundedHTTP: NSObject, URLSessionDataDelegate, URLSessionTaskDelegate {

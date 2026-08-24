@@ -11,6 +11,7 @@ enum GraveTheme {
     static let hairline = Color(red: 28/255, green: 43/255, blue: 28/255)
     static let ring = Color(red: 46/255, green: 74/255, blue: 46/255)
     static let amber = Color(red: 1, green: 176/255, blue: 0)
+    static let accentSoft = Color(red: 125/255, green: 216/255, blue: 125/255)
     static let good = Color(red: 57/255, green: 211/255, blue: 83/255)
     static let crit = Color(red: 1, green: 95/255, blue: 86/255)
     static let mono = Font.system(.body, design: .monospaced)
@@ -35,7 +36,22 @@ struct GraveMeter: View {
     var body: some View { GeometryReader { proxy in ZStack(alignment: .leading) { GraveTheme.hairline; if let value { Rectangle().fill(value > 85 ? GraveTheme.crit : value > 70 ? GraveTheme.amber : GraveTheme.good).frame(width: proxy.size.width * min(max(value, 0), 100) / 100) } } }.frame(height: 8).overlay(Rectangle().stroke(GraveTheme.ring)) }
 }
 
+private struct GraveAtmosphere: View {
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                Canvas { context, size in
+                    for y in stride(from: 1.0, through: size.height, by: 4) {
+                        context.fill(Path(CGRect(x: 0, y: y, width: size.width, height: 0.5)), with: .color(GraveTheme.good.opacity(0.022)))
+                    }
+                }
+                RadialGradient(colors: [.clear, GraveTheme.page.opacity(0.42)], center: .center, startRadius: min(proxy.size.width, proxy.size.height) * 0.22, endRadius: max(proxy.size.width, proxy.size.height) * 0.68)
+            }
+        }.allowsHitTesting(false)
+    }
+}
+
 extension View {
-    func graveRoot() -> some View { self.font(GraveTheme.mono).foregroundStyle(GraveTheme.ink2).background(GraveTheme.page).tint(GraveTheme.amber) }
+    func graveRoot() -> some View { self.font(GraveTheme.mono).foregroundStyle(GraveTheme.ink2).background(GraveTheme.page).tint(GraveTheme.amber).overlay(GraveAtmosphere()) }
 }
 #endif

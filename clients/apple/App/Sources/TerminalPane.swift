@@ -170,7 +170,13 @@ struct TerminalPane {
         #if os(iOS)
         view.nativeBackgroundColor = UIColor(red: 0.05, green: 0.05, blue: 0.05, alpha: 1)
         #else
-        view.nativeBackgroundColor = NSColor(red: 0.05, green: 0.05, blue: 0.05, alpha: 1)
+        view.nativeBackgroundColor = NSColor(srgbRed: 5 / 255, green: 7 / 255, blue: 5 / 255, alpha: 1)
+        view.nativeForegroundColor = NSColor(srgbRed: 214 / 255, green: 255 / 255, blue: 208 / 255, alpha: 1)
+        view.caretColor = NSColor(srgbRed: 57 / 255, green: 211 / 255, blue: 83 / 255, alpha: 1)
+        view.caretTextColor = view.nativeBackgroundColor
+        view.selectedTextBackgroundColor = NSColor(srgbRed: 46 / 255, green: 74 / 255, blue: 46 / 255, alpha: 1)
+        view.selectedTextForegroundColor = view.nativeForegroundColor
+        view.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
         #endif
         coordinator.controller.attach(view)
         return view
