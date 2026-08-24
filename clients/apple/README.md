@@ -100,9 +100,10 @@ lipo -info ~/Library/Developer/Xcode/DerivedData/Gravedecay-*/Build/Products/Rel
 
 `make package-dmg` creates an unsigned, mountable Universal 2 DMG at
 `build/Gravedecay-macOS.dmg`; CI publishes that artifact. Set
-`NOTARY_PROFILE` to a configured `notarytool` Keychain profile to submit and
-staple a release DMG. Developer ID signing is intentionally opt-in through
-the normal Xcode `CODE_SIGN_IDENTITY` environment/build setting.
+`SIGNING='CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY="Developer ID Application: …"'`
+and `NOTARY_PROFILE` to a configured `notarytool` Keychain profile for a
+signed, verified, notarized, and stapled release. Notarization refuses an
+unsigned app; a Developer ID certificate/profile remains a release prerequisite.
 - iOS personal: development signing / TestFlight ($99 dev account).
 - iOS public (EU): AltStore PAL self-publishing — Apple notarization only,
   host the signed package ourselves.

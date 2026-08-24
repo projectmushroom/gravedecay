@@ -40,4 +40,10 @@ final class BoxConfigTests: XCTestCase {
         XCTAssertEqual(WorkStatus.changedFileCount(""), 0)
         XCTAssertEqual(WorkStatus.changedFileCount(" M one\n?? two\n"), 2)
     }
+
+    func testGitHubRemoteAllowlist() {
+        XCTAssertEqual(GitHubRemote.repository("git@github.com:projectmushroom/gravedecay.git"), "projectmushroom/gravedecay")
+        XCTAssertEqual(GitHubRemote.url("https://github.com/projectmushroom/gravedecay")?.host, "github.com")
+        XCTAssertNil(GitHubRemote.repository("https://github.com.evil.example/a/b"))
+    }
 }

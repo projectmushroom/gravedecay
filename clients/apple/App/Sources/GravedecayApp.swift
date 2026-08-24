@@ -6,12 +6,13 @@ struct GravedecayApp: App {
     @StateObject private var model = AppModel()
     #if os(macOS)
     @StateObject private var graveMenu = GraveMenuModel()
+    @StateObject private var macDashboard = MacDashboardModel()
     #endif
 
     var body: some Scene {
         WindowGroup(id: "main") {
             #if os(macOS)
-            MacNativeContentView(graves: graveMenu)
+            MacNativeContentView(graves: graveMenu, model: macDashboard)
             #else
             ContentView()
                 .environmentObject(model)
@@ -24,8 +25,7 @@ struct GravedecayApp: App {
         }
         .menuBarExtraStyle(.window)
         Settings {
-            SettingsView()
-                .environmentObject(model)
+            MacSettingsView(model: macDashboard)
                 .frame(width: 420)
                 .padding()
         }
