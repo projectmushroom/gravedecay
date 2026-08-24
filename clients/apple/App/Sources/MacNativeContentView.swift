@@ -43,7 +43,7 @@ struct MacNativeContentView: View {
                 Button("Refresh", systemImage: "arrow.clockwise") { model.refresh(); graves.refresh() }
             }
         }
-        .task { await model.refreshAsync(); graves.refresh() }
+        .task { model.refresh(); graves.refresh() }
         .frame(minWidth: 760, minHeight: 500)
     }
 }
@@ -97,6 +97,7 @@ private struct WorkView: View {
                         if let url = repo.githubURL { Link("Open GitHub", destination: url).font(.caption) }
                         ForEach(repo.pullRequests) { row in Link("PR #\(row.number) · \(row.state) · \(row.title)", destination: row.url).font(.caption) }
                         ForEach(repo.issues) { row in Link("Issue #\(row.number) · \(row.state) · \(row.title)", destination: row.url).font(.caption) }
+                        if let ci = repo.latestCI { Link("CI #\(ci.number) · \(ci.state) · \(ci.title)", destination: ci.url).font(.caption) }
                     }.padding(.vertical, 3)
                 }
             }
@@ -171,7 +172,7 @@ private struct BrowserButton: View {
     var body: some View { Button(title) { if let url = GravePresentation.link(host: host, path: path) { NSWorkspace.shared.open(url) } } }
 }
 
-struct MacRepository: Identifiable { let path, name, branch, detail, lastCommit: String; let dirty: Bool; let github: String?; let githubURL: URL?; let pullRequests, issues: [GitHubRow]; var id: String { path } }
+struct MacRepository: Identifiable { let path, name, branch, detail, lastCommit: String; let dirty: Bool; let github: String?; let githubURL: URL?; let pullRequests, issues: [GitHubRow]; let latestCI: GitHubRow?; var id: String { path } }
 struct LinearIssue: Identifiable { let identifier, title: String; let url: URL; var id: String { identifier } }
 struct MacSnapshot { let model, os, cpu, memory, disk, uptime, battery, thermal, swap: String }
 
@@ -191,9 +192,16 @@ final class MacDashboardModel: ObservableObject {
     @Published var launchAtLogin = SMAppService.mainApp.status != .notRegistered
     @Published private(set) var launchAtLoginError: String?
     private let defaults = UserDefaults.standard
-    private var refreshTask: Task<CollectionResult?, Never>?
+    private var refreshTask: Task<Void, Never>?
     init() { workRoot = UserDefaults.standard.string(forKey: "macWorkRoot") ?? (FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Sites").path) }
-    func refresh() { refreshTask?.cancel(); let root = workRoot; let key = Keychain.value(account: "linear-api-key"); let task = Task.detached(priority: .utility) { MacCollector.collect(root: root, linearKey: key) }; refreshTask = Task { let result = await task.value; return Task.isCancelled ? nil : result }; Task { [weak self] in guard let result = await self?.refreshTask?.value ?? nil else { return }; self?.apply(result) } }
+    func refresh() {
+        refreshTask?.cancel()
+        let root = workRoot, key = Keychain.value(account: "linear-api-key"), deadline = Date().addingTimeInterval(8)
+        refreshTask = Task.detached(priority: .utility) { [weak self] in
+            guard let result = MacCollector.collect(root: root, linearKey: key, deadline: deadline), !Task.isCancelled else { return }
+            await MainActor.run { guard !Task.isCancelled else { return }; self?.apply(result) }
+        }
+    }
     func setWorkRoot(_ value: String) { let url = URL(fileURLWithPath: (value as NSString).expandingTildeInPath); var directory: ObjCBool = false; guard FileManager.default.fileExists(atPath: url.path, isDirectory: &directory), directory.boolValue else { workRootStatus = "Repository folder must be an existing directory."; return }; workRootStatus = nil; workRoot = url.path; defaults.set(workRoot, forKey: "macWorkRoot"); refresh() }
     func saveLinearKey(_ key: String) { guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }; keychainStatus = Keychain.set(key, account: "linear-api-key") ? "Stored in this Mac’s Keychain." : "Could not save the Linear key to Keychain."; refresh() }
     func removeLinearKey() { keychainStatus = Keychain.remove(account: "linear-api-key") ? "Linear key removed." : "Could not remove the Linear key from Keychain."; refresh() }
@@ -201,18 +209,13 @@ final class MacDashboardModel: ObservableObject {
         do { if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }; launchAtLogin = SMAppService.mainApp.status != .notRegistered; launchAtLoginError = SMAppService.mainApp.status == .requiresApproval ? "Launch at Login needs approval in System Settings." : nil }
         catch { launchAtLogin = SMAppService.mainApp.status != .notRegistered; launchAtLoginError = "Launch at Login: \(error.localizedDescription)" }
     }
-    func refreshAsync() async {
-        let root = workRoot; let key = Keychain.value(account: "linear-api-key")
-        let result = await Task.detached(priority: .utility) { MacCollector.collect(root: root, linearKey: key) }.value
-        guard !Task.isCancelled else { return }
-        apply(result)
-    }
     private func apply(_ result: CollectionResult) { snapshot = result.snapshot; repositories = result.repositories; tailnetStatus = result.tailnetStatus; tailnetName = result.tailnetName; githubStatus = result.githubStatus; linearStatus = result.linearStatus; linearIssues = result.linearIssues; networkActivity = result.networkActivity }
 }
 
 private struct CollectionResult { let snapshot: MacSnapshot; let repositories: [MacRepository]; let tailnetStatus, tailnetName, githubStatus, linearStatus, networkActivity: String; let linearIssues: [LinearIssue] }
 private enum MacCollector {
-    static func collect(root: String, linearKey: String?) -> CollectionResult {
+    static func collect(root: String, linearKey: String?, deadline: Date) -> CollectionResult? {
+        guard !Task.isCancelled, Date() < deadline else { return nil }
         let os = ProcessInfo.processInfo.operatingSystemVersionString.replacingOccurrences(of: "Version ", with: "")
         let disk = (try? URL(fileURLWithPath: NSHomeDirectory()).resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeTotalCapacityKey]))
         let total = Int64(disk?.volumeTotalCapacity ?? 0), available = disk?.volumeAvailableCapacityForImportantUsage ?? 0
@@ -234,15 +237,16 @@ private enum MacCollector {
         let name = ((tailnet?["Self"] as? [String: Any])?["DNSName"] as? String) ?? "—"
         let gh = command("/opt/homebrew/bin/gh", ["auth", "status"]) ?? command("/usr/local/bin/gh", ["auth", "status"])
         let github = gh == nil ? "GitHub CLI not installed or not signed in" : "GitHub CLI authenticated (read-only PR/CI status)"
-        let repos = repositories(at: root, ghAvailable: gh != nil)
+        let repos = repositories(at: root, ghAvailable: gh != nil, deadline: deadline)
+        guard !Task.isCancelled, Date() < deadline else { return nil }
         let linear = linearIssues(key: linearKey)
         let network = NativeParsers.interfaceBytes(command("/usr/sbin/netstat", ["-ibn"]) ?? "").prefix(4).map { "\($0.0): ↓\(ByteCountFormatter.string(fromByteCount: $0.1, countStyle: .decimal)) ↑\(ByteCountFormatter.string(fromByteCount: $0.2, countStyle: .decimal))" }.joined(separator: " · ")
         return CollectionResult(snapshot: snapshot, repositories: repos, tailnetStatus: backend, tailnetName: name, githubStatus: github, linearStatus: linear.0, networkActivity: network.isEmpty ? "Active interface byte totals unavailable" : network, linearIssues: linear.1)
     }
-    static func repositories(at root: String, ghAvailable: Bool) -> [MacRepository] {
+    static func repositories(at root: String, ghAvailable: Bool, deadline: Date) -> [MacRepository] {
         guard let enumerator = FileManager.default.enumerator(at: URL(fileURLWithPath: root), includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsPackageDescendants]) else { return [] }
-        var found = [String](); let rootDepth = URL(fileURLWithPath: root).pathComponents.count; let deadline = Date().addingTimeInterval(2); var entries = 0
-        while let url = enumerator.nextObject() as? URL, found.count < 24, entries < 2_000, Date() < deadline {
+        var found = [String](); let rootDepth = URL(fileURLWithPath: root).pathComponents.count; var entries = 0
+        while let url = enumerator.nextObject() as? URL, found.count < 8, entries < 2_000, Date() < deadline, !Task.isCancelled {
             entries += 1
             let name = url.lastPathComponent
             if url.pathComponents.count - rootDepth > 5 { enumerator.skipDescendants(); continue }
@@ -254,12 +258,14 @@ private enum MacCollector {
             let status = command("/usr/bin/git", ["-C", path, "status", "--porcelain"]) ?? ""
             let dirty = !status.isEmpty; let detail = dirty ? "\(WorkStatus.changedFileCount(status)) changed file(s)" : "Clean"
             let remote = command("/usr/bin/git", ["-C", path, "remote", "get-url", "origin"])
-            let github = githubSummary(remote, enabled: ghAvailable && index < 4)
+            let enriched = ghAvailable && index < 4 && !Task.isCancelled && Date() < deadline
+            let github = githubSummary(remote, enabled: enriched)
             let repo = GitHubRemote.repository(remote)
-            let pulls = repo.flatMap { githubRows($0, kind: "pr") } ?? []
-            let issues = repo.flatMap { githubRows($0, kind: "issue") } ?? []
+            let pulls = enriched ? (repo.map { githubRows($0, kind: "pr") } ?? []) : []
+            let issues = enriched ? (repo.map { githubRows($0, kind: "issue") } ?? []) : []
+            let ci = enriched ? repo.flatMap { githubRun($0) } : nil
             let lastCommit = command("/usr/bin/git", ["-C", path, "log", "-1", "--format=%h %s"]) ?? "Last commit unavailable"
-            return MacRepository(path: path, name: URL(fileURLWithPath: path).lastPathComponent, branch: branch, detail: detail, lastCommit: lastCommit, dirty: dirty, github: github, githubURL: GitHubRemote.url(remote), pullRequests: pulls, issues: issues)
+            return MacRepository(path: path, name: URL(fileURLWithPath: path).lastPathComponent, branch: branch, detail: detail, lastCommit: lastCommit, dirty: dirty, github: github, githubURL: GitHubRemote.url(remote), pullRequests: pulls, issues: issues, latestCI: ci)
         }
     }
     static func githubSummary(_ remote: String?, enabled: Bool) -> String? {
@@ -274,6 +280,12 @@ private enum MacCollector {
         let args = [kind, "list", "--repo", repo, "--limit", "3", "--json", "number,title,state,url"]
         let output = command("/opt/homebrew/bin/gh", args) ?? command("/usr/local/bin/gh", args)
         return output.map { NativeParsers.githubRows(Data($0.utf8)) } ?? []
+    }
+    static func githubRun(_ repo: String) -> GitHubRow? {
+        let args = ["run", "list", "--repo", repo, "--limit", "1", "--json", "databaseId,name,status,url"]
+        let output = command("/opt/homebrew/bin/gh", args) ?? command("/usr/local/bin/gh", args)
+        guard let output, let rows = try? JSONSerialization.jsonObject(with: Data(output.utf8)) as? [[String: Any]], let row = rows.first, let id = row["databaseId"] as? Int, let name = row["name"] as? String, let state = row["status"] as? String, let raw = row["url"] as? String, let url = URL(string: raw), url.scheme == "https", url.host == "github.com" else { return nil }
+        return GitHubRow(number: id, title: name, state: state, url: url)
     }
     static func linearIssues(key: String?) -> (String, [LinearIssue]) {
         guard let key, !key.isEmpty else { return ("Linear not configured — add a key in Settings", []) }
@@ -292,8 +304,9 @@ private enum MacCollector {
         let pipe = Pipe(); process.standardOutput = pipe; process.standardError = FileHandle.nullDevice
         let lock = NSLock(); var output = Data(); var oversized = false
         let done = DispatchSemaphore(value: 0)
+        let eof = DispatchSemaphore(value: 0)
         pipe.fileHandleForReading.readabilityHandler = { handle in
-            let chunk = handle.availableData; guard !chunk.isEmpty else { return }
+            let chunk = handle.availableData; guard !chunk.isEmpty else { eof.signal(); return }
             lock.lock(); output.append(chunk); oversized = output.count > 65_536; lock.unlock()
             if oversized { process.terminate() }
         }
@@ -303,6 +316,7 @@ private enum MacCollector {
             process.terminate()
             if done.wait(timeout: .now() + 0.2) == .timedOut { kill(process.processIdentifier, SIGKILL); _ = done.wait(timeout: .now() + 1) }
         }
+        _ = eof.wait(timeout: .now() + 0.05)
         pipe.fileHandleForReading.readabilityHandler = nil
         guard !process.isRunning else { pipe.fileHandleForReading.closeFile(); return nil }
         lock.lock(); let data = output; let valid = !oversized && data.count <= 65_536; lock.unlock()

@@ -3,6 +3,7 @@ import Foundation
 public struct GitHubRow: Equatable, Sendable, Identifiable {
     public let number: Int; public let title, state: String; public let url: URL
     public var id: String { "\(number)-\(url.absoluteString)" }
+    public init(number: Int, title: String, state: String, url: URL) { self.number = number; self.title = title; self.state = state; self.url = url }
 }
 
 public enum NativeParsers {
