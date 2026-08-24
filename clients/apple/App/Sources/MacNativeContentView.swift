@@ -95,8 +95,8 @@ private struct WorkView: View {
                         Text(repo.lastCommit).font(.caption).foregroundStyle(.secondary)
                         if let github = repo.github { Text(github).font(.caption).foregroundStyle(.secondary) }
                         if let url = repo.githubURL { Link("Open GitHub", destination: url).font(.caption) }
-                        ForEach(repo.pullRequests) { row in Link("PR #\(row.number) · \(row.state) · \(row.title)", destination: URL(string: row.url)!).font(.caption) }
-                        ForEach(repo.issues) { row in Link("Issue #\(row.number) · \(row.state) · \(row.title)", destination: URL(string: row.url)!).font(.caption) }
+                        ForEach(repo.pullRequests) { row in Link("PR #\(row.number) · \(row.state) · \(row.title)", destination: row.url).font(.caption) }
+                        ForEach(repo.issues) { row in Link("Issue #\(row.number) · \(row.state) · \(row.title)", destination: row.url).font(.caption) }
                     }.padding(.vertical, 3)
                 }
             }
@@ -114,7 +114,7 @@ private struct NetworkView: View {
     var body: some View {
         Form {
             Section("Tailscale") { LabeledContent("Status", value: model.tailnetStatus); LabeledContent("Device", value: model.tailnetName) }
-            Section("Active interface") { Text(model.networkActivity).font(.footnote) }
+            Section("Active interface totals") { Text(model.networkActivity).font(.footnote) }
             Section { Text("Gravedecay only reads status. It never changes Tailscale login, preferences, or Serve configuration.").font(.footnote).foregroundStyle(.secondary) }
         }.formStyle(.grouped).navigationTitle("Network")
     }
@@ -158,7 +158,7 @@ struct MacSettingsView: View {
     @State private var root = ""; @State private var linearKey = ""
     var body: some View {
         Form {
-            Section("Work") { TextField("Repository folder", text: $root); Button("Save work folder") { model.setWorkRoot(root) } }
+            Section("Work") { TextField("Repository folder", text: $root); Button("Save work folder") { model.setWorkRoot(root) }; if let status = model.workRootStatus { Text(status).font(.footnote).foregroundStyle(.red) } }
             Section("Linear") { SecureField("API key", text: $linearKey); Button("Save Linear key") { model.saveLinearKey(linearKey); linearKey = "" }; Button("Remove Linear key", role: .destructive) { model.removeLinearKey() }; Text(model.keychainStatus).font(.footnote).foregroundStyle(.secondary) }
             Section("Launch at Login") { Toggle("Launch Gravedecay at login", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) })); if let error = model.launchAtLoginError { Text(error).font(.footnote).foregroundStyle(.red) } }
             Section("About") { Text("Native macOS 15+ UI. T3 and legacy web dashboards open in your default browser.").font(.footnote) }
@@ -187,13 +187,14 @@ final class MacDashboardModel: ObservableObject {
     @Published private(set) var networkActivity = "Checking…"
     @Published private(set) var workRoot: String
     @Published private(set) var keychainStatus = "Stored in this Mac’s Keychain. Assigned issues are read-only."
+    @Published private(set) var workRootStatus: String?
     @Published var launchAtLogin = SMAppService.mainApp.status != .notRegistered
     @Published private(set) var launchAtLoginError: String?
     private let defaults = UserDefaults.standard
-    private var refreshTask: Task<Void, Never>?
+    private var refreshTask: Task<CollectionResult?, Never>?
     init() { workRoot = UserDefaults.standard.string(forKey: "macWorkRoot") ?? (FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Sites").path) }
-    func refresh() { refreshTask?.cancel(); refreshTask = Task { await refreshAsync() } }
-    func setWorkRoot(_ value: String) { let url = URL(fileURLWithPath: (value as NSString).expandingTildeInPath); var directory: ObjCBool = false; guard FileManager.default.fileExists(atPath: url.path, isDirectory: &directory), directory.boolValue else { keychainStatus = "Repository folder must be an existing directory."; return }; workRoot = url.path; defaults.set(workRoot, forKey: "macWorkRoot"); refresh() }
+    func refresh() { refreshTask?.cancel(); let root = workRoot; let key = Keychain.value(account: "linear-api-key"); let task = Task.detached(priority: .utility) { MacCollector.collect(root: root, linearKey: key) }; refreshTask = Task { let result = await task.value; return Task.isCancelled ? nil : result }; Task { [weak self] in guard let result = await self?.refreshTask?.value ?? nil else { return }; self?.apply(result) } }
+    func setWorkRoot(_ value: String) { let url = URL(fileURLWithPath: (value as NSString).expandingTildeInPath); var directory: ObjCBool = false; guard FileManager.default.fileExists(atPath: url.path, isDirectory: &directory), directory.boolValue else { workRootStatus = "Repository folder must be an existing directory."; return }; workRootStatus = nil; workRoot = url.path; defaults.set(workRoot, forKey: "macWorkRoot"); refresh() }
     func saveLinearKey(_ key: String) { guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }; keychainStatus = Keychain.set(key, account: "linear-api-key") ? "Stored in this Mac’s Keychain." : "Could not save the Linear key to Keychain."; refresh() }
     func removeLinearKey() { keychainStatus = Keychain.remove(account: "linear-api-key") ? "Linear key removed." : "Could not remove the Linear key from Keychain."; refresh() }
     func setLaunchAtLogin(_ enabled: Bool) {
@@ -204,8 +205,9 @@ final class MacDashboardModel: ObservableObject {
         let root = workRoot; let key = Keychain.value(account: "linear-api-key")
         let result = await Task.detached(priority: .utility) { MacCollector.collect(root: root, linearKey: key) }.value
         guard !Task.isCancelled else { return }
-        snapshot = result.snapshot; repositories = result.repositories; tailnetStatus = result.tailnetStatus; tailnetName = result.tailnetName; githubStatus = result.githubStatus; linearStatus = result.linearStatus; linearIssues = result.linearIssues; networkActivity = result.networkActivity
+        apply(result)
     }
+    private func apply(_ result: CollectionResult) { snapshot = result.snapshot; repositories = result.repositories; tailnetStatus = result.tailnetStatus; tailnetName = result.tailnetName; githubStatus = result.githubStatus; linearStatus = result.linearStatus; linearIssues = result.linearIssues; networkActivity = result.networkActivity }
 }
 
 private struct CollectionResult { let snapshot: MacSnapshot; let repositories: [MacRepository]; let tailnetStatus, tailnetName, githubStatus, linearStatus, networkActivity: String; let linearIssues: [LinearIssue] }
@@ -331,7 +333,7 @@ private final class BoundedHTTP: NSObject, URLSessionDataDelegate, URLSessionTas
 
 private enum Keychain {
     static func value(account: String) -> String? { let query: [CFString: Any] = [kSecClass: kSecClassGenericPassword, kSecAttrService: "com.projectmushroom.gravedecay", kSecAttrAccount: account, kSecReturnData: true]; var item: CFTypeRef?; guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }; return String(data: data, encoding: .utf8) }
-    static func set(_ value: String, account: String) -> Bool { let base: [CFString: Any] = [kSecClass: kSecClassGenericPassword, kSecAttrService: "com.projectmushroom.gravedecay", kSecAttrAccount: account]; SecItemDelete(base as CFDictionary); var query = base; query[kSecValueData] = Data(value.utf8); return SecItemAdd(query as CFDictionary, nil) == errSecSuccess }
+    static func set(_ value: String, account: String) -> Bool { let base: [CFString: Any] = [kSecClass: kSecClassGenericPassword, kSecAttrService: "com.projectmushroom.gravedecay", kSecAttrAccount: account]; let update = [kSecValueData: Data(value.utf8)] as CFDictionary; let status = SecItemUpdate(base as CFDictionary, update); if status == errSecSuccess { return true }; guard status == errSecItemNotFound else { return false }; var query = base; query[kSecValueData] = Data(value.utf8); return SecItemAdd(query as CFDictionary, nil) == errSecSuccess }
     static func remove(account: String) -> Bool { let query: [CFString: Any] = [kSecClass: kSecClassGenericPassword, kSecAttrService: "com.projectmushroom.gravedecay", kSecAttrAccount: account]; let status = SecItemDelete(query as CFDictionary); return status == errSecSuccess || status == errSecItemNotFound }
 }
 #endif

@@ -1,8 +1,8 @@
 import Foundation
 
 public struct GitHubRow: Equatable, Sendable, Identifiable {
-    public let number: Int; public let title, state, url: String
-    public var id: String { "\(number)-\(url)" }
+    public let number: Int; public let title, state: String; public let url: URL
+    public var id: String { "\(number)-\(url.absoluteString)" }
 }
 
 public enum NativeParsers {
@@ -13,13 +13,17 @@ public enum NativeParsers {
     public static func githubRows(_ data: Data) -> [GitHubRow] {
         guard let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
         return rows.prefix(3).compactMap { row in
-            guard let number = row["number"] as? Int, let title = row["title"] as? String, let state = row["state"] as? String, let url = row["url"] as? String, URL(string: url)?.host == "github.com" else { return nil }
+            guard let number = row["number"] as? Int, let title = row["title"] as? String, let state = row["state"] as? String, let raw = row["url"] as? String, let url = URL(string: raw), url.scheme == "https", url.host == "github.com" else { return nil }
             return GitHubRow(number: number, title: title, state: state, url: url)
         }
     }
     public static func interfaceBytes(_ text: String) -> [(String, Int64, Int64)] {
-        var seen = Set<String>(); return text.split(whereSeparator: \.isNewline).compactMap { line in
-            let p = line.split(whereSeparator: \.isWhitespace); guard p.count > 9, !seen.contains(String(p[0])), let input = Int64(p[6]), let output = Int64(p[9]) else { return nil }; seen.insert(String(p[0])); return (String(p[0]), input, output)
+        var totals = [String: (Int64, Int64)]()
+        for line in text.split(whereSeparator: \.isNewline) {
+            let p = line.split(whereSeparator: \.isWhitespace); guard p.count > 9 else { continue }
+            let name = String(p[0]); guard (name.hasPrefix("en") || name.hasPrefix("utun")), p[2].hasPrefix("<Link#"), let input = Int64(p[6]), let output = Int64(p[9]), input + output > 0 else { continue }
+            let old = totals[name] ?? (0, 0); totals[name] = (max(old.0, input), max(old.1, output))
         }
+        return totals.map { ($0.key, $0.value.0, $0.value.1) }.sorted { $0.1 + $0.2 > $1.1 + $1.2 }
     }
 }

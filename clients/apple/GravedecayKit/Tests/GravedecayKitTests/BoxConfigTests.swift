@@ -50,6 +50,8 @@ final class BoxConfigTests: XCTestCase {
     func testNativeParsersAreBoundedAndSafe() {
         XCTAssertEqual(NativeParsers.cpuUsage("CPU usage: 12.3% user, 4.5% sys, 83.2% idle"), "12.3% user, 4.5% sys")
         XCTAssertEqual(NativeParsers.githubRows(Data(#"[{"number":3,"title":"safe","state":"OPEN","url":"https://github.com/a/b/pull/3"},{"number":4,"title":"bad","state":"OPEN","url":"https://evil.example"}]"#.utf8)).count, 1)
-        XCTAssertEqual(NativeParsers.interfaceBytes("en0 1500 x x x x 10 0 20 0\n").first?.1, 10)
+        let netstat = "Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll\nlo0 16384 <Link#1> 00:00 1 0 2 3 0 4 0\ngif0* 1280 <Link#2> 00:00 0 0 0 0 0 0 0\nen5 1500 <Link#8> aa:bb 11 0 100 12 0 200 0\n"
+        let interfaces = NativeParsers.interfaceBytes(netstat)
+        XCTAssertEqual(interfaces.count, 1); XCTAssertEqual(interfaces.first?.0, "en5"); XCTAssertEqual(interfaces.first?.1, 100); XCTAssertEqual(interfaces.first?.2, 200)
     }
 }
