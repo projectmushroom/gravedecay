@@ -92,15 +92,18 @@ private struct WorkView: View {
                     VStack(alignment: .leading) {
                         HStack { Text(repo.name).font(.headline); Spacer(); Text(repo.branch).foregroundStyle(.secondary) }
                         Text(repo.detail).font(.subheadline).foregroundStyle(repo.dirty ? .orange : .secondary)
+                        Text(repo.lastCommit).font(.caption).foregroundStyle(.secondary)
                         if let github = repo.github { Text(github).font(.caption).foregroundStyle(.secondary) }
                         if let url = repo.githubURL { Link("Open GitHub", destination: url).font(.caption) }
+                        ForEach(repo.pullRequests) { row in Link("PR #\(row.number) · \(row.state) · \(row.title)", destination: URL(string: row.url)!).font(.caption) }
+                        ForEach(repo.issues) { row in Link("Issue #\(row.number) · \(row.state) · \(row.title)", destination: URL(string: row.url)!).font(.caption) }
                     }.padding(.vertical, 3)
                 }
             }
             Section("Integrations") {
                 Label(model.githubStatus, systemImage: "chevron.left.forwardslash.chevron.right")
                 Label(model.linearStatus, systemImage: "line.3.horizontal")
-                if !model.linearIssues.isEmpty { ForEach(model.linearIssues, id: \.self) { Text($0) } }
+                if !model.linearIssues.isEmpty { ForEach(model.linearIssues) { issue in Link("\(issue.identifier) · \(issue.title)", destination: issue.url).font(.caption) } }
             }
         }.navigationTitle("Work")
     }
@@ -157,7 +160,7 @@ struct MacSettingsView: View {
         Form {
             Section("Work") { TextField("Repository folder", text: $root); Button("Save work folder") { model.setWorkRoot(root) } }
             Section("Linear") { SecureField("API key", text: $linearKey); Button("Save Linear key") { model.saveLinearKey(linearKey); linearKey = "" }; Button("Remove Linear key", role: .destructive) { model.removeLinearKey() }; Text(model.keychainStatus).font(.footnote).foregroundStyle(.secondary) }
-            Section("Launch at Login") { Toggle("Launch Gravedecay at login", isOn: $model.launchAtLogin).onChange(of: model.launchAtLogin) { _, value in model.setLaunchAtLogin(value) }; if let error = model.launchAtLoginError { Text(error).font(.footnote).foregroundStyle(.red) } }
+            Section("Launch at Login") { Toggle("Launch Gravedecay at login", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) })); if let error = model.launchAtLoginError { Text(error).font(.footnote).foregroundStyle(.red) } }
             Section("About") { Text("Native macOS 15+ UI. T3 and legacy web dashboards open in your default browser.").font(.footnote) }
         }.formStyle(.grouped).navigationTitle("Settings").onAppear { root = model.workRoot }
     }
@@ -168,7 +171,8 @@ private struct BrowserButton: View {
     var body: some View { Button(title) { if let url = GravePresentation.link(host: host, path: path) { NSWorkspace.shared.open(url) } } }
 }
 
-struct MacRepository: Identifiable { let path, name, branch, detail: String; let dirty: Bool; let github: String?; let githubURL: URL?; var id: String { path } }
+struct MacRepository: Identifiable { let path, name, branch, detail, lastCommit: String; let dirty: Bool; let github: String?; let githubURL: URL?; let pullRequests, issues: [GitHubRow]; var id: String { path } }
+struct LinearIssue: Identifiable { let identifier, title: String; let url: URL; var id: String { identifier } }
 struct MacSnapshot { let model, os, cpu, memory, disk, uptime, battery, thermal, swap: String }
 
 @MainActor
@@ -179,30 +183,32 @@ final class MacDashboardModel: ObservableObject {
     @Published private(set) var tailnetName = "—"
     @Published private(set) var githubStatus = "Checking GitHub CLI…"
     @Published private(set) var linearStatus = "Linear not configured"
-    @Published private(set) var linearIssues: [String] = []
+    @Published private(set) var linearIssues: [LinearIssue] = []
     @Published private(set) var networkActivity = "Checking…"
     @Published private(set) var workRoot: String
     @Published private(set) var keychainStatus = "Stored in this Mac’s Keychain. Assigned issues are read-only."
-    @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @Published var launchAtLogin = SMAppService.mainApp.status != .notRegistered
     @Published private(set) var launchAtLoginError: String?
     private let defaults = UserDefaults.standard
+    private var refreshTask: Task<Void, Never>?
     init() { workRoot = UserDefaults.standard.string(forKey: "macWorkRoot") ?? (FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Sites").path) }
-    func refresh() { Task { await refreshAsync() } }
-    func setWorkRoot(_ value: String) { let url = URL(fileURLWithPath: (value as NSString).expandingTildeInPath); guard FileManager.default.fileExists(atPath: url.path) else { return }; workRoot = url.path; defaults.set(workRoot, forKey: "macWorkRoot"); refresh() }
+    func refresh() { refreshTask?.cancel(); refreshTask = Task { await refreshAsync() } }
+    func setWorkRoot(_ value: String) { let url = URL(fileURLWithPath: (value as NSString).expandingTildeInPath); var directory: ObjCBool = false; guard FileManager.default.fileExists(atPath: url.path, isDirectory: &directory), directory.boolValue else { keychainStatus = "Repository folder must be an existing directory."; return }; workRoot = url.path; defaults.set(workRoot, forKey: "macWorkRoot"); refresh() }
     func saveLinearKey(_ key: String) { guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }; keychainStatus = Keychain.set(key, account: "linear-api-key") ? "Stored in this Mac’s Keychain." : "Could not save the Linear key to Keychain."; refresh() }
     func removeLinearKey() { keychainStatus = Keychain.remove(account: "linear-api-key") ? "Linear key removed." : "Could not remove the Linear key from Keychain."; refresh() }
     func setLaunchAtLogin(_ enabled: Bool) {
-        do { if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }; launchAtLogin = SMAppService.mainApp.status == .enabled; launchAtLoginError = nil }
-        catch { launchAtLogin = SMAppService.mainApp.status == .enabled; launchAtLoginError = "Launch at Login: \(error.localizedDescription)" }
+        do { if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }; launchAtLogin = SMAppService.mainApp.status != .notRegistered; launchAtLoginError = SMAppService.mainApp.status == .requiresApproval ? "Launch at Login needs approval in System Settings." : nil }
+        catch { launchAtLogin = SMAppService.mainApp.status != .notRegistered; launchAtLoginError = "Launch at Login: \(error.localizedDescription)" }
     }
     func refreshAsync() async {
         let root = workRoot; let key = Keychain.value(account: "linear-api-key")
         let result = await Task.detached(priority: .utility) { MacCollector.collect(root: root, linearKey: key) }.value
+        guard !Task.isCancelled else { return }
         snapshot = result.snapshot; repositories = result.repositories; tailnetStatus = result.tailnetStatus; tailnetName = result.tailnetName; githubStatus = result.githubStatus; linearStatus = result.linearStatus; linearIssues = result.linearIssues; networkActivity = result.networkActivity
     }
 }
 
-private struct CollectionResult { let snapshot: MacSnapshot; let repositories: [MacRepository]; let tailnetStatus, tailnetName, githubStatus, linearStatus, networkActivity: String; let linearIssues: [String] }
+private struct CollectionResult { let snapshot: MacSnapshot; let repositories: [MacRepository]; let tailnetStatus, tailnetName, githubStatus, linearStatus, networkActivity: String; let linearIssues: [LinearIssue] }
 private enum MacCollector {
     static func collect(root: String, linearKey: String?) -> CollectionResult {
         let os = ProcessInfo.processInfo.operatingSystemVersionString.replacingOccurrences(of: "Version ", with: "")
@@ -214,7 +220,7 @@ private enum MacCollector {
             used = "\(percent)% used"
         } else { used = "—" }
         let memory = command("/usr/bin/memory_pressure", ["-Q"])?.split(separator: "\n").prefix(2).joined(separator: " · ") ?? "Memory pressure unavailable"
-        let cpu = cpuUsage(command("/usr/bin/top", ["-l", "1", "-n", "0"])) ?? "CPU activity unavailable"
+        let cpu = NativeParsers.cpuUsage(command("/usr/bin/top", ["-l", "1", "-n", "0"]) ?? "") ?? "CPU activity unavailable"
         let uptime = GravePresentation.uptime(ProcessInfo.processInfo.systemUptime)
         let battery = command("/usr/bin/pmset", ["-g", "batt"]).map { $0.contains("AC Power") ? "AC Power" : ($0.split(whereSeparator: { $0 == ";" }).first.map(String.init) ?? "Battery") } ?? "Not available"
         let thermal = command("/usr/bin/pmset", ["-g", "therm"]).map { $0.localizedCaseInsensitiveContains("CPU_Speed_Limit") ? $0.replacingOccurrences(of: "\n", with: " ") : "No thermal limit reported" } ?? "Thermal status unavailable"
@@ -228,12 +234,8 @@ private enum MacCollector {
         let github = gh == nil ? "GitHub CLI not installed or not signed in" : "GitHub CLI authenticated (read-only PR/CI status)"
         let repos = repositories(at: root, ghAvailable: gh != nil)
         let linear = linearIssues(key: linearKey)
-        let network = command("/usr/sbin/scutil", ["--nwi"])?.split(separator: "\n").first(where: { $0.contains("Network interfaces") || $0.contains("IPv4") }).map(String.init) ?? "Active interface unavailable"
-        return CollectionResult(snapshot: snapshot, repositories: repos, tailnetStatus: backend, tailnetName: name, githubStatus: github, linearStatus: linear.0, networkActivity: network, linearIssues: linear.1)
-    }
-    static func cpuUsage(_ top: String?) -> String? {
-        guard let top, let range = top.range(of: "CPU usage: [0-9.]+% user, [0-9.]+% sys", options: .regularExpression) else { return nil }
-        return String(top[range]).replacingOccurrences(of: "CPU usage: ", with: "")
+        let network = NativeParsers.interfaceBytes(command("/usr/sbin/netstat", ["-ibn"]) ?? "").prefix(4).map { "\($0.0): ↓\(ByteCountFormatter.string(fromByteCount: $0.1, countStyle: .decimal)) ↑\(ByteCountFormatter.string(fromByteCount: $0.2, countStyle: .decimal))" }.joined(separator: " · ")
+        return CollectionResult(snapshot: snapshot, repositories: repos, tailnetStatus: backend, tailnetName: name, githubStatus: github, linearStatus: linear.0, networkActivity: network.isEmpty ? "Active interface byte totals unavailable" : network, linearIssues: linear.1)
     }
     static func repositories(at root: String, ghAvailable: Bool) -> [MacRepository] {
         guard let enumerator = FileManager.default.enumerator(at: URL(fileURLWithPath: root), includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsPackageDescendants]) else { return [] }
@@ -250,31 +252,37 @@ private enum MacCollector {
             let status = command("/usr/bin/git", ["-C", path, "status", "--porcelain"]) ?? ""
             let dirty = !status.isEmpty; let detail = dirty ? "\(WorkStatus.changedFileCount(status)) changed file(s)" : "Clean"
             let remote = command("/usr/bin/git", ["-C", path, "remote", "get-url", "origin"])
-            let github = githubSummary(remote, enabled: ghAvailable && index < 8)
-            return MacRepository(path: path, name: URL(fileURLWithPath: path).lastPathComponent, branch: branch, detail: detail, dirty: dirty, github: github, githubURL: GitHubRemote.url(remote))
+            let github = githubSummary(remote, enabled: ghAvailable && index < 4)
+            let repo = GitHubRemote.repository(remote)
+            let pulls = repo.flatMap { githubRows($0, kind: "pr") } ?? []
+            let issues = repo.flatMap { githubRows($0, kind: "issue") } ?? []
+            let lastCommit = command("/usr/bin/git", ["-C", path, "log", "-1", "--format=%h %s"]) ?? "Last commit unavailable"
+            return MacRepository(path: path, name: URL(fileURLWithPath: path).lastPathComponent, branch: branch, detail: detail, lastCommit: lastCommit, dirty: dirty, github: github, githubURL: GitHubRemote.url(remote), pullRequests: pulls, issues: issues)
         }
     }
     static func githubSummary(_ remote: String?, enabled: Bool) -> String? {
-        guard let remote, remote.contains("github.com") else { return nil }
+        guard let repo = GitHubRemote.repository(remote) else { return nil }
         guard enabled else { return "GitHub remote" }
-        let cleaned = remote.replacingOccurrences(of: ".git", with: "")
-        guard let slash = cleaned.range(of: "github.com[:/]", options: .regularExpression) else { return "GitHub remote" }
-        let repo = String(cleaned[slash.upperBound...])
         let output = command("/opt/homebrew/bin/gh", ["pr", "list", "--repo", repo, "--limit", "3", "--json", "number,statusCheckRollup"]) ?? command("/usr/local/bin/gh", ["pr", "list", "--repo", repo, "--limit", "3", "--json", "number,statusCheckRollup"])
         guard let output, let prs = try? JSONSerialization.jsonObject(with: Data(output.utf8)) as? [[String: Any]] else { return "GitHub unavailable" }
         let failing = prs.contains { (($0["statusCheckRollup"] as? [[String: Any]]) ?? []).contains { ["FAILURE", "ERROR"].contains($0["conclusion"] as? String ?? "") } }
         return "GitHub: \(prs.count) open PR(s)\(failing ? ", CI failing" : "")"
     }
-    static func linearIssues(key: String?) -> (String, [String]) {
+    static func githubRows(_ repo: String, kind: String) -> [GitHubRow] {
+        let args = [kind, "list", "--repo", repo, "--limit", "3", "--json", "number,title,state,url"]
+        let output = command("/opt/homebrew/bin/gh", args) ?? command("/usr/local/bin/gh", args)
+        return output.map { NativeParsers.githubRows(Data($0.utf8)) } ?? []
+    }
+    static func linearIssues(key: String?) -> (String, [LinearIssue]) {
         guard let key, !key.isEmpty else { return ("Linear not configured — add a key in Settings", []) }
         // This first native release preserves the read-only contract; the query stays bounded.
-        let body = #"{"query":"query { viewer { assignedIssues(first: 10) { nodes { identifier title } } } }"}"#
+        let body = #"{"query":"query { viewer { assignedIssues(first: 10) { nodes { identifier title url } } } }"}"#
         guard let url = URL(string: "https://api.linear.app/graphql"), var request = Optional(URLRequest(url: url)) else { return ("Linear unavailable", []) }
         request.httpMethod = "POST"; request.httpBody = Data(body.utf8); request.setValue(key, forHTTPHeaderField: "Authorization"); request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.timeoutInterval = 3
         guard let responseData = BoundedHTTP.post(request),
               let root = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any],
               let nodes = (((root["data"] as? [String: Any])?["viewer"] as? [String: Any])?["assignedIssues"] as? [String: Any])?["nodes"] as? [[String: Any]] else { return ("Linear configured, but unavailable", []) }
-        return ("Linear assigned to me (read-only)", nodes.compactMap { guard let id = $0["identifier"] as? String, let title = $0["title"] as? String else { return nil }; return "\(id) · \(title)" })
+        return ("Linear assigned to me (read-only)", nodes.compactMap { guard let id = $0["identifier"] as? String, let title = $0["title"] as? String, let raw = $0["url"] as? String, let url = URL(string: raw), url.scheme == "https", url.host == "linear.app" else { return nil }; return LinearIssue(identifier: id, title: title, url: url) })
     }
     static func command(_ executable: String, _ arguments: [String], environment: [String: String] = [:]) -> String? {
         guard FileManager.default.isExecutableFile(atPath: executable) else { return nil }
@@ -294,7 +302,9 @@ private enum MacCollector {
             if done.wait(timeout: .now() + 0.2) == .timedOut { kill(process.processIdentifier, SIGKILL); _ = done.wait(timeout: .now() + 1) }
         }
         pipe.fileHandleForReading.readabilityHandler = nil
+        guard !process.isRunning else { pipe.fileHandleForReading.closeFile(); return nil }
         lock.lock(); let data = output; let valid = !oversized && data.count <= 65_536; lock.unlock()
+        pipe.fileHandleForReading.closeFile()
         guard process.terminationStatus == 0, valid else { return nil }
         return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     }
