@@ -286,10 +286,9 @@ private enum MacCollector {
         return output.map { NativeParsers.githubRows(Data($0.utf8)) } ?? []
     }
     static func githubRun(_ repo: String) -> GitHubRow? {
-        let args = ["run", "list", "--repo", repo, "--limit", "1", "--json", "databaseId,name,status,url"]
+        let args = ["run", "list", "--repo", repo, "--limit", "1", "--json", "databaseId,displayTitle,workflowName,status,conclusion,url"]
         let output = command("/opt/homebrew/bin/gh", args) ?? command("/usr/local/bin/gh", args)
-        guard let output, let rows = try? JSONSerialization.jsonObject(with: Data(output.utf8)) as? [[String: Any]], let row = rows.first, let id = row["databaseId"] as? Int, let name = row["name"] as? String, let state = row["status"] as? String, let raw = row["url"] as? String, let url = URL(string: raw), url.scheme == "https", url.host == "github.com" else { return nil }
-        return GitHubRow(number: id, title: name, state: state, url: url)
+        return output.flatMap { NativeParsers.githubRun(Data($0.utf8)) }
     }
     static func linearIssues(key: String?) -> (String, [LinearIssue]) {
         guard let key, !key.isEmpty else { return ("Linear not configured — add a key in Settings", []) }

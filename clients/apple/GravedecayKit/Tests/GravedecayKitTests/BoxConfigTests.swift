@@ -54,4 +54,15 @@ final class BoxConfigTests: XCTestCase {
         let interfaces = NativeParsers.interfaceBytes(netstat)
         XCTAssertEqual(interfaces.count, 1); XCTAssertEqual(interfaces.first?.0, "en5"); XCTAssertEqual(interfaces.first?.1, 100); XCTAssertEqual(interfaces.first?.2, 200)
     }
+
+    func testGitHubRunParserUsesConclusionAndRejectsUnsafeURLs() {
+        let success = #"[{"databaseId":7,"displayTitle":"Build","workflowName":"CI","status":"completed","conclusion":"success","url":"https://github.com/a/b/actions/runs/7"}]"#
+        XCTAssertEqual(NativeParsers.githubRun(Data(success.utf8))?.state, "success")
+        let running = #"[{"databaseId":8,"workflowName":"CI","status":"in_progress","conclusion":"","url":"https://github.com/a/b/actions/runs/8"}]"#
+        XCTAssertEqual(NativeParsers.githubRun(Data(running.utf8))?.state, "in_progress")
+        let bad = #"[{"databaseId":9,"workflowName":"CI","status":"completed","url":"https://github.com.evil/a"}]"#
+        XCTAssertNil(NativeParsers.githubRun(Data(bad.utf8)))
+        let long = "[{\"databaseId\":10,\"displayTitle\":\"" + String(repeating: "x", count: 241) + "\",\"status\":\"completed\",\"url\":\"https://github.com/a/b/actions/runs/10\"}]"
+        XCTAssertNil(NativeParsers.githubRun(Data(long.utf8)))
+    }
 }
