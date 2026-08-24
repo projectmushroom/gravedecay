@@ -214,7 +214,11 @@ final class MacDashboardModel: ObservableObject {
 
 private struct CollectionResult { let snapshot: MacSnapshot; let repositories: [MacRepository]; let tailnetStatus, tailnetName, githubStatus, linearStatus, networkActivity: String; let linearIssues: [LinearIssue] }
 private enum MacCollector {
+    @TaskLocal static var activeDeadline: Date?
     static func collect(root: String, linearKey: String?, deadline: Date) -> CollectionResult? {
+        Self.$activeDeadline.withValue(deadline) { collectBounded(root: root, linearKey: linearKey, deadline: deadline) }
+    }
+    private static func collectBounded(root: String, linearKey: String?, deadline: Date) -> CollectionResult? {
         guard !Task.isCancelled, Date() < deadline else { return nil }
         let os = ProcessInfo.processInfo.operatingSystemVersionString.replacingOccurrences(of: "Version ", with: "")
         let disk = (try? URL(fileURLWithPath: NSHomeDirectory()).resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeTotalCapacityKey]))
@@ -259,7 +263,7 @@ private enum MacCollector {
             let dirty = !status.isEmpty; let detail = dirty ? "\(WorkStatus.changedFileCount(status)) changed file(s)" : "Clean"
             let remote = command("/usr/bin/git", ["-C", path, "remote", "get-url", "origin"])
             let enriched = ghAvailable && index < 4 && !Task.isCancelled && Date() < deadline
-            let github = githubSummary(remote, enabled: enriched)
+            let github = GitHubRemote.repository(remote).map { _ in "GitHub remote" }
             let repo = GitHubRemote.repository(remote)
             let pulls = enriched ? (repo.map { githubRows($0, kind: "pr") } ?? []) : []
             let issues = enriched ? (repo.map { githubRows($0, kind: "issue") } ?? []) : []
@@ -293,12 +297,14 @@ private enum MacCollector {
         let body = #"{"query":"query { viewer { assignedIssues(first: 10) { nodes { identifier title url } } } }"}"#
         guard let url = URL(string: "https://api.linear.app/graphql"), var request = Optional(URLRequest(url: url)) else { return ("Linear unavailable", []) }
         request.httpMethod = "POST"; request.httpBody = Data(body.utf8); request.setValue(key, forHTTPHeaderField: "Authorization"); request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.timeoutInterval = 3
-        guard let responseData = BoundedHTTP.post(request),
+        guard let responseData = BoundedHTTP.post(request, deadline: activeDeadline ?? Date()),
               let root = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any],
               let nodes = (((root["data"] as? [String: Any])?["viewer"] as? [String: Any])?["assignedIssues"] as? [String: Any])?["nodes"] as? [[String: Any]] else { return ("Linear configured, but unavailable", []) }
         return ("Linear assigned to me (read-only)", nodes.compactMap { guard let id = $0["identifier"] as? String, let title = $0["title"] as? String, let raw = $0["url"] as? String, let url = URL(string: raw), url.scheme == "https", url.host == "linear.app" else { return nil }; return LinearIssue(identifier: id, title: title, url: url) })
     }
     static func command(_ executable: String, _ arguments: [String], environment: [String: String] = [:]) -> String? {
+        let deadline = activeDeadline ?? Date().addingTimeInterval(2)
+        guard !Task.isCancelled, Date() < deadline else { return nil }
         guard FileManager.default.isExecutableFile(atPath: executable) else { return nil }
         let process = Process(); process.executableURL = URL(fileURLWithPath: executable); process.arguments = arguments; process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
         let pipe = Pipe(); process.standardOutput = pipe; process.standardError = FileHandle.nullDevice
@@ -312,11 +318,12 @@ private enum MacCollector {
         }
         process.terminationHandler = { _ in done.signal() }
         do { try process.run() } catch { return nil }
-        if done.wait(timeout: .now() + 2) == .timedOut {
+        while done.wait(timeout: .now() + 0.05) == .timedOut, !Task.isCancelled, Date() < deadline {}
+        if process.isRunning {
             process.terminate()
             if done.wait(timeout: .now() + 0.2) == .timedOut { kill(process.processIdentifier, SIGKILL); _ = done.wait(timeout: .now() + 1) }
         }
-        _ = eof.wait(timeout: .now() + 0.05)
+        _ = eof.wait(timeout: .now() + min(0.05, max(0, deadline.timeIntervalSinceNow)))
         pipe.fileHandleForReading.readabilityHandler = nil
         guard !process.isRunning else { pipe.fileHandleForReading.closeFile(); return nil }
         lock.lock(); let data = output; let valid = !oversized && data.count <= 65_536; lock.unlock()
@@ -328,12 +335,12 @@ private enum MacCollector {
 
 private final class BoundedHTTP: NSObject, URLSessionDataDelegate, URLSessionTaskDelegate {
     private var data = Data(); private var valid = false; private let done = DispatchSemaphore(value: 0)
-    static func post(_ request: URLRequest) -> Data? {
+    static func post(_ request: URLRequest, deadline: Date) -> Data? {
         let collector = BoundedHTTP(); let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 3; config.timeoutIntervalForResource = 3
         let session = URLSession(configuration: config, delegate: collector, delegateQueue: nil)
         session.dataTask(with: request).resume()
-        guard collector.done.wait(timeout: .now() + 4) == .success, collector.valid, collector.data.count <= 65_536 else { session.invalidateAndCancel(); return nil }
+        guard !Task.isCancelled, deadline > Date(), collector.done.wait(timeout: .now() + deadline.timeIntervalSinceNow) == .success, collector.valid, collector.data.count <= 65_536 else { session.invalidateAndCancel(); return nil }
         session.invalidateAndCancel(); return collector.data
     }
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
