@@ -4,6 +4,9 @@ import GravedecayKit
 @main
 struct GravedecayApp: App {
     @StateObject private var model = AppModel()
+    #if os(macOS)
+    @StateObject private var graveMenu = GraveMenuModel()
+    #endif
 
     var body: some Scene {
         WindowGroup {
@@ -11,6 +14,11 @@ struct GravedecayApp: App {
                 .environmentObject(model)
         }
         #if os(macOS)
+        MenuBarExtra("Gravedecay", systemImage: menuIcon) {
+            GraveMenuView(model: graveMenu)
+                .task { graveMenu.start() }
+        }
+        .menuBarExtraStyle(.window)
         Settings {
             SettingsView()
                 .environmentObject(model)
@@ -19,7 +27,39 @@ struct GravedecayApp: App {
         }
         #endif
     }
+
+    #if os(macOS)
+    private var menuIcon: String { graveMenu.selected?.summary?.problems ?? 0 > 0 ? "exclamationmark.triangle.fill" : "cross.case.fill" }
+    #endif
 }
+
+#if os(macOS)
+private struct GraveMenuView: View {
+    @ObservedObject var model: GraveMenuModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack { Label("Gravedecay", systemImage: "cross.case.fill").font(.headline); Spacer(); Button("Refresh", systemImage: "arrow.clockwise") { model.refresh() }.accessibilityLabel("Refresh appliances") }
+            if model.graves.count > 1 { Picker("Appliance", selection: $model.selectedID) { ForEach(model.graves) { Text($0.candidate.name).tag(Optional($0.id)) } }.pickerStyle(.menu) }
+            if let grave = model.selected, let summary = grave.summary {
+                VStack(alignment: .leading, spacing: 5) {
+                    Label(grave.reachable ? (summary.problems > 0 ? "Reachable · Warning" : "Reachable · Healthy") : "Unreachable (last summary)", systemImage: grave.reachable ? (summary.problems > 0 ? "exclamationmark.triangle.fill" : "checkmark.circle.fill") : "wifi.slash").foregroundStyle(summary.problems > 0 ? .orange : (grave.reachable ? .green : .secondary))
+                    Text("\(summary.node.host) · \(summary.node.mode) · \(summary.node.platform)").font(.subheadline)
+                    Text("CPU \(GravePresentation.percent(summary.resources.cpu_pct))   Memory \(GravePresentation.percent(summary.resources.memory_pct))   Disk \(GravePresentation.percent(summary.resources.disk_pct))").accessibilityLabel("CPU \(GravePresentation.percent(summary.resources.cpu_pct)), memory \(GravePresentation.percent(summary.resources.memory_pct)), disk \(GravePresentation.percent(summary.resources.disk_pct))")
+                    Text("Temp CPU \(GravePresentation.temperature(summary.resources.cpu_temp_c)) · GPU \(GravePresentation.temperature(summary.resources.gpu_temp_c))")
+                    Text("\(summary.activity.sessions_live) active · \(summary.activity.sessions_frozen) frozen · \(summary.problems) problems")
+                    Text("Uptime \(GravePresentation.uptime(summary.node.uptime_s)) · observed \(GravePresentation.age(summary.observed_at))").foregroundStyle(.secondary)
+                    HStack { link("Dashboard", summary.links.dashboard); link("T3", summary.links.t3); link("Terminal", summary.links.terminal); link("Network", summary.links.network) }
+                }
+            } else { Text(message).foregroundStyle(.secondary) }
+            Divider()
+            Button("Open Gravedecay") { model.showMainWindow() }
+            Button("Quit Gravedecay") { NSApp.terminate(nil) }
+        }.padding().frame(width: 390)
+    }
+    private var message: String { switch model.state { case .scanning: return "Discovering tailnet appliances…"; case .missingTailscale: return "Tailscale CLI not found. Install the Tailscale app."; case .loggedOut: return "Tailscale is logged out. Sign in with the Tailscale app."; case .noAppliances: return "No reachable Gravedecay appliances found."; default: return "Waiting to discover appliances…" } }
+    @ViewBuilder private func link(_ title: String, _ path: String?) -> some View { if let grave = model.selected, GravePresentation.link(host: grave.candidate.dns, path: path) != nil { Button(title) { model.open(path) } } }
+}
+#endif
 
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel

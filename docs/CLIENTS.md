@@ -22,6 +22,10 @@ over the same origins and never require new listening ports on the box.
   Tailscale node (TailscaleKit) so a device needs no VPN profile. Build and
   distribution details live in `clients/apple/README.md`; CI is
   `.github/workflows/apple.yml` (Linux + macOS matrix).
+  On macOS 15+ the same app also has a menu-bar summary and discovery surface.
+  It invokes the local Tailscale CLI read-only, validates online nodes and the
+  versioned summary before display, and opens only same-host HTTPS paths from
+  the validated response.
 
 - **Omarchy 4 / Quattro** — `clients/omarchy/` is a native Quickshell bar
   widget. It reads local `tailscale status --json`, probes online peers at

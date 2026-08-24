@@ -6,7 +6,7 @@ options:
   bundleIdPrefix: com.projectmushroom
   deploymentTarget:
     iOS: "17.0"
-    macOS: "14.0"
+    macOS: "15.0"
   createIntermediateGroups: true
 
 settings:
@@ -55,12 +55,16 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.projectmushroom.gravedecay
+        PRODUCT_NAME: Gravedecay
+        ARCHS: "arm64 x86_64"
+        ONLY_ACTIVE_ARCH: NO
+        ENABLE_HARDENED_RUNTIME: YES
     info:
       path: App/Generated/Info-macOS.plist
       properties:
         CFBundleDisplayName: Gravedecay
+        LSUIElement: true
     entitlements:
       path: App/Generated/Gravedecay-macOS.entitlements
       properties:
-        com.apple.security.app-sandbox: true
         com.apple.security.network.client: true
