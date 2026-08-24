@@ -16,7 +16,29 @@ final class GraveSummaryTests: XCTestCase {
     }
     func testSafeSameHostLinks() {
         XCTAssertEqual(GravePresentation.link(host: "grave.tail.ts.net", path: "/grave/")?.host, "grave.tail.ts.net")
+        XCTAssertEqual(GravePresentation.link(host: "GRAVE.tail.ts.net.", path: "/grave/")?.host, "grave.tail.ts.net")
+        XCTAssertNil(GravePresentation.link(host: "gråve.tail.ts.net", path: "/grave/"))
         XCTAssertNil(GravePresentation.link(host: "grave.tail.ts.net", path: "//elsewhere"))
         XCTAssertNil(GravePresentation.link(host: "grave.tail.ts.net", path: "/bad\\path"))
+    }
+
+    func testConditionsAndClampedFormatting() {
+        let summary = GraveSummary.decode(#"{"product":"gravedecay","api_version":1,"node":{"host":"grave","platform":"macos","mode":"developer","uptime_s":-1},"resources":{},"activity":{"sessions_live":1,"sessions_frozen":1},"health":{"services_failed":-2,"containers_problem":3},"links":{}}"#.data(using: .utf8)!)!
+        XCTAssertEqual(summary.problems, 3)
+        XCTAssertEqual(GravePresentation.condition(summary: summary, reachable: false), .unreachable)
+        XCTAssertEqual(GravePresentation.condition(summary: summary, reachable: true), .warning)
+        let active = GraveSummary.decode(#"{"product":"gravedecay","api_version":1,"node":{"host":"grave","platform":"macos","mode":"developer","uptime_s":0},"resources":{},"activity":{"sessions_live":1,"sessions_frozen":1},"health":{"services_failed":0,"containers_problem":0},"links":{}}"#.data(using: .utf8)!)!
+        XCTAssertEqual(GravePresentation.condition(summary: active, reachable: true), .active)
+        let frozen = GraveSummary.decode(#"{"product":"gravedecay","api_version":1,"node":{"host":"grave","platform":"macos","mode":"developer","uptime_s":0},"resources":{},"activity":{"sessions_live":0,"sessions_frozen":1},"health":{"services_failed":0,"containers_problem":0},"links":{}}"#.data(using: .utf8)!)!
+        XCTAssertEqual(GravePresentation.condition(summary: frozen, reachable: true), .frozen)
+        let healthy = GraveSummary.decode(#"{"product":"gravedecay","api_version":1,"node":{"host":"grave","platform":"macos","mode":"developer","uptime_s":0},"resources":{},"activity":{"sessions_live":0,"sessions_frozen":0},"health":{"services_failed":0,"containers_problem":0},"links":{}}"#.data(using: .utf8)!)!
+        XCTAssertEqual(GravePresentation.condition(summary: healthy, reachable: true), .healthy)
+        XCTAssertEqual(GravePresentation.condition(summary: nil, reachable: true), .unreachable)
+        XCTAssertEqual(GravePresentation.uptime(-1), "0h 0m")
+        XCTAssertEqual(GravePresentation.age(Date.now.addingTimeInterval(-10)), "10s ago")
+        XCTAssertEqual(GravePresentation.age(Date.now.addingTimeInterval(-90)), "1m ago")
+        XCTAssertEqual(GravePresentation.age(Date.now.addingTimeInterval(-7_200)), "2h ago")
+        XCTAssertEqual(GravePresentation.age(Date.now.addingTimeInterval(-172_800)), "2d ago")
+        XCTAssertEqual(GravePresentation.age(Date.now.addingTimeInterval(60)), "just now")
     }
 }

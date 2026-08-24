@@ -14,12 +14,16 @@ public enum GraveDiscovery {
         guard !name.isEmpty, name.count <= 253, labels.count >= 2,
               labels.allSatisfy({ label in
                   guard !label.isEmpty, label.count <= 63,
-                        label.first!.isLetter || label.first!.isNumber,
-                        label.last!.isLetter || label.last!.isNumber else { return false }
-                  return label.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" }
+                        asciiAlphanumeric(label.utf8.first!),
+                        asciiAlphanumeric(label.utf8.last!) else { return false }
+                  return label.utf8.allSatisfy { asciiAlphanumeric($0) || $0 == 45 }
               }), let suffix = labels.last, suffix.count <= 63,
-              suffix.allSatisfy({ $0.isLetter }) else { return nil }
+              suffix.utf8.allSatisfy({ $0 >= 97 && $0 <= 122 }) else { return nil }
         return name
+    }
+
+    private static func asciiAlphanumeric(_ value: UInt8) -> Bool {
+        (value >= 97 && value <= 122) || (value >= 48 && value <= 57)
     }
 
     public static func candidates(statusData: Data) -> [GraveCandidate] {
@@ -33,6 +37,9 @@ public enum GraveDiscovery {
                   let id = ["ID", "StableID", "NodeID"].compactMap({ node[$0] as? String }).first(where: { !$0.isEmpty }),
                   ids.insert(id).inserted else { return nil }
             return GraveCandidate(id: id, dns: dns, name: (node["HostName"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? dns)
+        }.sorted {
+            let order = $0.name.localizedCaseInsensitiveCompare($1.name)
+            return order == .orderedAscending || (order == .orderedSame && $0.id < $1.id)
         }
     }
 }
@@ -59,22 +66,38 @@ public struct GraveSummary: Codable, Equatable, Sendable {
         return result
     }
 
-    public var problems: Int { health.services_failed + health.containers_problem }
+    public var problems: Int { max(0, health.services_failed) + max(0, health.containers_problem) }
 }
 
 public enum GravePresentation {
+    public enum Condition: Equatable { case unreachable, warning, active, frozen, healthy }
+
+    public static func condition(summary: GraveSummary?, reachable: Bool) -> Condition {
+        guard reachable, let summary else { return .unreachable }
+        if summary.problems > 0 { return .warning }
+        if summary.activity.sessions_live > 0 { return .active }
+        if summary.activity.sessions_frozen > 0 { return .frozen }
+        return .healthy
+    }
+
     public static func percent(_ value: Double?) -> String { value.map { String(format: "%.0f%%", $0) } ?? "—" }
     public static func temperature(_ value: Double?) -> String { value.map { String(format: "%.0f°C", $0) } ?? "—" }
     public static func uptime(_ seconds: Double?) -> String {
         guard let seconds else { return "—" }
-        let value = Int(seconds); let days = value / 86_400; let hours = (value % 86_400) / 3_600
+        let value = max(0, Int(seconds)); let days = value / 86_400; let hours = (value % 86_400) / 3_600
         return days > 0 ? "\(days)d \(hours)h" : "\(hours)h \((value % 3_600) / 60)m"
     }
     public static func age(_ date: Date?, now: Date = .now) -> String {
-        guard let date else { return "unknown" }; return "\(max(0, Int(now.timeIntervalSince(date))))s ago"
+        guard let date else { return "unknown" }
+        let seconds = max(0, Int(now.timeIntervalSince(date)))
+        if seconds < 5 { return "just now" }
+        if seconds < 60 { return "\(seconds)s ago" }
+        if seconds < 3_600 { return "\(seconds / 60)m ago" }
+        if seconds < 86_400 { return "\(seconds / 3_600)h ago" }
+        return "\(seconds / 86_400)d ago"
     }
     public static func link(host: String, path: String?) -> URL? {
-        guard GraveDiscovery.dnsName(host) != nil, let path,
+        guard let host = GraveDiscovery.dnsName(host), let path,
               path.hasPrefix("/"), !path.hasPrefix("//"),
               !path.contains("\\"), !path.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 }) else { return nil }
         var components = URLComponents(); components.scheme = "https"; components.host = host; components.percentEncodedPath = path
