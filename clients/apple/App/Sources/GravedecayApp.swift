@@ -74,7 +74,6 @@ struct GravedecayApp: App {
 
     #if os(macOS)
     private var menuCondition: GravePresentation.Condition { GravePresentation.condition(summary: graveMenu.selected?.summary, reachable: graveMenu.selected?.reachable ?? false) }
-    private var menuColor: Color { switch menuCondition { case .warning: return GraveTheme.amber; case .active, .healthy: return GraveTheme.good; case .frozen: return GraveTheme.accentSoft; case .unreachable: return .primary } }
     private var menuStatus: String { switch menuCondition { case .unreachable: return "unreachable"; case .warning: return "warning"; case .active: return "active"; case .frozen: return "frozen"; case .healthy: return "healthy" } }
     #endif
 }
