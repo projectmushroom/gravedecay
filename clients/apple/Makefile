@@ -6,7 +6,7 @@ LIBTAILSCALE_REPO ?= https://github.com/tailscale/libtailscale
 SIGNING ?= CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY=''
 DERIVED_DATA ?= build/DerivedData
 
-.PHONY: project project-embedded tailscale app-icon test package-dmg clean
+.PHONY: project project-embedded tailscale app-icon verify-app-icon test package-dmg clean
 
 ## Generate Gravedecay.xcodeproj (no TailscaleKit — Tailscale VPN app mode).
 project:
@@ -19,6 +19,9 @@ project-embedded: Vendor/TailscaleKit.xcframework
 ## Regenerate every declared macOS AppIcon raster from its transparent SVG master.
 app-icon:
 	scripts/generate-app-icon.sh
+
+verify-app-icon:
+	scripts/verify-macos-app-icon.sh "$(DERIVED_DATA)/Build/Products/Debug/Gravedecay.app"
 
 ## Build TailscaleKit frameworks from source (needs Go + Xcode).
 ## Product paths inside libtailscale may drift between revisions — if the
@@ -44,6 +47,7 @@ test:
 ## keep Xcode output out of DerivedData; NOTARY_PROFILE optionally notarizes.
 package-dmg: project
 	xcodebuild -project Gravedecay.xcodeproj -scheme Gravedecay-macOS -configuration Release build -derivedDataPath "$(DERIVED_DATA)" $(SIGNING) ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO -skipPackagePluginValidation
+	scripts/verify-macos-app-icon.sh "$(CURDIR)/$(DERIVED_DATA)/Build/Products/Release/Gravedecay.app"
 	APP="$(CURDIR)/$(DERIVED_DATA)/Build/Products/Release/Gravedecay.app" scripts/package-macos-dmg.sh
 
 clean:

@@ -48,6 +48,19 @@ targets:
   Gravedecay-macOS:
     type: application
     platform: macOS
+    preBuildScripts:
+      - name: Generate AppIcon renditions
+        path: scripts/generate-app-icon.sh
+        inputFiles:
+          - App/Assets.xcassets/AppIcon.appiconset/AppIcon.svg
+        outputFiles:
+          - App/Assets.xcassets/AppIcon.appiconset/icon-16.png
+          - App/Assets.xcassets/AppIcon.appiconset/icon-32.png
+          - App/Assets.xcassets/AppIcon.appiconset/icon-64.png
+          - App/Assets.xcassets/AppIcon.appiconset/icon-128.png
+          - App/Assets.xcassets/AppIcon.appiconset/icon-256.png
+          - App/Assets.xcassets/AppIcon.appiconset/icon-512.png
+          - App/Assets.xcassets/AppIcon.appiconset/icon-1024.png
     sources:
       - path: App/Sources
         excludes: [WebPane.swift]
