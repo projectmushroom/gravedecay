@@ -17,19 +17,33 @@ enum GraveTheme {
     static let mono = Font.system(.body, design: .monospaced)
 }
 
-/// Native translation of the Omarchy plugin's 18×18 GraveIcon.qml geometry.
+/// Font-independent rendering of Material Design's `md-skull` (U+F068C).
 struct GraveMark: View {
     var color: Color = .primary
     var size: CGFloat = 18
-    private var scale: CGFloat { size / 18 }
+    var body: some View { SkullShape().fill(color, style: FillStyle(eoFill: true)).frame(width: size, height: size) }
+}
 
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            Rectangle().fill(color).frame(width: 4 * scale, height: 8 * scale).offset(x: 7 * scale, y: scale)
-            Rectangle().fill(color).frame(width: 10 * scale, height: 3 * scale).offset(x: 4 * scale, y: 4 * scale)
-            RoundedRectangle(cornerRadius: 2 * scale).fill(color).frame(width: 12 * scale, height: 8 * scale).offset(x: 3 * scale, y: 9 * scale)
-            Rectangle().strokeBorder(.black.opacity(0.45), lineWidth: scale).frame(width: 6 * scale, height: scale).offset(x: 6 * scale, y: 12 * scale)
-        }.frame(width: size, height: size)
+private struct SkullShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let s = min(rect.width, rect.height) / 24
+        let x = rect.midX - 12 * s, y = rect.midY - 12 * s
+        func p(_ px: CGFloat, _ py: CGFloat) -> CGPoint { CGPoint(x: x + px * s, y: y + py * s) }
+        var path = Path()
+        path.move(to: p(12, 2))
+        path.addArc(center: p(12, 11), radius: 9 * s, startAngle: .degrees(-90), endAngle: .degrees(-180), clockwise: true)
+        path.addCurve(to: p(7, 18.47), control1: p(3, 14.03), control2: p(4.53, 16.82))
+        path.addLine(to: p(7, 22)); path.addLine(to: p(9, 22)); path.addLine(to: p(9, 19))
+        path.addLine(to: p(11, 19)); path.addLine(to: p(11, 22)); path.addLine(to: p(13, 22))
+        path.addLine(to: p(13, 19)); path.addLine(to: p(15, 19)); path.addLine(to: p(15, 22))
+        path.addLine(to: p(17, 22)); path.addLine(to: p(17, 18.46))
+        path.addCurve(to: p(21, 11), control1: p(19.47, 16.81), control2: p(21, 14))
+        path.addArc(center: p(12, 11), radius: 9 * s, startAngle: .degrees(0), endAngle: .degrees(-90), clockwise: true)
+        path.closeSubpath()
+        path.addEllipse(in: CGRect(x: x + 6 * s, y: y + 11 * s, width: 4 * s, height: 4 * s))
+        path.addEllipse(in: CGRect(x: x + 14 * s, y: y + 11 * s, width: 4 * s, height: 4 * s))
+        path.move(to: p(12, 14)); path.addLine(to: p(13.5, 17)); path.addLine(to: p(10.5, 17)); path.closeSubpath()
+        return path
     }
 }
 
