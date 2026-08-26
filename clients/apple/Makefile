@@ -6,7 +6,7 @@ LIBTAILSCALE_REPO ?= https://github.com/tailscale/libtailscale
 SIGNING ?= CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY=''
 DERIVED_DATA ?= build/DerivedData
 
-.PHONY: project project-embedded tailscale test package-dmg clean
+.PHONY: project project-embedded tailscale app-icon test package-dmg clean
 
 ## Generate Gravedecay.xcodeproj (no TailscaleKit — Tailscale VPN app mode).
 project:
@@ -15,6 +15,10 @@ project:
 ## Generate the project with the in-app tailnet node embedded.
 project-embedded: Vendor/TailscaleKit.xcframework
 	$(XCODEGEN) --spec project-embedded.yml
+
+## Regenerate every declared macOS AppIcon raster from its opaque SVG master.
+app-icon:
+	scripts/generate-app-icon.sh
 
 ## Build TailscaleKit frameworks from source (needs Go + Xcode).
 ## Product paths inside libtailscale may drift between revisions — if the
