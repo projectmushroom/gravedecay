@@ -70,6 +70,27 @@ public struct GraveSummary: Codable, Equatable, Sendable {
         let failed = max(0, health.services_failed), containers = max(0, health.containers_problem)
         return failed > Int.max - containers ? Int.max : failed + containers
     }
+
+    /// Links are capabilities, not defaults. A client must not manufacture a
+    /// terminal (or another privileged surface) for a box that did not publish
+    /// one in its validated summary.
+    public var capabilities: GraveCapabilities { GraveCapabilities(links: links) }
+}
+
+public struct GraveCapabilities: Equatable, Sendable {
+    public let dashboard: String?
+    public let t3: String?
+    public let terminal: String?
+    public let network: String?
+
+    public init(links: GraveSummary.Links) {
+        dashboard = GravePresentation.safePath(links.dashboard)
+        t3 = GravePresentation.safePath(links.t3)
+        // Native ttyd needs the well-known token and websocket children. Do
+        // not turn an arbitrary summary path into a terminal transport.
+        terminal = GravePresentation.terminalPath(links.terminal)
+        network = GravePresentation.safePath(links.network)
+    }
 }
 
 public enum GravePresentation {
@@ -100,10 +121,21 @@ public enum GravePresentation {
         if seconds < 86_400 { return "\(seconds / 3_600)h ago" }
         return "\(seconds / 86_400)d ago"
     }
+    public static func safePath(_ path: String?) -> String? {
+        guard let path, path.hasPrefix("/"), !path.hasPrefix("//"),
+              !path.contains("\\"), !path.contains("?"), !path.contains("#"),
+              !path.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 }),
+              !path.split(separator: "/").contains(where: { $0 == "." || $0 == ".." }) else { return nil }
+        return path
+    }
+
+    public static func terminalPath(_ path: String?) -> String? {
+        guard let path = safePath(path) else { return nil }
+        return path == "/term" || path == "/term/" ? path : nil
+    }
+
     public static func link(host: String, path: String?) -> URL? {
-        guard let host = GraveDiscovery.dnsName(host), let path,
-              path.hasPrefix("/"), !path.hasPrefix("//"),
-              !path.contains("\\"), !path.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 }) else { return nil }
+        guard let host = GraveDiscovery.dnsName(host), let path = safePath(path) else { return nil }
         var components = URLComponents(); components.scheme = "https"; components.host = host; components.percentEncodedPath = path
         return components.url
     }

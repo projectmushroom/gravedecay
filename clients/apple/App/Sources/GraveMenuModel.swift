@@ -6,6 +6,7 @@ import GravedecayKit
 @MainActor
 final class GraveMenuModel: ObservableObject {
     enum State: Equatable { case idle, scanning, missingTailscale, loggedOut, noAppliances, ready }
+    static let thisMacID = "this-mac"
     struct Grave: Identifiable {
         let candidate: GraveCandidate
         var summary: GraveSummary?
@@ -15,13 +16,17 @@ final class GraveMenuModel: ObservableObject {
 
     @Published private(set) var state: State = .idle
     @Published private(set) var graves: [Grave] = []
-    @Published var selectedID: String?
+    @Published var selectedID: String? { didSet { UserDefaults.standard.set(selectedID, forKey: "graveSelectedTarget") } }
     private var previous = [String: GraveSummary]()
     private var timer: Timer?
 
     var selected: Grave? { graves.first { $0.id == selectedID } }
+    var isThisMac: Bool { selectedID == Self.thisMacID }
 
-    init() { start() }
+    init() {
+        selectedID = UserDefaults.standard.string(forKey: "graveSelectedTarget")
+        start()
+    }
 
     func start() {
         guard timer == nil else { return }
@@ -48,7 +53,8 @@ final class GraveMenuModel: ObservableObject {
             }
         }
         graves = found
-        if selectedID == nil || !found.contains(where: { $0.id == selectedID }) { selectedID = found.first?.id }
+        if selectedID == nil { selectedID = found.first?.id }
+        else if selectedID != Self.thisMacID && !found.contains(where: { $0.id == selectedID }) { selectedID = found.first?.id }
         state = found.isEmpty ? .noAppliances : .ready
     }
 
@@ -97,6 +103,8 @@ final class GraveMenuModel: ObservableObject {
     }
 
     func open(_ path: String?) { guard let grave = selected, let url = GravePresentation.link(host: grave.candidate.dns, path: path) else { return }; NSWorkspace.shared.open(url) }
+
+    func select(_ grave: Grave) { selectedID = grave.id }
 
     private static let noRedirectSession: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral

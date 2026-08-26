@@ -50,12 +50,24 @@ seconds and are capped at 64 KiB; the app displays only the versioned
 `gravedecay` summary contract. Previous valid summaries remain visible as
 unreachable if a later probe fails. Dashboard, T3, Terminal, and Network
 actions are constructed only from the selected DNS name and safe same-host
-single-slash paths supplied by that contract.
+single-slash paths supplied by that contract. The persistent target picker
+includes **This Mac** and discovered graves. A native terminal is created only
+when the selected grave explicitly advertises the standard `/term` capability;
+This Mac does not.
+
+Settings → **Advertise This Mac** is off by default. It starts a small native
+loopback-only (`127.0.0.1:4712`) GET/HEAD server for `/healthz` and
+`/api/v1/summary` while the app runs. It refuses an occupied port or the
+legacy `io.gravedecay.dashboard` companion, and does not alter Tailscale,
+Serve, login, or preferences. The UI shows a manual Serve command instead,
+because safely removing a path from a shared Serve configuration cannot be
+proven after a restart.
 
 The direct-distribution macOS target deliberately is not App Sandbox enabled:
 running the user-installed Tailscale CLI requires local process access. It
-uses no credentials, listener, daemon, registry, analytics, or remote control;
-network requests remain HTTPS tailnet requests. Hardened Runtime remains on
+uses no credentials, daemon, registry, analytics, or remote control; its
+optional listener is loopback-only and explicit. Network requests remain HTTPS
+tailnet requests. Hardened Runtime remains on
 for release builds.
 
 ## Connectivity modes
@@ -75,8 +87,9 @@ for release builds.
 Native SwiftTerm view attached to the same tmux socket as the web terminal
 and SSH (`bin/webterm` behind ttyd). OSC 52 copies (tmux `set-clipboard on`)
 land on the system pasteboard via SwiftTerm's `clipboardCopy` delegate;
-clipboard reads are never answered. Reconnects forever with the same backoff
-as the web client — sessions live in tmux, not in the app.
+clipboard reads are never answered. The terminal header exposes token,
+connection, reconnect, and error state with Retry and bounded redacted
+diagnostics; close errors stop automatic retries instead of disappearing.
 
 ## Testing
 

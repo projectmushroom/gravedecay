@@ -8,7 +8,7 @@ listening — add a row in the same commit that adds a listener.
 | 22 | all | sshd (key-only) | LAN + tailnet (tailnet 22 is intercepted by Tailscale SSH) |
 | 4710 | 127.0.0.1 | multi-user identity gateway (opt-in) | `tailscale serve` → HTTPS origin |
 | 4711 | 127.0.0.1 | t3code | `tailscale serve` → https `/` (disabled in multi-user mode) |
-| 4712 | 127.0.0.1 | gravedecay (Linux systemd or macOS user LaunchAgent) | `tailscale serve` → https `/grave`; multi-user admin actions only via root gateway |
+| 4712 | 127.0.0.1 | gravedecay (Linux systemd, macOS legacy user LaunchAgent, or explicitly enabled native Mac app process) | `tailscale serve` → https `/grave`; native app does not change Serve and refuses collisions; multi-user admin actions only via root gateway |
 | 4713 | 127.0.0.1 | gravedecay-term (ttyd, custom clipboard-capable frontend — see TERMINAL.md) | `tailscale serve` → https `/term` (disabled in multi-user mode) |
 | 4714 | 127.0.0.1 | gravedecay-net (gravenet — Linux systemd or macOS user LaunchAgent) | `tailscale serve` → https `/net` (widen bind via `GRAVENET_BIND` drop-in only if LAN clients should load it directly) |
 | `${PORT:-4711}` | 127.0.0.1 | portable Compose nginx gateway (optional) | same-origin `/`, `/grave/`, `/term/`; choose a distinct `PORT` per Compose project |

@@ -7,12 +7,14 @@ struct GravedecayApp: App {
     #if os(macOS)
     @StateObject private var graveMenu = GraveMenuModel()
     @StateObject private var macDashboard = MacDashboardModel()
+    @StateObject private var macHost = MacNativeHost()
     #endif
 
     var body: some Scene {
         WindowGroup(id: "main") {
             #if os(macOS)
-            MacNativeContentView(graves: graveMenu, model: macDashboard)
+            MacNativeContentView(graves: graveMenu, model: macDashboard, host: macHost)
+                .onAppear { macDashboard.setNativeHost(macHost) }
             #else
             ContentView()
                 .environmentObject(model)
@@ -32,7 +34,7 @@ struct GravedecayApp: App {
         }
         .menuBarExtraStyle(.window)
         Settings {
-            MacSettingsView(model: macDashboard)
+            MacSettingsView(model: macDashboard, host: macHost)
                 .frame(width: 520, height: 620)
                 .graveRoot()
         }
@@ -53,7 +55,7 @@ private struct GraveMenuView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack { GraveMark(color: GraveTheme.ink).accessibilityHidden(true); Text("GRAVEDECAY").tracking(1.2).foregroundStyle(GraveTheme.amber); Spacer(); Button("↻ REFRESH") { model.refresh() }.buttonStyle(GraveButton()).accessibilityLabel("Refresh appliances") }.font(.system(size: 11, weight: .bold, design: .monospaced))
-            if model.graves.count > 1 { Picker("APPLIANCE", selection: $model.selectedID) { ForEach(model.graves) { Text($0.candidate.name.uppercased()).tag(Optional($0.id)) } }.pickerStyle(.menu).tint(GraveTheme.amber).font(.system(size: 10, design: .monospaced)) }
+            Picker("TARGET", selection: $model.selectedID) { Text("THIS MAC").tag(Optional(GraveMenuModel.thisMacID)); ForEach(model.graves) { Text($0.candidate.name.uppercased()).tag(Optional($0.id)) } }.pickerStyle(.menu).tint(GraveTheme.amber).font(.system(size: 10, design: .monospaced))
             if let grave = model.selected, let summary = grave.summary {
                 VStack(alignment: .leading, spacing: 5) {
                     HStack { Rectangle().fill(color(for: condition)).frame(width: 8, height: 8); Text(title(for: condition).uppercased()) }.foregroundStyle(color(for: condition))
@@ -62,8 +64,10 @@ private struct GraveMenuView: View {
                     Text("TEMP CPU \(GravePresentation.temperature(summary.resources.cpu_temp_c)) // GPU \(GravePresentation.temperature(summary.resources.gpu_temp_c))").foregroundStyle(GraveTheme.muted)
                     Text("\(summary.activity.sessions_live) ACTIVE // \(summary.activity.sessions_frozen) FROZEN // \(summary.problems) PROBLEMS").foregroundStyle(summary.problems > 0 ? GraveTheme.crit : GraveTheme.ink2)
                     Text("UP \(GravePresentation.uptime(summary.node.uptime_s)) // SEEN \(GravePresentation.age(summary.observed_at))").foregroundStyle(GraveTheme.muted)
-                    HStack { link("Dashboard", summary.links.dashboard); link("T3", summary.links.t3); link("Terminal", summary.links.terminal); link("Network", summary.links.network) }
+                    HStack { link("Dashboard", summary.capabilities.dashboard); link("T3", summary.capabilities.t3); link("Terminal", summary.capabilities.terminal); link("Network", summary.capabilities.network) }
                 }.font(.system(size: 9, design: .monospaced))
+            } else if model.isThisMac {
+                Text("THIS MAC // DASHBOARD + NETWORK ONLY // TERMINAL NOT PUBLISHED").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.muted)
             } else { Text(message.uppercased()).font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.muted) }
             Rectangle().fill(GraveTheme.ring).frame(height: 1)
             HStack { Button("OPEN APP") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }; Button("QUIT") { NSApp.terminate(nil) } }.buttonStyle(GraveButton())

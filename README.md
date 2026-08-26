@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/projectmushroom/gravedecay/actions/workflows/ci.yml/badge.svg)](https://github.com/projectmushroom/gravedecay/actions/workflows/ci.yml)
 
-<img src="assets/gravedecay.png" width="128" align="right" alt="gravedecay logo">
+<img src="clients/apple/App/Assets/gravedecay-skull.svg" width="128" align="right" alt="gravedecay skull logo">
 
 **Turn any Linux box into an always-on AI dev appliance. The box never sleeps — your agents work the graveyard shift.** 🪦
 
@@ -38,9 +38,6 @@ on first raise; every other system leaves it off unless you opt in.
              └─ gravedecay PWA (/grave/) ─┘   (iOS/Android/desktop)
                 the system overview & controller      drive the agents
 ```
-
-![the gravedecay dashboard — Work tab](assets/dashboard.png)
-![the gravedecay dashboard — System tab](assets/dashboard-system.png)
 
 ## Design principles
 
@@ -344,8 +341,6 @@ that always works. (Existing boxes: `raise.sh` won't clobber an existing
 `config/tmux.conf`; re-copy it from the repo to pick up the clipboard config.)
 
 ## Network flow monitor
-
-![gravenet — realtime network flow monitor](assets/gravenet.png)
 
 `/net/` is **gravenet** — a realtime ops view of the box's networking: one
 card per interface with live RX/TX sparklines (1 s samples, 3 min window),

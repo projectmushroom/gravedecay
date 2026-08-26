@@ -27,7 +27,11 @@ over the same origins and never require new listening ports on the box.
   On macOS 15+ the same app also has a menu-bar summary and discovery surface.
   It invokes the local Tailscale CLI read-only, validates online nodes and the
   versioned summary before display, and opens only same-host HTTPS paths from
-  the validated response.
+  the validated response. Its persistent target selector includes This Mac
+  and discovered graves; a native terminal exists only when the selected
+  summary explicitly advertises the standard terminal link. The optional This
+  Mac publisher is off by default, binds only loopback while the app runs, and
+  never changes Tailscale Serve.
 
 - **Omarchy 4 / Quattro** — `clients/omarchy/` is a native Quickshell bar
   widget. It reads local `tailscale status --json`, probes online peers at

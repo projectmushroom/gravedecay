@@ -1,6 +1,9 @@
 import SwiftUI
 import SwiftTerm
 import GravedecayKit
+#if os(macOS)
+import OSLog
+#endif
 
 #if os(iOS)
 import UIKit
@@ -8,10 +11,36 @@ import UIKit
 import AppKit
 #endif
 
+final class TerminalStatus: ObservableObject {
+    enum State: String { case unavailable = "UNAVAILABLE", fetchingToken = "FETCHING TOKEN", connecting = "CONNECTING", connected = "CONNECTED", reconnecting = "RECONNECTING", error = "ERROR" }
+    @Published private(set) var state: State = .unavailable
+    @Published private(set) var failureCount = 0
+    @Published private(set) var reconnectCount = 0
+    @Published private(set) var retryID = 0
+
+    #if os(macOS)
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.projectmushroom.gravedecay", category: "terminal")
+    #endif
+
+    func transition(_ value: State) {
+        state = value
+        #if os(macOS)
+        logger.info("terminal state=\(value.rawValue, privacy: .public) failures=\(self.failureCount) reconnects=\(self.reconnectCount)")
+        #endif
+    }
+    func failed() {
+        failureCount += 1
+        transition(.error)
+    }
+    func reconnecting() { reconnectCount += 1; transition(.reconnecting) }
+    func retry() { retryID &+= 1; transition(.reconnecting) }
+    var diagnostics: String { "TERMINAL STATE: \(state.rawValue)\nFAILURES: \(failureCount)\nRECONNECTS: \(reconnectCount)" }
+}
+
 /// Drives one SwiftTerm view against the box's web terminal: fetches the
 /// ttyd token, opens the websocket (through the tailnet-aware URLSession),
-/// runs the TtydSession protocol state machine, and reconnects forever with
-/// app.js's backoff — the session itself survives in tmux on the box.
+/// and runs the TtydSession protocol state machine. Secret values and output
+/// never leave the terminal path or diagnostics.
 ///
 /// Everything runs on the main thread: websocket callbacks hop to the main
 /// actor before touching the session or the view.
@@ -19,6 +48,7 @@ final class TerminalController: NSObject {
     private let box: BoxConfig
     private let arg: String?
     private let urlSession: URLSession
+    private let status: TerminalStatus
 
     private var socket: TtydWebSocket?
     private var session: TtydSession?
@@ -26,10 +56,11 @@ final class TerminalController: NSObject {
     private var opened = false
     private(set) weak var terminalView: TerminalView?
 
-    init(box: BoxConfig, arg: String?, urlSession: URLSession) {
+    init(box: BoxConfig, arg: String?, urlSession: URLSession, status: TerminalStatus = TerminalStatus()) {
         self.box = box
         self.arg = arg
         self.urlSession = urlSession
+        self.status = status
     }
 
     func attach(_ view: TerminalView) {
@@ -43,18 +74,25 @@ final class TerminalController: NSObject {
         socket?.close()
         socket = nil
         session = nil
+        status.transition(.unavailable)
+    }
+
+    func retryNow() {
+        socket?.close(); socket = nil; session = nil; retry = 0; opened = false
+        connect()
     }
 
     private func connect() {
         Task { @MainActor [weak self] in
             guard let self, self.terminalView != nil else { return }
-            let token = await TerminalToken.fetch(from: self.box.terminalTokenURL,
-                                                  session: self.urlSession)
+            self.status.transition(.fetchingToken)
+            guard let token = await TerminalToken.fetch(from: self.box.terminalTokenURL, session: self.urlSession) else { self.status.failed(); return }
             self.open(token: token)
         }
     }
 
     private func open(token: String) {
+        status.transition(.connecting)
         let socket = TtydWebSocket(url: box.terminalWebSocketURL(arg: arg),
                                    session: urlSession)
         let session = TtydSession(connection: socket, delegate: self)
@@ -64,6 +102,7 @@ final class TerminalController: NSObject {
                 guard let self, let view = self.terminalView else { return }
                 self.opened = true
                 self.retry = 0
+                self.status.transition(.connected)
                 // tmux new-session -A reattaches, but the old screen content
                 // is stale after a reconnect — reset before the repaint.
                 view.getTerminal().resetToInitialState()
@@ -75,13 +114,18 @@ final class TerminalController: NSObject {
         socket.onFrame = { frame in
             Task { @MainActor in session.receive(frame) }
         }
-        socket.onClose = { [weak self] _ in
-            Task { @MainActor in self?.scheduleReconnect() }
+        socket.onClose = { [weak self] error in
+            Task { @MainActor in self?.closed(error) }
         }
 
         self.socket = socket
         self.session = session
         socket.connect()
+    }
+
+    private func closed(_ error: Error?) {
+        if error != nil { status.failed(); socket = nil; session = nil; return }
+        scheduleReconnect()
     }
 
     private func scheduleReconnect() {
@@ -93,6 +137,7 @@ final class TerminalController: NSObject {
         let delay = (opened && retry == 0) ? 0.3 : min(pow(2.0, Double(retry)), 10.0)
         opened = false
         retry += 1
+        status.reconnecting()
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard let self, self.socket == nil else { return }
@@ -155,6 +200,7 @@ struct TerminalPane {
     let box: BoxConfig
     let urlSession: URLSession
     var arg: String? = nil
+    var status: TerminalStatus? = nil
 
     final class Coordinator {
         let controller: TerminalController
@@ -162,7 +208,7 @@ struct TerminalPane {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(controller: TerminalController(box: box, arg: arg, urlSession: urlSession))
+        Coordinator(controller: TerminalController(box: box, arg: arg, urlSession: urlSession, status: status ?? TerminalStatus()))
     }
 
     private func makeView(_ coordinator: Coordinator) -> TerminalView {

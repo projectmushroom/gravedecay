@@ -11,6 +11,7 @@ import GravedecayKit
 struct MacNativeContentView: View {
     @ObservedObject var graves: GraveMenuModel
     @ObservedObject var model: MacDashboardModel
+    @ObservedObject var host: MacNativeHost
     @State private var selection: Section = .system
 
     enum Section: Hashable { case system, work, network, appliances, terminal, settings }
@@ -27,7 +28,7 @@ struct MacNativeContentView: View {
                 Spacer(); Text("NO WEBVIEW // NO DAEMON").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.muted)
             }.padding(18).padding(.top, 22).frame(width: 210).background(GraveTheme.inset).overlay(alignment: .trailing) { Rectangle().fill(GraveTheme.ring).frame(width: 1) }
             VStack(spacing: 0) {
-                HStack { Text(title).font(.system(size: 14, weight: .bold, design: .monospaced)).tracking(1.4).foregroundStyle(GraveTheme.ink); Spacer(); Text(model.snapshot?.model ?? "SCANNING").font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.muted); Button("↻ REFRESH") { model.refresh(); graves.refresh() }.buttonStyle(GraveButton()) }.padding(.horizontal, 22).frame(height: 54).background(GraveTheme.surface).overlay(alignment: .bottom) { Rectangle().fill(GraveTheme.ring).frame(height: 1) }
+                HStack { Text(title).font(.system(size: 14, weight: .bold, design: .monospaced)).tracking(1.4).foregroundStyle(GraveTheme.ink); Spacer(); GraveTargetPicker(graves: graves); Text(model.snapshot?.model ?? "SCANNING").font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.muted); Button("↻ REFRESH") { model.refresh(); graves.refresh() }.buttonStyle(GraveButton()) }.padding(.horizontal, 22).frame(height: 54).background(GraveTheme.surface).overlay(alignment: .bottom) { Rectangle().fill(GraveTheme.ring).frame(height: 1) }
                 Group {
                 switch selection {
                 case .system: SystemView(snapshot: model.snapshot)
@@ -35,7 +36,7 @@ struct MacNativeContentView: View {
                 case .network: NetworkView(model: model)
                 case .appliances: AppliancesView(graves: graves)
                 case .terminal: TerminalDestination(graves: graves)
-                case .settings: MacSettingsView(model: model)
+                case .settings: MacSettingsView(model: model, host: host)
                 }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }.background(GraveTheme.page)
@@ -44,6 +45,17 @@ struct MacNativeContentView: View {
         .frame(minWidth: 900, minHeight: 600).graveRoot().background(GraveTheme.page.ignoresSafeArea())
     }
     private var title: String { switch selection { case .system: "SYSTEM // THIS MAC"; case .work: "WORK // REPOSITORIES"; case .network: "NETWORK // INTERFACES"; case .appliances: "TAILNET // APPLIANCES"; case .terminal: "TERMINAL // REMOTE"; case .settings: "SETTINGS // LOCAL" } }
+}
+
+private struct GraveTargetPicker: View {
+    @ObservedObject var graves: GraveMenuModel
+    var body: some View {
+        Picker("TARGET", selection: $graves.selectedID) {
+            Text("THIS MAC").tag(Optional(GraveMenuModel.thisMacID))
+            ForEach(graves.graves) { grave in Text(grave.candidate.name.uppercased()).tag(Optional(grave.id)) }
+        }.labelsHidden().pickerStyle(.menu).tint(GraveTheme.amber).font(.system(size: 10, weight: .bold, design: .monospaced))
+            .accessibilityLabel("Target")
+    }
 }
 
 private struct SystemView: View {
@@ -134,7 +146,7 @@ private struct AppliancesView: View {
                     HStack { StatusSquare(good: grave.reachable); Image(systemName: icon(for: GravePresentation.condition(summary: grave.summary, reachable: grave.reachable))); Text(grave.candidate.name.uppercased()).fontWeight(.bold); Spacer(); Text(grave.reachable ? "ONLINE" : "UNREACHABLE").foregroundStyle(grave.reachable ? GraveTheme.good : GraveTheme.muted) }.font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.ink)
                     if let summary = grave.summary { Text("\(summary.node.platform.uppercased()) // CPU \(GravePresentation.percent(summary.resources.cpu_pct))").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.ink2) }
                     if let s = grave.summary { VStack(alignment: .leading, spacing: 5) { HStack { Text("MEM \(GravePresentation.percent(s.resources.memory_pct))"); Text("DISK \(GravePresentation.percent(s.resources.disk_pct))"); Spacer(); Text("UP \(GravePresentation.uptime(s.node.uptime_s))") }.foregroundStyle(GraveTheme.muted); HStack { Text("SESSIONS \(s.activity.sessions_live)"); Text("PROBLEMS \(s.problems)").foregroundStyle(s.problems > 0 ? GraveTheme.crit : GraveTheme.good) } }.font(.system(size: 9, design: .monospaced)) }
-                    HStack { BrowserButton(title: "T3", host: grave.candidate.dns, path: "/"); BrowserButton(title: "DASHBOARD", host: grave.candidate.dns, path: grave.summary?.links.dashboard ?? "/grave/"); Button("TERMINAL") { graves.selectedID = grave.id }.buttonStyle(GraveButton()) }
+                    HStack { CapabilityButton(title: "T3", host: grave.candidate.dns, path: grave.summary?.capabilities.t3); CapabilityButton(title: "DASHBOARD", host: grave.candidate.dns, path: grave.summary?.capabilities.dashboard); if grave.summary?.capabilities.terminal != nil { Button("TERMINAL") { graves.select(grave) }.buttonStyle(GraveButton()) } }
                 }}.contentShape(Rectangle()).onTapGesture { graves.selectedID = grave.id }
             }
         }.frame(maxWidth: 980).padding(24) }.background(GraveTheme.page)
@@ -152,22 +164,30 @@ private struct AppliancesView: View {
 
 private struct TerminalDestination: View {
     @ObservedObject var graves: GraveMenuModel
+    @StateObject private var status = TerminalStatus()
     var body: some View {
-        if let grave = graves.selected, let box = BoxConfig(input: grave.candidate.dns) { VStack(spacing: 0) { HStack { StatusSquare(good: grave.reachable); Text("CONNECTED // \(grave.candidate.name.uppercased())"); Spacer() }.font(.system(size: 10, design: .monospaced)).padding(10).background(GraveTheme.surface); TerminalPane(box: box, urlSession: .shared).padding(1).background(GraveTheme.ring) }.padding(20).background(GraveTheme.page) }
+        if graves.isThisMac { ThemedEmpty(title: "TERMINAL NOT PUBLISHED BY THIS GRAVE", detail: "THIS MAC ADVERTISES DASHBOARD AND NETWORK ONLY") .padding(24).frame(maxWidth: .infinity, maxHeight: .infinity).background(GraveTheme.page) }
+        else if let grave = graves.selected, let box = BoxConfig(host: grave.candidate.dns, terminalPath: grave.summary?.capabilities.terminal) { VStack(spacing: 0) {
+            HStack { StatusSquare(good: status.state == .connected); Text("\(status.state.rawValue) // \(grave.candidate.name.uppercased())"); Spacer(); Button("RETRY") { status.retry() }.buttonStyle(GraveButton()); Button("COPY DIAGNOSTICS") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(status.diagnostics, forType: .string) }.buttonStyle(GraveButton()) }.font(.system(size: 10, design: .monospaced)).padding(10).background(GraveTheme.surface)
+            TerminalPane(box: box, urlSession: .shared, status: status).id("\(grave.id)-\(status.retryID)").padding(1).background(GraveTheme.ring)
+        }.padding(20).background(GraveTheme.page) }
+        else if graves.selected != nil { ThemedEmpty(title: "TERMINAL NOT PUBLISHED BY THIS GRAVE", detail: "SELECT A GRAVE THAT ADVERTISES A SAFE TERMINAL LINK") .padding(24).frame(maxWidth: .infinity, maxHeight: .infinity).background(GraveTheme.page) }
         else { ThemedEmpty(title: "CHOOSE AN APPLIANCE", detail: "SELECT A TARGET IN APPLIANCES AFTER TAILSCALE DISCOVERY") .padding(24).frame(maxWidth: .infinity, maxHeight: .infinity).background(GraveTheme.page) }
     }
 }
 
 struct MacSettingsView: View {
     @ObservedObject var model: MacDashboardModel
+    @ObservedObject var host: MacNativeHost
     @State private var root = ""; @State private var linearKey = ""
     var body: some View {
-        ScrollView { VStack(spacing: 20) { GravePanel("work root") { VStack(alignment: .leading, spacing: 9) { Text("LOCAL DIRECTORY SCANNED FOR GIT REPOSITORIES").foregroundStyle(GraveTheme.muted); TextField("Repository folder", text: $root).textFieldStyle(.plain).padding(8).background(GraveTheme.inset).overlay(Rectangle().stroke(GraveTheme.hairline)); Button("SAVE ROOT") { model.setWorkRoot(root) }.buttonStyle(GraveButton()); if let status = model.workRootStatus { Text(status).foregroundStyle(GraveTheme.crit) } } }; GravePanel("linear // read-only") { VStack(alignment: .leading, spacing: 9) { Text("THE TOKEN STAYS IN THIS MAC'S KEYCHAIN").foregroundStyle(GraveTheme.muted); SecureField("lin_api_…", text: $linearKey).textFieldStyle(.plain).padding(8).background(GraveTheme.inset).overlay(Rectangle().stroke(GraveTheme.hairline)); HStack { Button("SAVE KEY") { model.saveLinearKey(linearKey); linearKey = "" }; Button("REMOVE KEY") { model.removeLinearKey() } }.buttonStyle(GraveButton()); Text(model.keychainStatus).foregroundStyle(GraveTheme.muted) } }; GravePanel("startup") { Toggle("LAUNCH AT LOGIN", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) })).toggleStyle(.switch).tint(GraveTheme.good); if let error = model.launchAtLoginError { Text(error).foregroundStyle(GraveTheme.crit) } }; GravePanel("about") { Text("NATIVE MACOS 15+ // T3 AND LEGACY DASHBOARDS OPEN IN YOUR BROWSER").foregroundStyle(GraveTheme.muted) } }.font(.system(size: 10, design: .monospaced)).frame(maxWidth: 760).padding(24) }.background(GraveTheme.page).onAppear { root = model.workRoot }
+        ScrollView { VStack(spacing: 20) { GravePanel("work root") { VStack(alignment: .leading, spacing: 9) { Text("LOCAL DIRECTORY SCANNED FOR GIT REPOSITORIES").foregroundStyle(GraveTheme.muted); TextField("Repository folder", text: $root).textFieldStyle(.plain).padding(8).background(GraveTheme.inset).overlay(Rectangle().stroke(GraveTheme.hairline)); Button("SAVE ROOT") { model.setWorkRoot(root) }.buttonStyle(GraveButton()); if let status = model.workRootStatus { Text(status).foregroundStyle(GraveTheme.crit) } } }; GravePanel("linear // read-only") { VStack(alignment: .leading, spacing: 9) { Text("THE TOKEN STAYS IN THIS MAC'S KEYCHAIN").foregroundStyle(GraveTheme.muted); SecureField("lin_api_…", text: $linearKey).textFieldStyle(.plain).padding(8).background(GraveTheme.inset).overlay(Rectangle().stroke(GraveTheme.hairline)); HStack { Button("SAVE KEY") { model.saveLinearKey(linearKey); linearKey = "" }; Button("REMOVE KEY") { model.removeLinearKey() } }.buttonStyle(GraveButton()); Text(model.keychainStatus).foregroundStyle(GraveTheme.muted) } }; GravePanel("advertise this mac") { VStack(alignment: .leading, spacing: 9) { Text(host.detail).foregroundStyle(host.state == .hosted ? GraveTheme.good : GraveTheme.muted); HStack { Button("ADVERTISE THIS MAC") { host.enable() }.buttonStyle(GraveButton()).disabled(host.state == .hosted); Button("STOP HOSTING") { host.disable() }.buttonStyle(GraveButton()).disabled(host.state != .hosted) }; Text("TAILSCALE SERVE IS MANUAL: \(host.manualServeCommand)").textSelection(.enabled).foregroundStyle(GraveTheme.muted); Text("DOES NOT CHANGE TAILSCALE. HOSTING STOPS WHEN THIS APP QUITS; ENABLE LAUNCH AT LOGIN TO KEEP THE APP AVAILABLE.").foregroundStyle(GraveTheme.muted) } }; GravePanel("startup") { Toggle("LAUNCH AT LOGIN", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) })).toggleStyle(.switch).tint(GraveTheme.good); if let error = model.launchAtLoginError { Text(error).foregroundStyle(GraveTheme.crit) } }; GravePanel("about") { Text("NATIVE MACOS 15+ // T3 AND LEGACY DASHBOARDS OPEN IN YOUR BROWSER").foregroundStyle(GraveTheme.muted) } }.font(.system(size: 10, design: .monospaced)).frame(maxWidth: 760).padding(24) }.background(GraveTheme.page).onAppear { root = model.workRoot }
     }
 }
 
-private struct BrowserButton: View {
+private struct CapabilityButton: View {
     let title: String; let host: String; let path: String
+    init?(title: String, host: String, path: String?) { guard let path else { return nil }; self.title = title; self.host = host; self.path = path }
     var body: some View { Button(title) { if let url = GravePresentation.link(host: host, path: path) { NSWorkspace.shared.open(url) } }.buttonStyle(GraveButton()) }
 }
 
@@ -202,6 +222,7 @@ final class MacDashboardModel: ObservableObject {
     @Published private(set) var launchAtLoginError: String?
     private let defaults = UserDefaults.standard
     private var refreshTask: Task<Void, Never>?
+    private weak var nativeHost: MacNativeHost?
     init() { workRoot = UserDefaults.standard.string(forKey: "macWorkRoot") ?? (FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Sites").path) }
     func refresh() {
         refreshTask?.cancel()
@@ -218,7 +239,8 @@ final class MacDashboardModel: ObservableObject {
         do { if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }; launchAtLogin = SMAppService.mainApp.status != .notRegistered; launchAtLoginError = SMAppService.mainApp.status == .requiresApproval ? "Launch at Login needs approval in System Settings." : nil }
         catch { launchAtLogin = SMAppService.mainApp.status != .notRegistered; launchAtLoginError = "Launch at Login: \(error.localizedDescription)" }
     }
-    private func apply(_ result: CollectionResult) { snapshot = result.snapshot; repositories = result.repositories; tailnetStatus = result.tailnetStatus; tailnetName = result.tailnetName; githubStatus = result.githubStatus; linearStatus = result.linearStatus; linearIssues = result.linearIssues; networkInterfaces = result.networkInterfaces }
+    func setNativeHost(_ host: MacNativeHost) { nativeHost = host; host.update(snapshot: snapshot) }
+    private func apply(_ result: CollectionResult) { snapshot = result.snapshot; nativeHost?.update(snapshot: result.snapshot); repositories = result.repositories; tailnetStatus = result.tailnetStatus; tailnetName = result.tailnetName; githubStatus = result.githubStatus; linearStatus = result.linearStatus; linearIssues = result.linearIssues; networkInterfaces = result.networkInterfaces }
 }
 
 private struct CollectionResult { let snapshot: MacSnapshot; let repositories: [MacRepository]; let tailnetStatus, tailnetName, githubStatus, linearStatus: String; let linearIssues: [LinearIssue]; let networkInterfaces: [NetworkInterface] }

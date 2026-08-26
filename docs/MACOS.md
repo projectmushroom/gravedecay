@@ -36,6 +36,19 @@ locally with owner-only settings writes and is never returned to the browser.
 The dashboard intentionally has no T3 pairing/connect, update/restart,
 terminal, Docker, gaming, reboot, journal, or Linux service controls.
 
+## Native app publisher
+
+The optional macOS 15+ native app is separate from this legacy source
+companion. Its Settings → **Advertise This Mac** starts a read-only,
+in-process listener only on `127.0.0.1:4712` for `/healthz` and
+`/api/v1/summary`. It never installs a LaunchAgent, helper, Python runtime,
+or Tailscale configuration. It refuses to start when this legacy companion or
+another listener owns that port and reports `EXISTING COMPANION ACTIVE`.
+
+It does not modify Tailscale Serve: the UI shows the exact manual command to
+publish `/grave` after the listener is healthy. The listener stops with the
+app; enable Launch at Login if the app should be available after sign-in.
+
 The System view uses only native, unprivileged macOS data: CPU activity from
 `top`, reclaimability from `memory_pressure` (labelled **Memory pressure**, not
 RAM used), installed and compressed-memory detail from `sysctl`/`vm_stat`, disk

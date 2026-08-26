@@ -44,6 +44,12 @@ people—not mutually hostile or public tenants.
    origin, argv execution, root-confined staging, and rollback prevent an
    update request from becoming an arbitrary command. It has no privileged
    operation and does not alter the Tailscale connection or host services.
+7. **Native macOS advertising is opt-in and loopback-only.** The native app
+   can serve only `/healthz` and `/api/v1/summary` from `127.0.0.1:4712` while
+   its normal app process runs. It refuses an existing legacy companion or
+   occupied port, and never changes Tailscale Serve automatically; publishing
+   `/grave` is a visible manual command because it cannot safely prove global
+   Serve-route ownership.
 
 ## T3 Connect (the one sanctioned exception to tailnet-only)
 
