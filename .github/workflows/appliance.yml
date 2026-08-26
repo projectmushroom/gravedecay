@@ -1,0 +1,55 @@
+name: appliance
+
+# The 25-minute raise-a-real-box smoke. It exercises nearly the whole repo
+# (raise.sh installs web/, assets/, systemd/, dashboard/, bin/ …), so this is
+# an ignore-list, not an allow-list: only files provably outside the raise
+# skip it. Docs/markdown are safe to skip HERE because their contract tests
+# live in the CI workflow's unit suite, not in the smoke.
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - "clients/**"
+      - "LICENSE"
+      - "tests/browser/**"
+      - "playwright.config.js"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/apple.yml"
+      - ".github/workflows/browser.yml"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - "clients/**"
+      - "LICENSE"
+      - "tests/browser/**"
+      - "playwright.config.js"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/apple.yml"
+      - ".github/workflows/browser.yml"
+      - ".github/workflows/ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  appliance:
+    name: Appliance smoke — raise a real box
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      # Raises an Arch systemd container for real, then re-raises it HEADLESS
+      # under only the raise-installed scoped sudoers — the environment of
+      # gravedecay-upgrade.service, where v0.7.0–v0.7.4 each shipped a failure
+      # the unit suite couldn't see (#85, #89, #90, #96).
+      - run: tests/e2e/smoke.sh

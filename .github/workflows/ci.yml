@@ -1,8 +1,19 @@
 name: CI
 
+# Docs and markdown stay IN scope here: the unit suite parses README.md and
+# docs/*.md as contracts (test_docs_contract, test_uninstall, test_t3_connect,
+# …), so a docs-only change can legitimately fail this workflow. Only the
+# Apple clients (their own workflow) are out of scope.
 on:
-  pull_request:
   push:
+    branches: [master]
+    paths-ignore:
+      - "clients/**"
+      - ".github/workflows/apple.yml"
+  pull_request:
+    paths-ignore:
+      - "clients/**"
+      - ".github/workflows/apple.yml"
 
 permissions:
   contents: read
@@ -28,49 +39,3 @@ jobs:
       - run: python -m py_compile dashboard/gravedecay.py dashboard/gateway.py bin/grave-workspaces
       - run: bash -n raise.sh
       - run: bash -n bin/grave
-
-  appliance:
-    name: Appliance smoke — raise a real box
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v6
-      # Raises an Arch systemd container for real, then re-raises it HEADLESS
-      # under only the raise-installed scoped sudoers — the environment of
-      # gravedecay-upgrade.service, where v0.7.0–v0.7.4 each shipped a failure
-      # the unit suite couldn't see (#85, #89, #90, #96).
-      - run: tests/e2e/smoke.sh
-
-  browser:
-    name: Safari-first browser matrix
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.13'
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '24'
-          cache: npm
-      - run: npm ci
-      - run: npm audit
-      - run: npx playwright install --with-deps chromium webkit
-      - name: Start fixture dashboard
-        run: |
-          GRAVEDECAY_PORT=3000 GRAVE_ROOT="$RUNNER_TEMP/grave-root" \
-            python dashboard/gravedecay.py >"$RUNNER_TEMP/dashboard.log" 2>&1 &
-          echo $! >"$RUNNER_TEMP/dashboard.pid"
-          for _ in {1..30}; do
-            curl -sf http://127.0.0.1:3000/healthz && exit 0
-            sleep 1
-          done
-          cat "$RUNNER_TEMP/dashboard.log"
-          exit 1
-      - run: npm run test:mobile
-      - name: Show dashboard log on failure
-        if: failure()
-        run: cat "$RUNNER_TEMP/dashboard.log" || true
-      - name: Stop fixture dashboard
-        if: always()
-        run: kill "$(cat "$RUNNER_TEMP/dashboard.pid")" 2>/dev/null || true
