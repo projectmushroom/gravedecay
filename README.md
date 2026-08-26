@@ -79,24 +79,34 @@ above: T3, persistent agent sessions, Docker backing services, terminal,
 system controls, and the full dashboard. The Linux quickstarts below are for
 that installation.
 
-**macOS companion** is a separate, small source install for a Mac you already
-use: a user-scoped system dashboard, local Git work view, and live network monitor. It
-does not raise an appliance or install/manage T3, Docker, terminal access,
-system services, firewall, or SSH. A signed-in Tailscale app is needed only to
-publish its two tailnet paths; it can otherwise stay localhost-only.
+**Native macOS client** is a standalone Universal 2 app for macOS 15+ on
+Apple silicon and Intel Macs — not a web wrapper and not an appliance
+installer. It is remote-first: sign in to Tailscale, then let it discover and
+open your tailnet graves. Its first run asks what this Mac should do first:
+**Connect to Graves** (discovery only) or **Share This Mac** (an opt-in local
+publisher). That is only a starting choice; either role can be enabled later.
 
-```sh
-git clone https://github.com/projectmushroom/gravedecay
-cd gravedecay
-./macos/install.sh                 # dashboard + network monitor; /grave and /net
-./macos/install.sh --no-serve      # localhost only; no Tailscale Serve changes
-```
+The normal Dock app and skull menu-bar status window offer a graveyard picker,
+remote summaries, and a native terminal for graves that advertise `/term`.
+The standalone window also has native System, Work, Network, Appliances, and
+Settings views. Work integrations are read-only: local Git state plus optional
+GitHub CLI and Linear status/links.
 
-The companion needs macOS and `python3`; it has no Linux, systemd, Docker, or
-RAM requirement. It is a source install for now — see [the macOS companion
-guide](docs/MACOS.md) for component-only modes, update/status/uninstall
-commands, Tailscale behavior, and its intentional feature limits. DMG and
-notarized distribution are deferred.
+Download or build the unsigned Universal 2 DMG using the instructions in
+[clients/apple/README.md](clients/apple/README.md). Apple CI produces it
+without signing; macOS may require Control-click → **Open** on first launch.
+No Apple account is needed for that unsigned build. A Developer ID certificate
+is needed only to distribute a signed, notarized build without that Gatekeeper
+step.
+
+**Share This Mac** is deliberately narrow: while the app runs it can expose a
+read-only summary only on `127.0.0.1:4712`. It never changes Tailscale login or
+Serve settings; after the listener is healthy, the app shows the exact
+Tailscale Serve command for you to run. **Launch at Login** can restore this
+explicit opt-in. The old Python companion remains available as a separate
+source install, but the native app fails closed if that companion (or another
+process) already owns port 4712. See [the macOS guide](docs/MACOS.md) for the
+legacy companion and collision behavior.
 
 ### The agent way (recommended)
 
@@ -186,12 +196,6 @@ clobbered (conf, stacks, and secrets are create-if-missing), while services,
 templates, and the dashboard refresh — and doctor verifies the result.
 Releases are plain git tags (`v0.1.0`, …) with notes on GitHub: pin to them
 for stability, or ride main if the box is also where you hack on gravedecay.
-
-On macOS, rerun `macos/install.sh` once on an older companion to bootstrap its
-user updater. Then use `grave releases`, `grave upgrade --release`, `grave
-upgrade --tag vX.Y.Z`, or `grave upgrade --edge` (or the dashboard panel).
-See [MACOS.md](docs/MACOS.md): no new port; T3, Tailscale login, Docker, SSH,
-and Linux services remain unmanaged.
 
 ### Uninstalling
 
@@ -502,6 +506,8 @@ is in `docs/SECRETS.md`.
 | [docs/API.md](docs/API.md) | Versioned, read-only summary contract for thin clients |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, tailnet-only, T3 Connect trade-offs, sudoers scope, terminal trust |
 | [docs/CLIENTS.md](docs/CLIENTS.md) | Clients: official T3 apps, native Apple shell, and Omarchy widget |
+| [clients/apple/README.md](clients/apple/README.md) | Native iOS/macOS client, DMG, signing, and build details |
+| [docs/MACOS.md](docs/MACOS.md) | Legacy Python companion, native publisher coexistence, and macOS operations |
 | [docs/SECRETS.md](docs/SECRETS.md) | Secrets + MCP wiring for agent CLIs |
 | [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md) | Notifications: Web Push to the PWA + ntfy — agents, failing units, and doctor page your phone |
 | [docs/PORTS.md](docs/PORTS.md) | Every port, documented or it doesn't exist |

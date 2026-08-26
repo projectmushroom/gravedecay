@@ -72,8 +72,8 @@ have no battery card.
 Run `macos/status.sh` for a read-only doctor-lite: it checks selected
 LaunchAgents, loopback health, Serve paths, installed checkout/version/channel, and the detached updater. `macos/uninstall.sh --root PATH` unloads and removes its LaunchAgents (including the updater) and Serve
 path mounts. It preserves the Application Support data by default; `--purge`
-explicitly removes it. Neither mode uninstalls Tailscale. DMG packaging and
-notarization are future work.
+explicitly removes it. Neither mode uninstalls Tailscale. Native-app DMG,
+signing, and notarization details live in [clients/apple/README.md](../clients/apple/README.md).
 
 ## Updating the companion
 
