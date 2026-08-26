@@ -58,9 +58,8 @@ struct GravedecayApp: App {
             GraveMenuView(model: graveMenu)
                 .onAppear { graveMenu.refresh() }
         } label: {
-            Image(systemName: "skull.fill")
+            Image("MenuBarSkull")
                 .renderingMode(.template)
-                .symbolRenderingMode(.monochrome)
                 .accessibilityLabel("Gravedecay, \(menuStatus)")
         }
         .menuBarExtraStyle(.window)
