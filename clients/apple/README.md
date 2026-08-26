@@ -42,6 +42,14 @@ Linear issues from an app-owned Keychain key, discovers tailnet graves, and
 hosts the native terminal. It opens only T3 in the default browser; `WebPane`
 is compiled only for iOS.
 
+The look is the appliance's grave dark, deliberately and in native form:
+`GraveTheme` is the single palette (phosphor greens on near-black, amber
+accents), `GraveAtmosphere` lays the scanline/vignette wash, and surface
+headers are all-caps monospaced (`GRAVEYARD // TAILNET`). Build new surfaces
+from `GravePanel`/`GraveButton`/`GraveMeter` on `GraveTheme` colors rather
+than system-styled SwiftUI defaults, so the app keeps reading like the
+dashboard and not like a preferences pane.
+
 On launch, opening the menu, manual refresh, and about every 45 seconds it runs `tailscale status --json`, preferring
 `/usr/local/bin/tailscale` then the CLI inside Tailscale.app. It sets
 `TAILSCALE_BE_CLI=1` and never changes Tailscale login, Serve, or preferences.

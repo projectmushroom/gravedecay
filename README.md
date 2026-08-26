@@ -5,14 +5,17 @@
 <h1 align="center">gravedecay</h1>
 
 <p align="center">
+  <b>Raise any Linux box into an always-on AI dev appliance.<br>
+  The box never sleeps — your agents work the graveyard shift.</b> 🪦
+</p>
+
+<p align="center">
   <a href="https://github.com/projectmushroom/gravedecay/actions/workflows/ci.yml"><img alt="Main CI status" src="https://github.com/projectmushroom/gravedecay/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/projectmushroom/gravedecay/actions/workflows/apple.yml"><img alt="Apple clients CI status" src="https://github.com/projectmushroom/gravedecay/actions/workflows/apple.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
 </p>
 
 ---
-
-**Turn any Linux box into an always-on AI dev appliance. The box never sleeps — your agents work the graveyard shift.** 🪦
 
 gravedecay converts a spare machine (old laptop, mini PC, Steam Machine) into a
 personal, tailnet-only AI development server: your repos, databases, and coding
@@ -87,33 +90,24 @@ above: T3, persistent agent sessions, Docker backing services, terminal,
 system controls, and the full dashboard. The Linux quickstarts below are for
 that installation.
 
-**Native macOS client** is a standalone Universal 2 app for macOS 15+ on
-Apple silicon and Intel Macs — not a web wrapper and not an appliance
-installer. It is remote-first: sign in to Tailscale, then let it discover and
-open your tailnet graves. Its first run asks what this Mac should do first:
-**Connect to Graves** (discovery only) or **Share This Mac** (an opt-in local
-publisher). That is only a starting choice; either role can be enabled later.
+**Native macOS client** is a standalone Universal 2 app for macOS 15+ (Apple
+silicon and Intel) — not a web wrapper, not an appliance installer, but the
+dashboard's grave dark rendered native: phosphor green on black, monospace
+throughout, a Dock app plus a skull menu-bar summary. It is remote-first:
+sign in to Tailscale and it discovers your graves. First run asks what this
+Mac is for — **Connect to Graves** (discovery only) or **Share This Mac**
+(an opt-in, loopback-only summary publisher); either role can be enabled
+later. Its window has native Graveyard, This Mac, Work, Network, Terminal,
+and Settings surfaces; Work is read-only Git state plus optional GitHub CLI
+and Linear links.
 
-The normal Dock app and skull menu-bar status window offer a remote
-**Graveyard**. Its standalone window has native Graveyard, This Mac, Work,
-Network, Terminal, and Settings surfaces. Work integrations are read-only:
-local Git state plus optional GitHub CLI and Linear status/links.
-
-Download or build the unsigned Universal 2 DMG using the instructions in
-[clients/apple/README.md](clients/apple/README.md). Apple CI produces it
-without signing; macOS may require Control-click → **Open** on first launch.
-No Apple account is needed for that unsigned build. A Developer ID certificate
-is needed only to distribute a signed, notarized build without that Gatekeeper
-step.
-
-**Share This Mac** is deliberately narrow: while the app runs it can expose a
-read-only summary only on `127.0.0.1:4712`. It never changes Tailscale login or
-Serve settings; after the listener is healthy, the app shows the exact
-Tailscale Serve command for you to run. **Launch at Login** can restore this
-explicit opt-in. The old Python companion remains available as a separate
-source install, but the native app fails closed if that companion (or another
-process) already owns port 4712. See [the macOS guide](docs/MACOS.md) for the
-legacy companion and collision behavior.
+Build the unsigned Universal 2 DMG — or grab the Apple CI artifact — per
+[clients/apple/README.md](clients/apple/README.md), which also covers
+Gatekeeper, signing, and notarization. **Share This Mac** never touches
+Tailscale login or Serve: it listens on `127.0.0.1:4712` only while the app
+runs and shows you the exact Serve command to run yourself. Coexistence with
+the legacy Python companion (which fails the native host closed if it owns
+the port) is covered in [the macOS guide](docs/MACOS.md).
 
 ### The agent way (recommended)
 
