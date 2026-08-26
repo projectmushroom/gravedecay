@@ -40,7 +40,8 @@ final class TerminalStatus: ObservableObject {
     }
     func reconnecting() { reconnectCount += 1; transition(.reconnecting) }
     func remoteClosed() { lastCause = "REMOTE CLOSED" }
-    func retry() { retryID &+= 1; transition(.reconnecting) }
+    func retry() { lastCause = "NONE"; retryID &+= 1; transition(.reconnecting) }
+    func connected() { lastCause = "NONE"; transition(.connected) }
     func input(_ count: Int) { inputEvents = inputEvents == Int.max ? Int.max : inputEvents + 1; inputBytes = inputBytes > Int.max - count ? Int.max : inputBytes + count }
     func output(_ count: Int) { outputFrames = outputFrames == Int.max ? Int.max : outputFrames + 1; outputBytes = outputBytes > Int.max - count ? Int.max : outputBytes + count }
     var diagnostics: String { "TERMINAL STATE: \(state.rawValue)\nLAST CAUSE: \(lastCause)\nFAILURES: \(failureCount)\nRECONNECTS: \(reconnectCount)\nINPUT EVENTS: \(inputEvents)\nINPUT BYTES: \(inputBytes)\nOUTPUT FRAMES: \(outputFrames)\nOUTPUT BYTES: \(outputBytes)" }
@@ -117,7 +118,7 @@ final class TerminalController: NSObject {
                 guard let self, let view = self.terminalView else { return }
                 self.opened = true
                 self.retry = 0
-                self.status.transition(.connected)
+                self.status.connected()
                 // tmux new-session -A reattaches, but the old screen content
                 // is stale after a reconnect — reset before the repaint.
                 view.getTerminal().resetToInitialState()

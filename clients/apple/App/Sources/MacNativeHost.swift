@@ -17,6 +17,7 @@ final class MacNativeHost: ObservableObject {
     private let defaults: UserDefaults
     private var restoreAttempted = false
     private var requested: Bool
+    var hostRequested: Bool { requested }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
