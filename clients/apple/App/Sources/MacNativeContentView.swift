@@ -141,7 +141,7 @@ private struct AppliancesView: View {
     @ObservedObject var graves: GraveMenuModel
     var body: some View {
         ScrollView { LazyVGrid(columns: [GridItem(.adaptive(minimum: 330), spacing: 12)], spacing: 14) {
-            if graves.graves.isEmpty { ThemedEmpty(title: "NO APPLIANCES", detail: "SIGN INTO THE TAILSCALE APP, THEN REFRESH") }
+            if graves.graves.isEmpty { GravePanel("status") { TailscaleOnboardingView(model: graves) } }
             ForEach(graves.graves) { grave in
                 GravePanel(grave.candidate.name) { VStack(alignment: .leading, spacing: 7) {
                     HStack { StatusSquare(good: grave.reachable); Image(systemName: icon(for: GravePresentation.condition(summary: grave.summary, reachable: grave.reachable))); Text(grave.candidate.name.uppercased()).fontWeight(.bold); Spacer(); Text(grave.reachable ? "ONLINE" : "UNREACHABLE").foregroundStyle(grave.reachable ? GraveTheme.good : GraveTheme.muted) }.font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.ink)
@@ -160,6 +160,42 @@ private struct AppliancesView: View {
         case .frozen: return "snowflake"
         case .healthy: return "checkmark.circle.fill"
         }
+    }
+}
+
+struct TailscaleOnboardingView: View {
+    @ObservedObject var model: GraveMenuModel
+
+    private var title: String {
+        switch model.state {
+        case .missingTailscale: return "TAILSCALE NOT INSTALLED"
+        case .loggedOut: return "TAILSCALE SIGN-IN REQUIRED"
+        case .noAppliances: return model.tailscaleUnavailable ? "TAILSCALE UNAVAILABLE" : "NO APPLIANCES"
+        case .scanning: return "SCANNING TAILNET"
+        default: return "WAITING FOR TAILSCALE"
+        }
+    }
+
+    private var detail: String {
+        switch model.state {
+        case .missingTailscale: return "INSTALL THE OFFICIAL TAILSCALE APP TO DISCOVER APPLIANCES."
+        case .loggedOut: return "OPEN TAILSCALE, SIGN IN, THEN REFRESH."
+        case .noAppliances: return model.tailscaleUnavailable ? "TAILSCALE IS INSTALLED BUT STATUS IS UNAVAILABLE. CHECK THE APP, THEN REFRESH." : "NO REACHABLE GRAVEDECAY APPLIANCES FOUND. CHECK TAILSCALE, THEN REFRESH."
+        case .scanning: return "DISCOVERING TAILNET APPLIANCES…"
+        default: return "REFRESH TO DISCOVER TAILNET APPLIANCES."
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack { StatusSquare(good: false); Text(title).foregroundStyle(GraveTheme.ink) }
+            Text(detail).foregroundStyle(GraveTheme.muted)
+            HStack {
+                if model.state == .missingTailscale { Button("GET TAILSCALE") { model.getTailscale() }.buttonStyle(GraveButton()) }
+                if model.state == .loggedOut, model.canOpenTailscale { Button("OPEN TAILSCALE") { model.openTailscale() }.buttonStyle(GraveButton()) }
+                Button("↻ REFRESH") { model.refresh() }.buttonStyle(GraveButton()).disabled(model.state == .scanning)
+            }
+        }.font(.system(size: 10, design: .monospaced)).frame(maxWidth: .infinity, minHeight: 76, alignment: .leading)
     }
 }
 

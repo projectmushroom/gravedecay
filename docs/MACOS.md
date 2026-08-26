@@ -45,6 +45,12 @@ in-process listener only on `127.0.0.1:4712` for `/healthz` and
 or Tailscale configuration. It refuses to start when this legacy companion or
 another listener owns that port and reports `EXISTING COMPANION ACTIVE`.
 
+When the native app cannot find Tailscale, **Appliances** and the menu bar
+offer **Get Tailscale**, which opens only the official macOS download page.
+When the installed app is logged out, they offer **Open Tailscale** so you can
+sign in yourself. These controls never install software or change Tailscale
+state; refresh discovery after signing in.
+
 It does not modify Tailscale Serve: the UI shows the exact manual command to
 publish `/grave` after the listener is healthy. A successfully started native
 host is restored once when the app launches; enable Launch at Login to restore

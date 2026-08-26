@@ -2,6 +2,13 @@ import XCTest
 @testable import GravedecayKit
 
 final class GraveSummaryTests: XCTestCase {
+    func testTailscaleStateKeepsUnavailableDistinctFromMissing() {
+        XCTAssertEqual(GraveDiscovery.tailscaleState(executableFound: false, statusData: nil), .missing)
+        XCTAssertEqual(GraveDiscovery.tailscaleState(executableFound: true, statusData: nil), .unavailable)
+        XCTAssertEqual(GraveDiscovery.tailscaleState(executableFound: true, statusData: Data(#"{"BackendState":"NeedsLogin"}"#.utf8)), .loggedOut)
+        XCTAssertEqual(GraveDiscovery.tailscaleState(executableFound: true, statusData: Data(#"{"BackendState":"Running"}"#.utf8)), .running)
+    }
+
     func testCandidatesFilterAndDeduplicate() {
         let input = #"{"Self":{"Online":true,"DNSName":"One.Tail.ts.net.","ID":"1"},"Peer":{"a":{"Online":true,"DNSName":"two.tail.ts.net","StableID":"2"},"b":{"Online":true,"DNSName":"bad_thing","ID":"3"},"c":{"Online":true,"DNSName":"other.tail.ts.net","ID":"1"}}}"#.data(using: .utf8)!
         XCTAssertEqual(GraveDiscovery.candidates(statusData: input), [GraveCandidate(id: "1", dns: "one.tail.ts.net", name: "one.tail.ts.net"), GraveCandidate(id: "2", dns: "two.tail.ts.net", name: "two.tail.ts.net")])

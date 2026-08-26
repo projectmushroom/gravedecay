@@ -56,7 +56,9 @@ private struct GraveMenuView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack { GraveMark(color: GraveTheme.ink).accessibilityHidden(true); Text("GRAVEDECAY").tracking(1.2).foregroundStyle(GraveTheme.amber); Spacer(); Button("↻ REFRESH") { model.refresh() }.buttonStyle(GraveButton()).accessibilityLabel("Refresh appliances") }.font(.system(size: 11, weight: .bold, design: .monospaced))
             Picker("TARGET", selection: $model.selectedID) { Text("THIS MAC").tag(Optional(GraveMenuModel.thisMacID)); ForEach(model.graves) { Text($0.candidate.name.uppercased()).tag(Optional($0.id)) } }.pickerStyle(.menu).tint(GraveTheme.amber).font(.system(size: 10, design: .monospaced))
-            if let grave = model.selected, let summary = grave.summary {
+            if model.graves.isEmpty {
+                TailscaleOnboardingView(model: model)
+            } else if let grave = model.selected, let summary = grave.summary {
                 VStack(alignment: .leading, spacing: 5) {
                     HStack { Rectangle().fill(color(for: condition)).frame(width: 8, height: 8); Text(title(for: condition).uppercased()) }.foregroundStyle(color(for: condition))
                     Text("\(summary.node.host) // \(summary.node.mode) // \(summary.node.platform)").foregroundStyle(GraveTheme.muted)
@@ -68,7 +70,7 @@ private struct GraveMenuView: View {
                 }.font(.system(size: 9, design: .monospaced))
             } else if model.isThisMac {
                 Text("THIS MAC // DASHBOARD + NETWORK ONLY // TERMINAL NOT PUBLISHED").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.muted)
-            } else { Text(message.uppercased()).font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.muted) }
+            } else { Text("SELECT A REACHABLE APPLIANCE.").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.muted) }
             Rectangle().fill(GraveTheme.ring).frame(height: 1)
             HStack { Button("OPEN APP") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }; Button("QUIT") { NSApp.terminate(nil) } }.buttonStyle(GraveButton())
         }.padding().frame(width: 390).graveRoot()
@@ -76,7 +78,6 @@ private struct GraveMenuView: View {
     private var condition: GravePresentation.Condition { GravePresentation.condition(summary: model.selected?.summary, reachable: model.selected?.reachable ?? false) }
     private func title(for condition: GravePresentation.Condition) -> String { switch condition { case .unreachable: return "Unreachable (last summary)"; case .warning: return "Reachable · Warning"; case .active: return "Reachable · Active"; case .frozen: return "Reachable · Frozen"; case .healthy: return "Reachable · Healthy" } }
     private func color(for condition: GravePresentation.Condition) -> Color { switch condition { case .warning: return GraveTheme.amber; case .active, .healthy: return GraveTheme.good; case .frozen: return GraveTheme.accentSoft; case .unreachable: return GraveTheme.muted } }
-    private var message: String { switch model.state { case .scanning: return "Discovering tailnet appliances…"; case .missingTailscale: return "Tailscale CLI not found. Install the Tailscale app."; case .loggedOut: return "Tailscale is logged out. Sign in with the Tailscale app."; case .noAppliances: return "No reachable Gravedecay appliances found."; default: return "Waiting to discover appliances…" } }
     @ViewBuilder private func link(_ title: String, _ path: String?) -> some View { if let grave = model.selected, GravePresentation.link(host: grave.candidate.dns, path: path) != nil { Button(title.uppercased()) { model.open(path) }.buttonStyle(GraveButton()) } }
     private func menuTile(_ label: String, _ value: String, _ color: Color) -> some View { VStack(alignment: .leading, spacing: 2) { Text(label).foregroundStyle(GraveTheme.muted); Text(value).foregroundStyle(color) }.frame(maxWidth: .infinity, alignment: .leading).padding(6).background(GraveTheme.inset).overlay(Rectangle().stroke(GraveTheme.hairline)) }
 }

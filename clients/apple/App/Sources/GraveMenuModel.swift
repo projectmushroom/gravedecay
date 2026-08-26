@@ -16,6 +16,7 @@ final class GraveMenuModel: ObservableObject {
 
     @Published private(set) var state: State = .idle
     @Published private(set) var graves: [Grave] = []
+    @Published private(set) var tailscaleUnavailable = false
     @Published var selectedID: String? { didSet { UserDefaults.standard.set(selectedID, forKey: "graveSelectedTarget") } }
     private var previous = [String: GraveSummary]()
     private var timer: Timer?
@@ -37,11 +38,16 @@ final class GraveMenuModel: ObservableObject {
 
     func scan() async {
         guard state != .scanning else { return }; state = .scanning
-        guard let statusData = await Task.detached(priority: .utility, operation: Self.tailscaleStatus).value,
-              let status = try? JSONSerialization.jsonObject(with: statusData) as? [String: Any] else {
-            graves = []; selectedID = Self.thisMacID; state = .missingTailscale; return
+        tailscaleUnavailable = false
+        let probe = await Task.detached(priority: .utility, operation: Self.tailscaleStatus).value
+        let statusData = probe.data
+        switch GraveDiscovery.tailscaleState(executableFound: probe.executableFound, statusData: statusData) {
+        case .missing: graves = []; selectedID = Self.thisMacID; state = .missingTailscale; return
+        case .unavailable: graves = []; selectedID = Self.thisMacID; tailscaleUnavailable = true; state = .noAppliances; return
+        case .loggedOut: graves = []; selectedID = Self.thisMacID; state = .loggedOut; return
+        case .running: break
         }
-        guard !(status["BackendState"] as? String == "Stopped" || status["BackendState"] as? String == "NeedsLogin") else { graves = []; selectedID = Self.thisMacID; state = .loggedOut; return }
+        guard let statusData else { return }
         let candidates = GraveDiscovery.candidates(statusData: statusData)
         guard !candidates.isEmpty else { graves = []; selectedID = Self.thisMacID; state = .noAppliances; return }
         var found: [Grave] = []
@@ -58,9 +64,9 @@ final class GraveMenuModel: ObservableObject {
         state = found.isEmpty ? .noAppliances : .ready
     }
 
-    nonisolated private static func tailscaleStatus() async -> Data? {
+    nonisolated private static func tailscaleStatus() async -> (executableFound: Bool, data: Data?) {
         let paths = ["/usr/local/bin/tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"]
-        guard let executable = paths.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else { return nil }
+        guard let executable = paths.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else { return (false, nil) }
         let process = Process(); process.executableURL = URL(fileURLWithPath: executable); process.arguments = ["status", "--json"]
         process.environment = ProcessInfo.processInfo.environment.merging(["TAILSCALE_BE_CLI": "1"]) { _, new in new }
         let output = Pipe(); process.standardOutput = output; process.standardError = FileHandle.nullDevice
@@ -70,7 +76,7 @@ final class GraveMenuModel: ObservableObject {
                 lock.lock(); defer { lock.unlock() }
                 guard !finished else { return }; finished = true
                 output.fileHandleForReading.readabilityHandler = nil
-                continuation.resume(returning: result)
+                continuation.resume(returning: (true, result))
             }
             output.fileHandleForReading.readabilityHandler = { handle in
                 let chunk = handle.availableData
@@ -88,6 +94,10 @@ final class GraveMenuModel: ObservableObject {
             DispatchQueue.global().asyncAfter(deadline: .now() + 3) { if process.isRunning { process.terminate(); finish(nil) } }
         }
     }
+
+    var canOpenTailscale: Bool { FileManager.default.fileExists(atPath: "/Applications/Tailscale.app") }
+    func getTailscale() { if let url = URL(string: "https://tailscale.com/download/mac") { NSWorkspace.shared.open(url) } }
+    func openTailscale() { guard canOpenTailscale else { return }; NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/Tailscale.app")) }
 
     private func fetch(_ candidate: GraveCandidate) async -> GraveSummary? {
         guard let url = GravePresentation.link(host: candidate.dns, path: "/grave/api/v1/summary") else { return nil }

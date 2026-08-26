@@ -7,6 +7,19 @@ public struct GraveCandidate: Identifiable, Equatable, Sendable {
 }
 
 public enum GraveDiscovery {
+    public enum TailscaleState: Equatable, Sendable { case missing, unavailable, loggedOut, running }
+
+    /// Keeps a missing CLI distinct from an installed CLI that could not answer.
+    public static func tailscaleState(executableFound: Bool, statusData: Data?) -> TailscaleState {
+        guard executableFound else { return .missing }
+        guard let statusData,
+              let status = try? JSONSerialization.jsonObject(with: statusData) as? [String: Any] else { return .unavailable }
+        switch status["BackendState"] as? String {
+        case "Stopped", "NeedsLogin": return .loggedOut
+        default: return .running
+        }
+    }
+
     public static func dnsName(_ value: String?) -> String? {
         var name = (value ?? "").lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         if name.hasSuffix(".") { name.removeLast() }
