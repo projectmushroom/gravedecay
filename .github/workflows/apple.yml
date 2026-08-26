@@ -1,14 +1,18 @@
 name: apple-clients
 
+# Markdown under clients/apple is docs, not build input — no client README
+# edit should cost two macOS runners.
 on:
   push:
     branches: [master]
     paths:
       - "clients/apple/**"
+      - "!clients/apple/**.md"
       - ".github/workflows/apple.yml"
   pull_request:
     paths:
       - "clients/apple/**"
+      - "!clients/apple/**.md"
       - ".github/workflows/apple.yml"
 
 jobs:

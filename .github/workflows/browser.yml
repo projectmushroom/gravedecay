@@ -1,0 +1,67 @@
+name: browser
+
+# Playwright drives the dashboard PWA only, so this is an allow-list: the
+# fixture is dashboard/gravedecay.py plus its static assets, and the specs
+# live under tests/browser/.
+on:
+  push:
+    branches: [master]
+    paths:
+      - "dashboard/**"
+      - "web/**"
+      - "tests/browser/**"
+      - "package.json"
+      - "package-lock.json"
+      - "playwright.config.js"
+      - ".github/workflows/browser.yml"
+  pull_request:
+    paths:
+      - "dashboard/**"
+      - "web/**"
+      - "tests/browser/**"
+      - "package.json"
+      - "package-lock.json"
+      - "playwright.config.js"
+      - ".github/workflows/browser.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser:
+    name: Safari-first browser matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm audit
+      - run: npx playwright install --with-deps chromium webkit
+      - name: Start fixture dashboard
+        run: |
+          GRAVEDECAY_PORT=3000 GRAVE_ROOT="$RUNNER_TEMP/grave-root" \
+            python dashboard/gravedecay.py >"$RUNNER_TEMP/dashboard.log" 2>&1 &
+          echo $! >"$RUNNER_TEMP/dashboard.pid"
+          for _ in {1..30}; do
+            curl -sf http://127.0.0.1:3000/healthz && exit 0
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/dashboard.log"
+          exit 1
+      - run: npm run test:mobile
+      - name: Show dashboard log on failure
+        if: failure()
+        run: cat "$RUNNER_TEMP/dashboard.log" || true
+      - name: Stop fixture dashboard
+        if: always()
+        run: kill "$(cat "$RUNNER_TEMP/dashboard.pid")" 2>/dev/null || true
