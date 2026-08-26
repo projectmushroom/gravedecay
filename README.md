@@ -1,8 +1,16 @@
-# gravedecay
+<p align="center">
+  <img src="assets/gravedecay-skull.svg" width="128" alt="gravedecay skull logo">
+</p>
 
-[![CI](https://github.com/projectmushroom/gravedecay/actions/workflows/ci.yml/badge.svg)](https://github.com/projectmushroom/gravedecay/actions/workflows/ci.yml)
+<h1 align="center">gravedecay</h1>
 
-<img src="assets/gravedecay-skull.svg" width="128" align="right" alt="gravedecay skull logo">
+<p align="center">
+  <a href="https://github.com/projectmushroom/gravedecay/actions/workflows/ci.yml"><img alt="Main CI status" src="https://github.com/projectmushroom/gravedecay/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/projectmushroom/gravedecay/actions/workflows/apple.yml"><img alt="Apple clients CI status" src="https://github.com/projectmushroom/gravedecay/actions/workflows/apple.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+</p>
+
+---
 
 **Turn any Linux box into an always-on AI dev appliance. The box never sleeps — your agents work the graveyard shift.** 🪦
 
