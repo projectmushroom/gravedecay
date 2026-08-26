@@ -253,6 +253,7 @@ struct TailscaleOnboardingView: View {
 
     private var title: String {
         switch model.state {
+        case .ready: return "TAILSCALE CONNECTED"
         case .missingTailscale: return "TAILSCALE NOT INSTALLED"
         case .loggedOut: return "TAILSCALE ACTION REQUIRED"
         case .noAppliances: return model.tailscaleUnavailable ? "TAILSCALE UNAVAILABLE" : "NO GRAVES"
@@ -263,6 +264,7 @@ struct TailscaleOnboardingView: View {
 
     private var detail: String {
         switch model.state {
+        case .ready: return "\(model.graves.count) GRAVE\(model.graves.count == 1 ? "" : "S") FOUND ON THIS TAILNET."
         case .missingTailscale: return "INSTALL THE OFFICIAL TAILSCALE APP TO DISCOVER GRAVES."
         case .loggedOut: return "OPEN TAILSCALE, CONNECT OR SIGN IN, THEN REFRESH."
         case .noAppliances: return model.tailscaleUnavailable ? "TAILSCALE IS INSTALLED BUT STATUS IS UNAVAILABLE. CHECK THE APP, THEN REFRESH." : "NO REACHABLE GRAVES FOUND. CHECK TAILSCALE, THEN REFRESH."
@@ -311,7 +313,7 @@ struct MacSettingsView: View {
             GravePanel("linear // read-only") { VStack(alignment: .leading, spacing: 9) { Text("THE TOKEN STAYS IN THIS MAC'S KEYCHAIN").foregroundStyle(GraveTheme.muted); SecureField("lin_api_…", text: $linearKey).textFieldStyle(.plain).padding(8).background(GraveTheme.inset).overlay(Rectangle().stroke(GraveTheme.hairline)); HStack { Button("SAVE KEY") { model.saveLinearKey(linearKey); linearKey = "" }; Button("REMOVE KEY") { model.removeLinearKey() } }.buttonStyle(GraveButton()); Text(model.keychainStatus).foregroundStyle(GraveTheme.muted) } }
             GravePanel("local host") { VStack(alignment: .leading, spacing: 9) { Text(host.detail).foregroundStyle(host.state == .hosted ? GraveTheme.good : GraveTheme.muted); HStack { Button(host.state == .existingCompanion ? "RETRY LOCAL HOST" : "START LOCAL HOST") { host.enable() }.buttonStyle(GraveButton()).disabled(host.state == .hosted || host.state == .starting); Button(host.state == .hosted ? "STOP LOCAL HOST" : "CANCEL HOST REQUEST") { host.disable() }.buttonStyle(GraveButton()).disabled(host.state != .hosted && !host.hostRequested); if host.state == .hosted { Button("COPY TAILSCALE PUBLISH COMMAND") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(host.manualServeCommand, forType: .string) }.buttonStyle(GraveButton()) } }; if host.state == .existingCompanion { Text("NATIVE HOSTING WAS NOT STARTED: LEGACY COMPANION OWNS 4712.").foregroundStyle(GraveTheme.crit) }; Text("DOES NOT CHANGE TAILSCALE. HOSTING STOPS WHEN THIS APP QUITS; ENABLE LAUNCH AT LOGIN TO KEEP THE APP AVAILABLE.").foregroundStyle(GraveTheme.muted) } }
             GravePanel("startup") { Toggle("LAUNCH AT LOGIN", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) })).toggleStyle(.switch).tint(GraveTheme.good); if let error = model.launchAtLoginError { Text(error).foregroundStyle(GraveTheme.crit) } }
-            GravePanel("about") { Text("NATIVE MACOS 15+ // T3 AND LEGACY DASHBOARDS OPEN IN YOUR BROWSER").foregroundStyle(GraveTheme.muted) }
+            GravePanel("about") { Text("NATIVE REMOTE DASHBOARDS // T3 OPENS IN YOUR BROWSER").foregroundStyle(GraveTheme.muted) }
         }.font(.system(size: 10, design: .monospaced)).frame(maxWidth: 760).padding(24) }.background(GraveTheme.page).onAppear { root = model.workRoot }
     }
 }
