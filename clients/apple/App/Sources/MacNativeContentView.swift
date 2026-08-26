@@ -169,7 +169,7 @@ struct TailscaleOnboardingView: View {
     private var title: String {
         switch model.state {
         case .missingTailscale: return "TAILSCALE NOT INSTALLED"
-        case .loggedOut: return "TAILSCALE SIGN-IN REQUIRED"
+        case .loggedOut: return "TAILSCALE ACTION REQUIRED"
         case .noAppliances: return model.tailscaleUnavailable ? "TAILSCALE UNAVAILABLE" : "NO APPLIANCES"
         case .scanning: return "SCANNING TAILNET"
         default: return "WAITING FOR TAILSCALE"
@@ -179,7 +179,7 @@ struct TailscaleOnboardingView: View {
     private var detail: String {
         switch model.state {
         case .missingTailscale: return "INSTALL THE OFFICIAL TAILSCALE APP TO DISCOVER APPLIANCES."
-        case .loggedOut: return "OPEN TAILSCALE, SIGN IN, THEN REFRESH."
+        case .loggedOut: return "OPEN TAILSCALE, CONNECT OR SIGN IN, THEN REFRESH."
         case .noAppliances: return model.tailscaleUnavailable ? "TAILSCALE IS INSTALLED BUT STATUS IS UNAVAILABLE. CHECK THE APP, THEN REFRESH." : "NO REACHABLE GRAVEDECAY APPLIANCES FOUND. CHECK TAILSCALE, THEN REFRESH."
         case .scanning: return "DISCOVERING TAILNET APPLIANCES…"
         default: return "REFRESH TO DISCOVER TAILNET APPLIANCES."

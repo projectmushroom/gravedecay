@@ -6,7 +6,11 @@ final class GraveSummaryTests: XCTestCase {
         XCTAssertEqual(GraveDiscovery.tailscaleState(executableFound: false, statusData: nil), .missing)
         XCTAssertEqual(GraveDiscovery.tailscaleState(executableFound: true, statusData: nil), .unavailable)
         XCTAssertEqual(GraveDiscovery.tailscaleState(executableFound: true, statusData: Data(#"{"BackendState":"NeedsLogin"}"#.utf8)), .loggedOut)
+        XCTAssertEqual(GraveDiscovery.tailscaleState(executableFound: true, statusData: Data(#"{"BackendState":"Stopped"}"#.utf8)), .loggedOut)
+        XCTAssertEqual(GraveDiscovery.tailscaleState(executableFound: true, statusData: Data(#"{"BackendState":"NeedsMachineAuth"}"#.utf8)), .loggedOut)
         XCTAssertEqual(GraveDiscovery.tailscaleState(executableFound: true, statusData: Data(#"{"BackendState":"Running"}"#.utf8)), .running)
+        XCTAssertEqual(GraveDiscovery.tailscaleState(executableFound: true, statusData: Data(#"{}"#.utf8)), .unavailable)
+        XCTAssertEqual(GraveDiscovery.tailscaleState(executableFound: true, statusData: Data(#"{"BackendState":"Starting"}"#.utf8)), .unavailable)
     }
 
     func testCandidatesFilterAndDeduplicate() {

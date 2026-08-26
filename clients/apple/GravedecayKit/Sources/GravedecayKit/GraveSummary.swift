@@ -15,8 +15,9 @@ public enum GraveDiscovery {
         guard let statusData,
               let status = try? JSONSerialization.jsonObject(with: statusData) as? [String: Any] else { return .unavailable }
         switch status["BackendState"] as? String {
-        case "Stopped", "NeedsLogin": return .loggedOut
-        default: return .running
+        case "Stopped", "NeedsLogin", "NeedsMachineAuth": return .loggedOut
+        case "Running": return .running
+        default: return .unavailable
         }
     }
 
