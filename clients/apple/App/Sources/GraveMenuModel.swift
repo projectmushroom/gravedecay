@@ -24,11 +24,6 @@ final class GraveMenuModel: ObservableObject {
 
     init() {
         selectedID = UserDefaults.standard.string(forKey: "graveSelectedTarget")
-        start()
-    }
-
-    func start() {
-        guard timer == nil else { return }
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 45, repeats: true) { [weak self] _ in Task { @MainActor in self?.refresh() } }
     }

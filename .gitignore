@@ -16,4 +16,11 @@ clients/apple/build/
 clients/apple/Vendor/
 clients/apple/vendor/
 clients/apple/GravedecayKit/.build/
+clients/apple/App/Assets.xcassets/AppIcon.appiconset/icon-16.png
+clients/apple/App/Assets.xcassets/AppIcon.appiconset/icon-32.png
+clients/apple/App/Assets.xcassets/AppIcon.appiconset/icon-64.png
+clients/apple/App/Assets.xcassets/AppIcon.appiconset/icon-128.png
+clients/apple/App/Assets.xcassets/AppIcon.appiconset/icon-256.png
+clients/apple/App/Assets.xcassets/AppIcon.appiconset/icon-512.png
+clients/apple/App/Assets.xcassets/AppIcon.appiconset/icon-1024.png
 clients/apple/**/xcuserdata/

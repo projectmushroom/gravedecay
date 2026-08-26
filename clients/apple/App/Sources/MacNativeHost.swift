@@ -27,7 +27,7 @@ final class MacNativeHost: ObservableObject {
     func update(snapshot: MacSnapshot?) { summary = Self.summaryData(snapshot: snapshot) }
 
     func restoreIfRequested() {
-        guard !restoreAttempted, MacHostingPlan.restore(nativeHostEnabled: requested) == .attempt else { return }
+        guard !restoreAttempted, requested else { return }
         restoreAttempted = true; start()
     }
 
@@ -35,7 +35,7 @@ final class MacNativeHost: ObservableObject {
 
     private func start() {
         guard listener == nil else { return }
-        guard MacHostingPlan.preflight(legacyCompanionActive: Self.legacyCompanionActive()) == .attemptListener else { state = .existingCompanion; detail = requested ? "REQUESTED BUT BLOCKED // LEGACY COMPANION OWNS 4712" : "EXISTING COMPANION ACTIVE // NATIVE HOST NOT STARTED"; return }
+        guard !Self.legacyCompanionActive() else { state = .existingCompanion; detail = requested ? "REQUESTED BUT BLOCKED // LEGACY COMPANION OWNS 4712" : "EXISTING COMPANION ACTIVE // NATIVE HOST NOT STARTED"; return }
         state = .starting; detail = "STARTING LOOPBACK SUMMARY…"
         do {
             let parameters = NWParameters.tcp
@@ -59,7 +59,7 @@ final class MacNativeHost: ObservableObject {
         listener?.cancel(); listener = nil; requested = false; defaults.set(false, forKey: "nativeHostEnabled"); state = .off; detail = "OFF // NO LOCAL LISTENER"
     }
 
-    var manualServeCommand: String { MacHostingPlan.manualServeCommand()! }
+    var manualServeCommand: String { "tailscale serve --bg --https=443 --set-path=/grave http://127.0.0.1:4712" }
 
     private func accept(_ connection: NWConnection) {
         connection.start(queue: queue)

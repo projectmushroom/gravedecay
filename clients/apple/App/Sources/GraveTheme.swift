@@ -21,30 +21,7 @@ enum GraveTheme {
 struct GraveMark: View {
     var color: Color = .primary
     var size: CGFloat = 18
-    var body: some View { SkullShape().fill(color, style: FillStyle(eoFill: true)).frame(width: size, height: size) }
-}
-
-private struct SkullShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        let s = min(rect.width, rect.height) / 24
-        let x = rect.midX - 12 * s, y = rect.midY - 12 * s
-        func p(_ px: CGFloat, _ py: CGFloat) -> CGPoint { CGPoint(x: x + px * s, y: y + py * s) }
-        var path = Path()
-        path.move(to: p(12, 2))
-        path.addArc(center: p(12, 11), radius: 9 * s, startAngle: .degrees(-90), endAngle: .degrees(-180), clockwise: true)
-        path.addCurve(to: p(7, 18.47), control1: p(3, 14.03), control2: p(4.53, 16.82))
-        path.addLine(to: p(7, 22)); path.addLine(to: p(9, 22)); path.addLine(to: p(9, 19))
-        path.addLine(to: p(11, 19)); path.addLine(to: p(11, 22)); path.addLine(to: p(13, 22))
-        path.addLine(to: p(13, 19)); path.addLine(to: p(15, 19)); path.addLine(to: p(15, 22))
-        path.addLine(to: p(17, 22)); path.addLine(to: p(17, 18.46))
-        path.addCurve(to: p(21, 11), control1: p(19.47, 16.81), control2: p(21, 14))
-        path.addArc(center: p(12, 11), radius: 9 * s, startAngle: .degrees(0), endAngle: .degrees(-90), clockwise: true)
-        path.closeSubpath()
-        path.addEllipse(in: CGRect(x: x + 6 * s, y: y + 11 * s, width: 4 * s, height: 4 * s))
-        path.addEllipse(in: CGRect(x: x + 14 * s, y: y + 11 * s, width: 4 * s, height: 4 * s))
-        path.move(to: p(12, 14)); path.addLine(to: p(13.5, 17)); path.addLine(to: p(10.5, 17)); path.closeSubpath()
-        return path
-    }
+    var body: some View { Image("MenuBarSkull").renderingMode(.template).resizable().aspectRatio(contentMode: .fit).foregroundStyle(color).frame(width: size, height: size) }
 }
 
 struct GravePanel<Content: View>: View {

@@ -98,18 +98,14 @@ public struct GraveSummary: Codable, Equatable, Sendable {
 }
 
 public struct GraveCapabilities: Equatable, Sendable {
-    public let dashboard: String?
     public let t3: String?
     public let terminal: String?
-    public let network: String?
 
     public init(links: GraveSummary.Links) {
-        dashboard = GravePresentation.safePath(links.dashboard)
         t3 = GravePresentation.safePath(links.t3)
         // Native ttyd needs the well-known token and websocket children. Do
         // not turn an arbitrary summary path into a terminal transport.
         terminal = GravePresentation.terminalPath(links.terminal)
-        network = GravePresentation.safePath(links.network)
     }
 }
 

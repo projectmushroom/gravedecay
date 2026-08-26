@@ -455,14 +455,6 @@ private enum MacCollector {
             return MacRepository(path: path, name: URL(fileURLWithPath: path).lastPathComponent, branch: branch, detail: detail, lastCommit: lastCommit, dirty: dirty, github: github, githubURL: GitHubRemote.url(remote), pullRequests: pulls, issues: issues, latestCI: ci)
         }
     }
-    static func githubSummary(_ remote: String?, enabled: Bool) -> String? {
-        guard let repo = GitHubRemote.repository(remote) else { return nil }
-        guard enabled else { return "GitHub remote" }
-        let output = command("/opt/homebrew/bin/gh", ["pr", "list", "--repo", repo, "--limit", "3", "--json", "number,statusCheckRollup"]) ?? command("/usr/local/bin/gh", ["pr", "list", "--repo", repo, "--limit", "3", "--json", "number,statusCheckRollup"])
-        guard let output, let prs = try? JSONSerialization.jsonObject(with: Data(output.utf8)) as? [[String: Any]] else { return "GitHub unavailable" }
-        let failing = prs.contains { (($0["statusCheckRollup"] as? [[String: Any]]) ?? []).contains { ["FAILURE", "ERROR"].contains($0["conclusion"] as? String ?? "") } }
-        return "GitHub: \(prs.count) open PR(s)\(failing ? ", CI failing" : "")"
-    }
     static func githubRows(_ repo: String, kind: String) -> [GitHubRow] {
         let args = [kind, "list", "--repo", repo, "--limit", "3", "--json", "number,title,state,url"]
         let output = command("/opt/homebrew/bin/gh", args) ?? command("/usr/local/bin/gh", args)

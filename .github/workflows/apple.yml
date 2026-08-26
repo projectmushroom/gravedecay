@@ -35,12 +35,6 @@ jobs:
       - name: Generate project
         working-directory: clients/apple
         run: xcodegen --spec project.yml
-      - name: Build macOS app
-        working-directory: clients/apple
-        run: >
-          xcodebuild -project Gravedecay.xcodeproj -scheme Gravedecay-macOS
-          -configuration Debug build
-          CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" -skipPackagePluginValidation
       - name: Verify Universal 2 Release app
         working-directory: clients/apple
         run: |

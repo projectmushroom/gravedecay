@@ -42,22 +42,10 @@ final class GraveSummaryTests: XCTestCase {
 
     func testCapabilitiesRequirePublishedSafeTerminal() throws {
         let summary = try XCTUnwrap(GraveSummary.decode(Data(#"{"product":"gravedecay","api_version":1,"node":{"host":"grave","platform":"macos","mode":"companion"},"resources":{},"activity":{"sessions_live":0,"sessions_frozen":0},"health":{"services_failed":0,"containers_problem":0},"links":{"dashboard":"/grave/","terminal":"/elsewhere","network":"/net/"}}"#.utf8)))
-        XCTAssertEqual(summary.capabilities.dashboard, "/grave/")
         XCTAssertNil(summary.capabilities.terminal)
-        XCTAssertEqual(summary.capabilities.network, "/net/")
         XCTAssertNil(GravePresentation.safePath("/grave/../term"))
         XCTAssertNil(BoxConfig(host: "grave.tail.ts.net", terminalPath: "/elsewhere"))
         XCTAssertEqual(BoxConfig(host: "grave.tail.ts.net", terminalPath: "/term/")?.terminalWebSocketURL().path, "/term/ws")
-    }
-
-    func testMacHostingPlanIsManualAndLoopbackOnly() {
-        XCTAssertEqual(MacHostingPlan.manualServeCommand(), "tailscale serve --bg --https=443 --set-path=/grave http://127.0.0.1:4712")
-        XCTAssertNil(MacHostingPlan.manualServeCommand(port: 0))
-        XCTAssertNil(MacHostingPlan.manualServeCommand(port: 65_536))
-        XCTAssertEqual(MacHostingPlan.preflight(legacyCompanionActive: true), .existingCompanion)
-        XCTAssertEqual(MacHostingPlan.preflight(legacyCompanionActive: false), .attemptListener)
-        XCTAssertEqual(MacHostingPlan.restore(nativeHostEnabled: false), .off)
-        XCTAssertEqual(MacHostingPlan.restore(nativeHostEnabled: true), .attempt)
     }
 
     func testNativePublisherHTTPBoundaryAndSummary() throws {

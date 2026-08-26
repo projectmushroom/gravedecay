@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+root=${SRCROOT:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}
 source="$root/App/Assets.xcassets/AppIcon.appiconset/AppIcon.svg"
 destination="$root/App/Assets.xcassets/AppIcon.appiconset"
 
