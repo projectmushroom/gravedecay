@@ -55,7 +55,7 @@ private struct GraveMenuView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack { GraveMark(color: GraveTheme.ink).accessibilityHidden(true); Text("GRAVEDECAY").tracking(1.2).foregroundStyle(GraveTheme.amber); Spacer(); Button("↻ REFRESH") { model.refresh() }.buttonStyle(GraveButton()).accessibilityLabel("Refresh graves") }.font(.system(size: 11, weight: .bold, design: .monospaced))
-            Picker("TARGET", selection: $model.selectedID) { Text("THIS MAC").tag(Optional(GraveMenuModel.thisMacID)); ForEach(model.graves) { Text($0.candidate.name.uppercased()).tag(Optional($0.id)) } }.pickerStyle(.menu).tint(GraveTheme.amber).font(.system(size: 10, design: .monospaced))
+            Picker("TARGET", selection: $model.selectedID) { ForEach(model.graves) { Text($0.candidate.name.uppercased()).tag(Optional($0.id)) } }.pickerStyle(.menu).tint(GraveTheme.amber).font(.system(size: 10, design: .monospaced))
             if model.graves.isEmpty {
                 TailscaleOnboardingView(model: model)
             } else if let grave = model.selected, let summary = grave.summary {
@@ -66,10 +66,8 @@ private struct GraveMenuView: View {
                     Text("TEMP CPU \(GravePresentation.temperature(summary.resources.cpu_temp_c)) // GPU \(GravePresentation.temperature(summary.resources.gpu_temp_c))").foregroundStyle(GraveTheme.muted)
                     Text("\(summary.activity.sessions_live) ACTIVE // \(summary.activity.sessions_frozen) FROZEN // \(summary.problems) PROBLEMS").foregroundStyle(summary.problems > 0 ? GraveTheme.crit : GraveTheme.ink2)
                     Text("UP \(GravePresentation.uptime(summary.node.uptime_s)) // SEEN \(GravePresentation.age(summary.observed_at))").foregroundStyle(GraveTheme.muted)
-                    HStack { link("Dashboard", summary.capabilities.dashboard); link("T3", summary.capabilities.t3); link("Terminal", summary.capabilities.terminal); link("Network", summary.capabilities.network) }
+                    HStack { link("T3", summary.capabilities.t3); if summary.capabilities.terminal != nil { Button("TERMINAL") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true); NotificationCenter.default.post(name: .openNativeTerminal, object: nil) }.buttonStyle(GraveButton()) } }
                 }.font(.system(size: 9, design: .monospaced))
-            } else if model.isThisMac {
-                Text("THIS MAC // OPEN APP FOR LOCAL METRICS").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.muted)
             } else { Text("SELECT A REACHABLE GRAVE.").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.muted) }
             Rectangle().fill(GraveTheme.ring).frame(height: 1)
             HStack { Button("OPEN APP") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }; Button("QUIT") { NSApp.terminate(nil) } }.buttonStyle(GraveButton())
@@ -81,6 +79,8 @@ private struct GraveMenuView: View {
     @ViewBuilder private func link(_ title: String, _ path: String?) -> some View { if let grave = model.selected, GravePresentation.link(host: grave.candidate.dns, path: path) != nil { Button(title.uppercased()) { model.open(path) }.buttonStyle(GraveButton()) } }
     private func menuTile(_ label: String, _ value: String, _ color: Color) -> some View { VStack(alignment: .leading, spacing: 2) { Text(label).foregroundStyle(GraveTheme.muted); Text(value).foregroundStyle(color) }.frame(maxWidth: .infinity, alignment: .leading).padding(6).background(GraveTheme.inset).overlay(Rectangle().stroke(GraveTheme.hairline)) }
 }
+
+extension Notification.Name { static let openNativeTerminal = Notification.Name("openNativeTerminal") }
 #endif
 
 struct ContentView: View {

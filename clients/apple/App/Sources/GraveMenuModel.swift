@@ -6,7 +6,6 @@ import GravedecayKit
 @MainActor
 final class GraveMenuModel: ObservableObject {
     enum State: Equatable { case idle, scanning, missingTailscale, loggedOut, noAppliances, ready }
-    static let thisMacID = "this-mac"
     struct Grave: Identifiable {
         let candidate: GraveCandidate
         var summary: GraveSummary?
@@ -22,10 +21,9 @@ final class GraveMenuModel: ObservableObject {
     private var timer: Timer?
 
     var selected: Grave? { graves.first { $0.id == selectedID } }
-    var isThisMac: Bool { selectedID == Self.thisMacID }
 
     init() {
-        selectedID = UserDefaults.standard.string(forKey: "graveSelectedTarget") ?? Self.thisMacID
+        selectedID = UserDefaults.standard.string(forKey: "graveSelectedTarget")
         start()
     }
 
@@ -42,14 +40,14 @@ final class GraveMenuModel: ObservableObject {
         let probe = await Task.detached(priority: .utility, operation: Self.tailscaleStatus).value
         let statusData = probe.data
         switch GraveDiscovery.tailscaleState(executableFound: probe.executableFound, statusData: statusData) {
-        case .missing: graves = []; selectedID = Self.thisMacID; state = .missingTailscale; return
-        case .unavailable: graves = []; selectedID = Self.thisMacID; tailscaleUnavailable = true; state = .noAppliances; return
-        case .loggedOut: graves = []; selectedID = Self.thisMacID; state = .loggedOut; return
+        case .missing: graves = []; selectedID = nil; state = .missingTailscale; return
+        case .unavailable: graves = []; selectedID = nil; tailscaleUnavailable = true; state = .noAppliances; return
+        case .loggedOut: graves = []; selectedID = nil; state = .loggedOut; return
         case .running: break
         }
         guard let statusData else { return }
         let candidates = GraveDiscovery.candidates(statusData: statusData)
-        guard !candidates.isEmpty else { graves = []; selectedID = Self.thisMacID; state = .noAppliances; return }
+        guard !candidates.isEmpty else { graves = []; selectedID = nil; state = .noAppliances; return }
         var found: [Grave] = []
         for candidate in candidates {
             if let summary = await fetch(candidate) {
@@ -59,8 +57,7 @@ final class GraveMenuModel: ObservableObject {
             }
         }
         graves = found
-        if selectedID != Self.thisMacID && !found.contains(where: { $0.id == selectedID }) { selectedID = found.first?.id ?? Self.thisMacID }
-        if found.isEmpty { selectedID = Self.thisMacID }
+        selectedID = GraveDiscovery.selectedID(previousID: selectedID, candidates: found.map(\.candidate))
         state = found.isEmpty ? .noAppliances : .ready
     }
 

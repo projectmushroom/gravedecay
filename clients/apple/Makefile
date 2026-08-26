@@ -16,7 +16,7 @@ project:
 project-embedded: Vendor/TailscaleKit.xcframework
 	$(XCODEGEN) --spec project-embedded.yml
 
-## Regenerate every declared macOS AppIcon raster from its opaque SVG master.
+## Regenerate every declared macOS AppIcon raster from its transparent SVG master.
 app-icon:
 	scripts/generate-app-icon.sh
 

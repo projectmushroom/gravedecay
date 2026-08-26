@@ -56,6 +56,12 @@ public enum GraveDiscovery {
             return order == .orderedAscending || (order == .orderedSame && $0.id < $1.id)
         }
     }
+
+    /// Retain a reachable grave when possible; fresh clients start on the
+    /// first discovered grave rather than a local-only placeholder.
+    public static func selectedID(previousID: String?, candidates: [GraveCandidate]) -> String? {
+        candidates.contains(where: { $0.id == previousID }) ? previousID : candidates.first?.id
+    }
 }
 
 public struct GraveSummary: Codable, Equatable, Sendable {

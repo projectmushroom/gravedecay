@@ -42,6 +42,7 @@ struct MacNativeContentView: View {
             }.background(GraveTheme.page)
         }
         .task { model.refresh(); graves.refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: .openNativeTerminal)) { _ in selection = .terminal }
         .frame(minWidth: 900, minHeight: 600).graveRoot().background(GraveTheme.page.ignoresSafeArea())
     }
     private var title: String { switch selection { case .graveyard: "GRAVEYARD // TAILNET"; case .thisMac: "THIS MAC // SYSTEM"; case .work: "THIS MAC // WORK"; case .network: "THIS MAC // NETWORK"; case .terminal: "TERMINAL // \(graves.selected?.candidate.name.uppercased() ?? "REMOTE")"; case .settings: "SETTINGS" } }
@@ -51,7 +52,6 @@ private struct GraveTargetPicker: View {
     @ObservedObject var graves: GraveMenuModel
     var body: some View {
         Picker("TARGET", selection: $graves.selectedID) {
-            Text("SELECT GRAVE").tag(Optional<String>.none)
             ForEach(graves.graves) { grave in Text(grave.candidate.name.uppercased()).tag(Optional(grave.id)) }
         }.labelsHidden().pickerStyle(.menu).tint(GraveTheme.amber).font(.system(size: 10, weight: .bold, design: .monospaced))
             .accessibilityLabel("Target")
@@ -140,18 +140,23 @@ private struct InterfaceCard: View {
 private struct GraveyardView: View {
     @ObservedObject var graves: GraveMenuModel
     @Binding var selection: MacNativeContentView.Section
+    @State private var detailID: String?
     var body: some View {
+        if let grave = graves.graves.first(where: { $0.id == detailID }) {
+            GraveDetailView(grave: grave, graves: graves, selection: $selection) { detailID = nil }
+        } else {
         ScrollView { LazyVGrid(columns: [GridItem(.adaptive(minimum: 330), spacing: 12)], spacing: 14) {
             if graves.graves.isEmpty { GravePanel("status") { TailscaleOnboardingView(model: graves) } }
             ForEach(graves.graves) { grave in
                 GravePanel(grave.candidate.name) { VStack(alignment: .leading, spacing: 7) {
-                    HStack { StatusSquare(good: grave.reachable); Image(systemName: icon(for: GravePresentation.condition(summary: grave.summary, reachable: grave.reachable))); Text(grave.candidate.name.uppercased()).fontWeight(.bold); Spacer(); Text(grave.reachable ? "ONLINE" : "UNREACHABLE").foregroundStyle(grave.reachable ? GraveTheme.good : GraveTheme.muted) }.font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.ink)
+                    HStack { StatusSquare(good: grave.reachable); Image(systemName: icon(for: GravePresentation.condition(summary: grave.summary, reachable: grave.reachable))); Text(grave.candidate.name.uppercased()).fontWeight(.bold); if graves.selectedID == grave.id { Text("[ SELECTED ]").foregroundStyle(GraveTheme.amber) }; Spacer(); Text(grave.reachable ? "ONLINE" : "UNREACHABLE").foregroundStyle(grave.reachable ? GraveTheme.good : GraveTheme.muted) }.font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.ink)
                     if let summary = grave.summary { Text("\(summary.node.platform.uppercased()) // CPU \(GravePresentation.percent(summary.resources.cpu_pct))").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.ink2) }
                     if let s = grave.summary { VStack(alignment: .leading, spacing: 5) { HStack { Text("MEM \(GravePresentation.percent(s.resources.memory_pct))"); Text("DISK \(GravePresentation.percent(s.resources.disk_pct))"); Spacer(); Text("UP \(GravePresentation.uptime(s.node.uptime_s))") }.foregroundStyle(GraveTheme.muted); HStack { Text("SESSIONS \(s.activity.sessions_live)"); Text("PROBLEMS \(s.problems)").foregroundStyle(s.problems > 0 ? GraveTheme.crit : GraveTheme.good) } }.font(.system(size: 9, design: .monospaced)) }
-                    HStack { CapabilityButton(title: "T3", host: grave.candidate.dns, path: grave.summary?.capabilities.t3); CapabilityButton(title: "DASHBOARD", host: grave.candidate.dns, path: grave.summary?.capabilities.dashboard); if grave.summary?.capabilities.terminal != nil { Button("TERMINAL") { graves.select(grave); selection = .terminal }.buttonStyle(GraveButton()) } }
-                }}.contentShape(Rectangle()).overlay(Rectangle().stroke(graves.selectedID == grave.id ? GraveTheme.amber : .clear, lineWidth: 2)).onTapGesture { graves.selectedID = grave.id }
+                    HStack { CapabilityButton(title: "T3", host: grave.candidate.dns, path: grave.summary?.capabilities.t3); if grave.summary?.capabilities.terminal != nil { Button("TERMINAL") { graves.select(grave); selection = .terminal }.buttonStyle(GraveButton()) } }
+                }}.contentShape(Rectangle()).onTapGesture { graves.select(grave); detailID = grave.id }
             }
         }.frame(maxWidth: 980).padding(24) }.background(GraveTheme.page)
+        }
     }
     private func icon(for condition: GravePresentation.Condition) -> String {
         switch condition {
@@ -161,6 +166,35 @@ private struct GraveyardView: View {
         case .frozen: return "snowflake"
         case .healthy: return "checkmark.circle.fill"
         }
+    }
+}
+
+private struct GraveDetailView: View {
+    let grave: GraveMenuModel.Grave
+    @ObservedObject var graves: GraveMenuModel
+    @Binding var selection: MacNativeContentView.Section
+    let back: () -> Void
+    var body: some View {
+        ScrollView { VStack(alignment: .leading, spacing: 20) {
+            Button("← ALL GRAVES") { back() }.buttonStyle(GraveButton())
+            GravePanel(grave.candidate.name) { VStack(alignment: .leading, spacing: 8) {
+                HStack { StatusSquare(good: grave.reachable); Text(grave.reachable ? "ONLINE" : "UNREACHABLE").foregroundStyle(grave.reachable ? GraveTheme.good : GraveTheme.crit); Spacer(); Text("SEEN \(GravePresentation.age(grave.summary?.observed_at))").foregroundStyle(GraveTheme.muted) }
+                Text(grave.summary.map { "\($0.node.host.uppercased()) // \($0.node.platform.uppercased()) // \($0.node.mode.uppercased())" } ?? "NO VALIDATED SUMMARY AVAILABLE").foregroundStyle(GraveTheme.ink2)
+            }.font(.system(size: 10, design: .monospaced)) }
+            if let summary = grave.summary {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 12)], spacing: 12) {
+                    MetricCard(title: "CPU", value: GravePresentation.percent(summary.resources.cpu_pct), detail: "PROCESSOR LOAD", percent: summary.resources.cpu_pct)
+                    MetricCard(title: "MEMORY", value: GravePresentation.percent(summary.resources.memory_pct), detail: "MEMORY IN USE", percent: summary.resources.memory_pct)
+                    MetricCard(title: "DISK", value: GravePresentation.percent(summary.resources.disk_pct), detail: "DISK IN USE", percent: summary.resources.disk_pct)
+                    MetricCard(title: "TEMPERATURES", value: "CPU \(GravePresentation.temperature(summary.resources.cpu_temp_c))", detail: "GPU \(GravePresentation.temperature(summary.resources.gpu_temp_c))", percent: nil)
+                }
+                GravePanel("activity // health") { VStack(alignment: .leading, spacing: 7) {
+                    HStack { Text("UP \(GravePresentation.uptime(summary.node.uptime_s))"); Spacer(); Text("\(summary.problems) PROBLEMS").foregroundStyle(summary.problems > 0 ? GraveTheme.crit : GraveTheme.good) }
+                    HStack { Text("SESSIONS \(summary.activity.sessions_live) LIVE"); Text("\(summary.activity.sessions_frozen) FROZEN"); Spacer(); Text("SERVICES \(summary.health.services_failed) FAILED"); Text("CONTAINERS \(summary.health.containers_problem) PROBLEM") }
+                }.font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.ink2) }
+                HStack { CapabilityButton(title: "T3", host: grave.candidate.dns, path: summary.capabilities.t3); if summary.capabilities.terminal != nil { Button("TERMINAL") { graves.select(grave); selection = .terminal }.buttonStyle(GraveButton()) } }
+            }
+        }.frame(maxWidth: 980).padding(24) }.background(GraveTheme.page)
     }
 }
 
@@ -204,8 +238,7 @@ private struct TerminalDestination: View {
     @ObservedObject var graves: GraveMenuModel
     @StateObject private var status = TerminalStatus()
     var body: some View {
-        if graves.isThisMac { ThemedEmpty(title: "TERMINAL NOT PUBLISHED BY THIS GRAVE", detail: "THIS MAC DOES NOT PUBLISH A TERMINAL") .padding(24).frame(maxWidth: .infinity, maxHeight: .infinity).background(GraveTheme.page) }
-        else if let grave = graves.selected, let box = BoxConfig(host: grave.candidate.dns, terminalPath: grave.summary?.capabilities.terminal) { VStack(spacing: 0) {
+        if let grave = graves.selected, let box = BoxConfig(host: grave.candidate.dns, terminalPath: grave.summary?.capabilities.terminal) { VStack(spacing: 0) {
             HStack { StatusSquare(good: status.state == .connected); VStack(alignment: .leading, spacing: 2) { Text("\(status.state.rawValue) // \(grave.candidate.name.uppercased())"); if status.lastCause != "NONE" && status.lastCause != "REMOTE CLOSED" { Text(status.lastCause).foregroundStyle(GraveTheme.crit) } }; Spacer(); Button("RETRY") { status.retry() }.buttonStyle(GraveButton()); Button("COPY DIAGNOSTICS") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(status.diagnostics, forType: .string) }.buttonStyle(GraveButton()) }.font(.system(size: 10, design: .monospaced)).padding(10).background(GraveTheme.surface)
             TerminalPane(box: box, urlSession: .shared, status: status).id("\(grave.id)-\(status.retryID)").padding(1).background(GraveTheme.ring)
         }.padding(20).background(GraveTheme.page) }
