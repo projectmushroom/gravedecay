@@ -14,12 +14,27 @@ final class MacNativeHost: ObservableObject {
     private var listener: NWListener?
     private var summary = Data()
     private let queue = DispatchQueue(label: "com.projectmushroom.gravedecay.host")
+    private let defaults: UserDefaults
+    private var restoreAttempted = false
+    private var requested: Bool
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        requested = defaults.bool(forKey: "nativeHostEnabled")
+    }
 
     func update(snapshot: MacSnapshot?) { summary = Self.summaryData(snapshot: snapshot) }
 
-    func enable() {
+    func restoreIfRequested() {
+        guard !restoreAttempted, MacHostingPlan.restore(nativeHostEnabled: requested) == .attempt else { return }
+        restoreAttempted = true; start()
+    }
+
+    func enable() { start() }
+
+    private func start() {
         guard listener == nil else { return }
-        guard MacHostingPlan.preflight(legacyCompanionActive: Self.legacyCompanionActive()) == .attemptListener else { state = .existingCompanion; detail = "EXISTING COMPANION ACTIVE // NATIVE HOST NOT STARTED"; return }
+        guard MacHostingPlan.preflight(legacyCompanionActive: Self.legacyCompanionActive()) == .attemptListener else { state = .existingCompanion; detail = requested ? "REQUESTED BUT BLOCKED // LEGACY COMPANION OWNS 4712" : "EXISTING COMPANION ACTIVE // NATIVE HOST NOT STARTED"; return }
         state = .starting; detail = "STARTING LOOPBACK SUMMARY…"
         do {
             let parameters = NWParameters.tcp
@@ -28,19 +43,19 @@ final class MacNativeHost: ObservableObject {
             listener.stateUpdateHandler = { [weak self] status in DispatchQueue.main.async {
                 guard let self else { return }
                 switch status {
-                case .ready: self.state = .hosted; self.detail = "HOSTING 127.0.0.1:4712 // APP PROCESS ONLY"
-                case .failed: self.listener?.cancel(); self.listener = nil; self.state = .unavailable; self.detail = "PORT 4712 UNAVAILABLE // NOT STARTED"
+                case .ready: self.requested = true; self.defaults.set(true, forKey: "nativeHostEnabled"); self.state = .hosted; self.detail = "HOSTING 127.0.0.1:4712 // APP PROCESS ONLY"
+                case .failed: self.listener?.cancel(); self.listener = nil; self.state = .unavailable; self.detail = self.requested ? "REQUESTED BUT BLOCKED // PORT 4712 UNAVAILABLE" : "PORT 4712 UNAVAILABLE // NOT STARTED"
                 default: break
                 }
             }}
             listener.newConnectionHandler = { [weak self] connection in Task { @MainActor in self?.accept(connection) } }
             self.listener = listener
             listener.start(queue: queue)
-        } catch { state = .unavailable; detail = "PORT 4712 UNAVAILABLE // NOT STARTED" }
+        } catch { state = .unavailable; detail = requested ? "REQUESTED BUT BLOCKED // PORT 4712 UNAVAILABLE" : "PORT 4712 UNAVAILABLE // NOT STARTED" }
     }
 
     func disable() {
-        listener?.cancel(); listener = nil; state = .off; detail = "OFF // NO LOCAL LISTENER"
+        listener?.cancel(); listener = nil; requested = false; defaults.set(false, forKey: "nativeHostEnabled"); state = .off; detail = "OFF // NO LOCAL LISTENER"
     }
 
     var manualServeCommand: String { MacHostingPlan.manualServeCommand()! }

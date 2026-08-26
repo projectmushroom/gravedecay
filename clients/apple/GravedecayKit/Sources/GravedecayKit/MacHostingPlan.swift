@@ -4,10 +4,12 @@ import Foundation
 /// can make the explicit Tailscale Serve change after reviewing their routes.
 public enum MacHostingPlan {
     public enum Preflight: Equatable { case attemptListener, existingCompanion }
+    public enum Restore: Equatable { case off, attempt }
 
     public static func preflight(legacyCompanionActive: Bool) -> Preflight {
         legacyCompanionActive ? .existingCompanion : .attemptListener
     }
+    public static func restore(nativeHostEnabled: Bool) -> Restore { nativeHostEnabled ? .attempt : .off }
 
     public static func manualServeCommand(port: Int = 4712) -> String? {
         guard (1...65_535).contains(port) else { return nil }

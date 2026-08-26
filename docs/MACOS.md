@@ -46,8 +46,10 @@ or Tailscale configuration. It refuses to start when this legacy companion or
 another listener owns that port and reports `EXISTING COMPANION ACTIVE`.
 
 It does not modify Tailscale Serve: the UI shows the exact manual command to
-publish `/grave` after the listener is healthy. The listener stops with the
-app; enable Launch at Login if the app should be available after sign-in.
+publish `/grave` after the listener is healthy. A successfully started native
+host is restored once when the app launches; enable Launch at Login to restore
+that opted-in host after sign-in. If the legacy companion later owns the port,
+the app retains the request but fails closed until the conflict is resolved.
 
 The System view uses only native, unprivileged macOS data: CPU activity from
 `top`, reclaimability from `memory_pressure` (labelled **Memory pressure**, not

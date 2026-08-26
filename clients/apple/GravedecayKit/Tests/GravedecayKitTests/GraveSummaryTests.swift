@@ -38,6 +38,8 @@ final class GraveSummaryTests: XCTestCase {
         XCTAssertNil(MacHostingPlan.manualServeCommand(port: 65_536))
         XCTAssertEqual(MacHostingPlan.preflight(legacyCompanionActive: true), .existingCompanion)
         XCTAssertEqual(MacHostingPlan.preflight(legacyCompanionActive: false), .attemptListener)
+        XCTAssertEqual(MacHostingPlan.restore(nativeHostEnabled: false), .off)
+        XCTAssertEqual(MacHostingPlan.restore(nativeHostEnabled: true), .attempt)
     }
 
     func testNativePublisherHTTPBoundaryAndSummary() throws {
@@ -55,6 +57,15 @@ final class GraveSummaryTests: XCTestCase {
         XCTAssertTrue(reply("POST /healthz HTTP/1.1\r\n\r\n").hasPrefix("HTTP/1.1 405"))
         XCTAssertTrue(reply("GET /healthz HTTP/1.1\r\nContent-Length: 1\r\n\r\nx").hasPrefix("HTTP/1.1 400"))
         XCTAssertTrue(String(decoding: MacPublisherHTTP.response(request: Data(repeating: 65, count: MacPublisherHTTP.maxRequestBytes + 1), summary: summary), as: UTF8.self).hasPrefix("HTTP/1.1 400"))
+    }
+
+    func testTerminalTokenResponseClassification() {
+        XCTAssertEqual(TerminalTokenResponse.classify(data: Data(#"{"token":"abc"}"#.utf8), statusCode: 200), .token("abc"))
+        XCTAssertEqual(TerminalTokenResponse.classify(data: Data(#"{"token":""}"#.utf8), statusCode: 200), .token(""))
+        XCTAssertEqual(TerminalTokenResponse.classify(data: Data(#"{"token":null}"#.utf8), statusCode: 200), .token(""))
+        XCTAssertEqual(TerminalTokenResponse.classify(data: Data(#"{}"#.utf8), statusCode: 200), .invalidResponse)
+        XCTAssertEqual(TerminalTokenResponse.classify(data: Data(#"{"token":1}"#.utf8), statusCode: 200), .invalidResponse)
+        XCTAssertEqual(TerminalTokenResponse.classify(data: Data(), statusCode: 404), .http(404))
     }
 
     func testConditionsAndClampedFormatting() {

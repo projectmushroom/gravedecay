@@ -14,7 +14,7 @@ struct GravedecayApp: App {
         WindowGroup(id: "main") {
             #if os(macOS)
             MacNativeContentView(graves: graveMenu, model: macDashboard, host: macHost)
-                .onAppear { macDashboard.setNativeHost(macHost) }
+                .onAppear { macDashboard.setNativeHost(macHost); macHost.restoreIfRequested() }
             #else
             ContentView()
                 .environmentObject(model)

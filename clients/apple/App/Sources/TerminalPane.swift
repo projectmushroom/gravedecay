@@ -95,7 +95,9 @@ final class TerminalController: NSObject {
         Task { @MainActor [weak self] in
             guard let self, self.terminalView != nil, self.generation == expectedGeneration else { return }
             self.status.transition(.fetchingToken)
-            switch await TerminalToken.fetch(from: self.box.terminalTokenURL, session: self.urlSession) {
+            let result = await TerminalToken.fetch(from: self.box.terminalTokenURL, session: self.urlSession)
+            guard self.generation == expectedGeneration, self.terminalView != nil else { return }
+            switch result {
             case .token(let token): guard self.generation == expectedGeneration else { return }; self.open(token: token)
             case .http(let code): self.failed("TOKEN HTTP \(code)")
             case .invalidResponse: self.failed("TOKEN RESPONSE INVALID")
