@@ -21,7 +21,7 @@ assetutil --info "$resources/Assets.car" >"$asset_info"
 
 entry=0
 valid=false
-while [ "$entry" -lt 1000 ]; do
+while /usr/libexec/PlistBuddy -c "Print :items:$entry" "$asset_plist" >/dev/null 2>&1; do
   name=$(/usr/libexec/PlistBuddy -c "Print :items:$entry:Name" "$asset_plist" 2>/dev/null || true)
   if [ "$name" = AppIcon ] &&
      [ "$(/usr/libexec/PlistBuddy -c "Print :items:$entry:PixelHeight" "$asset_plist")" = 1024 ] &&
