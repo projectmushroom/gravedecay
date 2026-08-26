@@ -1,5 +1,8 @@
 import SwiftUI
 import GravedecayKit
+#if os(macOS)
+import AppKit
+#endif
 
 @main
 struct GravedecayApp: App {
@@ -10,6 +13,14 @@ struct GravedecayApp: App {
     @StateObject private var macHost = MacNativeHost()
     @State private var macSelection: MacNativeContentView.Section = .graveyard
     @AppStorage("macWelcomeCompleted") private var macWelcomeCompleted = false
+    #endif
+
+    #if os(macOS)
+    init() {
+        if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"), let image = NSImage(contentsOf: url) {
+            NSApplication.shared.applicationIconImage = image
+        }
+    }
     #endif
 
     var body: some Scene {
