@@ -18,7 +18,7 @@ struct MacNativeContentView: View {
     var body: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
-                Image(systemName: "cross.case.fill").font(.system(size: 32, weight: .light)).foregroundStyle(GraveTheme.ink).shadow(color: GraveTheme.good.opacity(0.45), radius: 8)
+                GraveMark(color: GraveTheme.ink, size: 36).shadow(color: GraveTheme.good.opacity(0.45), radius: 8).accessibilityHidden(true)
                 Text("gravedecay").font(.system(size: 15, weight: .bold, design: .monospaced)).foregroundStyle(GraveTheme.ink)
                 Text("MACOS NATIVE // ONLINE").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.good).padding(.bottom, 18)
                 ForEach([(Section.system,"THIS MAC","desktopcomputer"),(Section.work,"WORK","folder"),(Section.network,"NETWORK","network"),(Section.appliances,"APPLIANCES","server.rack"),(Section.terminal,"TERMINAL","terminal"),(Section.settings,"SETTINGS","gearshape")], id: \.0) { item in

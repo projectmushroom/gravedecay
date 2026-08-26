@@ -17,6 +17,22 @@ enum GraveTheme {
     static let mono = Font.system(.body, design: .monospaced)
 }
 
+/// Native translation of the Omarchy plugin's 18×18 GraveIcon.qml geometry.
+struct GraveMark: View {
+    var color: Color = .primary
+    var size: CGFloat = 18
+    private var scale: CGFloat { size / 18 }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Rectangle().fill(color).frame(width: 4 * scale, height: 8 * scale).offset(x: 7 * scale, y: scale)
+            Rectangle().fill(color).frame(width: 10 * scale, height: 3 * scale).offset(x: 4 * scale, y: 4 * scale)
+            RoundedRectangle(cornerRadius: 2 * scale).fill(color).frame(width: 12 * scale, height: 8 * scale).offset(x: 3 * scale, y: 9 * scale)
+            Rectangle().strokeBorder(.black.opacity(0.45), lineWidth: scale).frame(width: 6 * scale, height: scale).offset(x: 6 * scale, y: 12 * scale)
+        }.frame(width: size, height: size)
+    }
+}
+
 struct GravePanel<Content: View>: View {
     let title: String; @ViewBuilder let content: Content
     init(_ title: String, @ViewBuilder content: () -> Content) { self.title = title; self.content = content() }

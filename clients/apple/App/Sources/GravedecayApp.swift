@@ -23,9 +23,12 @@ struct GravedecayApp: App {
         .windowStyle(.hiddenTitleBar)
         #endif
         #if os(macOS)
-        MenuBarExtra("Gravedecay", systemImage: menuIcon) {
+        MenuBarExtra {
             GraveMenuView(model: graveMenu)
                 .onAppear { graveMenu.refresh() }
+        } label: {
+            GraveMark(color: menuColor)
+                .accessibilityLabel("Gravedecay, \(menuStatus)")
         }
         .menuBarExtraStyle(.window)
         Settings {
@@ -37,7 +40,9 @@ struct GravedecayApp: App {
     }
 
     #if os(macOS)
-    private var menuIcon: String { GraveMenuView.icon(for: GravePresentation.condition(summary: graveMenu.selected?.summary, reachable: graveMenu.selected?.reachable ?? false)) }
+    private var menuCondition: GravePresentation.Condition { GravePresentation.condition(summary: graveMenu.selected?.summary, reachable: graveMenu.selected?.reachable ?? false) }
+    private var menuColor: Color { switch menuCondition { case .warning: return GraveTheme.amber; case .active, .healthy: return GraveTheme.good; case .frozen: return GraveTheme.accentSoft; case .unreachable: return .primary } }
+    private var menuStatus: String { switch menuCondition { case .unreachable: return "unreachable"; case .warning: return "warning"; case .active: return "active"; case .frozen: return "frozen"; case .healthy: return "healthy" } }
     #endif
 }
 
@@ -47,7 +52,7 @@ private struct GraveMenuView: View {
     @Environment(\.openWindow) private var openWindow
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack { Image(systemName: "cross.case.fill").foregroundStyle(GraveTheme.ink); Text("GRAVEDECAY").tracking(1.2).foregroundStyle(GraveTheme.amber); Spacer(); Button("↻ REFRESH") { model.refresh() }.buttonStyle(GraveButton()).accessibilityLabel("Refresh appliances") }.font(.system(size: 11, weight: .bold, design: .monospaced))
+            HStack { GraveMark(color: GraveTheme.ink).accessibilityHidden(true); Text("GRAVEDECAY").tracking(1.2).foregroundStyle(GraveTheme.amber); Spacer(); Button("↻ REFRESH") { model.refresh() }.buttonStyle(GraveButton()).accessibilityLabel("Refresh appliances") }.font(.system(size: 11, weight: .bold, design: .monospaced))
             if model.graves.count > 1 { Picker("APPLIANCE", selection: $model.selectedID) { ForEach(model.graves) { Text($0.candidate.name.uppercased()).tag(Optional($0.id)) } }.pickerStyle(.menu).tint(GraveTheme.amber).font(.system(size: 10, design: .monospaced)) }
             if let grave = model.selected, let summary = grave.summary {
                 VStack(alignment: .leading, spacing: 5) {
@@ -65,7 +70,6 @@ private struct GraveMenuView: View {
         }.padding().frame(width: 390).graveRoot()
     }
     private var condition: GravePresentation.Condition { GravePresentation.condition(summary: model.selected?.summary, reachable: model.selected?.reachable ?? false) }
-    static func icon(for condition: GravePresentation.Condition) -> String { switch condition { case .unreachable: return "wifi.slash"; case .warning: return "exclamationmark.triangle.fill"; case .active: return "bolt.circle.fill"; case .frozen: return "snowflake"; case .healthy: return "checkmark.circle.fill" } }
     private func title(for condition: GravePresentation.Condition) -> String { switch condition { case .unreachable: return "Unreachable (last summary)"; case .warning: return "Reachable · Warning"; case .active: return "Reachable · Active"; case .frozen: return "Reachable · Frozen"; case .healthy: return "Reachable · Healthy" } }
     private func color(for condition: GravePresentation.Condition) -> Color { switch condition { case .warning: return GraveTheme.amber; case .active, .healthy: return GraveTheme.good; case .frozen: return GraveTheme.accentSoft; case .unreachable: return GraveTheme.muted } }
     private var message: String { switch model.state { case .scanning: return "Discovering tailnet appliances…"; case .missingTailscale: return "Tailscale CLI not found. Install the Tailscale app."; case .loggedOut: return "Tailscale is logged out. Sign in with the Tailscale app."; case .noAppliances: return "No reachable Gravedecay appliances found."; default: return "Waiting to discover appliances…" } }
