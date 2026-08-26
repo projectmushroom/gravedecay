@@ -39,17 +39,17 @@ terminal, Docker, gaming, reboot, journal, or Linux service controls.
 ## Native app publisher
 
 The optional macOS 15+ native app is separate from this legacy source
-companion. Its Settings → **Advertise This Mac** starts a read-only,
-in-process listener only on `127.0.0.1:4712` for `/healthz` and
-`/api/v1/summary`. It never installs a LaunchAgent, helper, Python runtime,
-or Tailscale configuration. It refuses to start when this legacy companion or
-another listener owns that port and reports `EXISTING COMPANION ACTIVE`.
+companion. Its first run offers remote-first **Connect to Graves** or **Share
+This Mac**; either can be enabled later. Settings → **Local host** → **Start
+Local Host** starts a read-only, in-process listener only on `127.0.0.1:4712`
+for `/healthz` and `/api/v1/summary`. It never installs a LaunchAgent, helper,
+Python runtime, or Tailscale configuration. It refuses to start when this
+legacy companion or another listener owns that port and reports `EXISTING
+COMPANION ACTIVE`.
 
-When the native app cannot find Tailscale, **Appliances** and the menu bar
-offer **Get Tailscale**, which opens only the official macOS download page.
-When the installed app is logged out, they offer **Open Tailscale** so you can
-sign in yourself. These controls never install software or change Tailscale
-state; refresh discovery after signing in.
+When the native app cannot find Tailscale, Graveyard, Settings, and the menu
+bar offer **Get Tailscale** or **Open Tailscale**. They only open the official
+download page or app: sign-in and Tailscale changes remain yours.
 
 It does not modify Tailscale Serve: the UI shows the exact manual command to
 publish `/grave` after the listener is healthy. A successfully started native

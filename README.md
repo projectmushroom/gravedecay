@@ -86,11 +86,10 @@ open your tailnet graves. Its first run asks what this Mac should do first:
 **Connect to Graves** (discovery only) or **Share This Mac** (an opt-in local
 publisher). That is only a starting choice; either role can be enabled later.
 
-The normal Dock app and skull menu-bar status window offer a graveyard picker,
-remote summaries, and a native terminal for graves that advertise `/term`.
-The standalone window also has native System, Work, Network, Appliances, and
-Settings views. Work integrations are read-only: local Git state plus optional
-GitHub CLI and Linear status/links.
+The normal Dock app and skull menu-bar status window offer a remote
+**Graveyard**. Its standalone window has native Graveyard, This Mac, Work,
+Network, Terminal, and Settings surfaces. Work integrations are read-only:
+local Git state plus optional GitHub CLI and Linear status/links.
 
 Download or build the unsigned Universal 2 DMG using the instructions in
 [clients/apple/README.md](clients/apple/README.md). Apple CI produces it

@@ -17,21 +17,16 @@ over the same origins and never require new listening ports on the box.
   files, terminal, gravenet) stays on the tailnet origin / PWA.
 
 - **iOS / macOS** — `clients/apple/`. iOS uses webview panes for T3 and the
-  dashboard; macOS 15+ is a standalone native SwiftUI dashboard and menu-bar
-  app, opening those web surfaces explicitly in the default browser. Both use
-  a native SwiftTerm terminal speaking the ttyd protocol
-  (the same one `web/term/app.js` documents), and an optional embedded
-  Tailscale node (TailscaleKit) so a device needs no VPN profile. Build and
-  distribution details live in `clients/apple/README.md`; CI is
-  `.github/workflows/apple.yml` (Linux + macOS matrix).
-  On macOS 15+ the same app also has a menu-bar summary and discovery surface.
-  It invokes the local Tailscale CLI read-only, validates online nodes and the
-  versioned summary before display, and opens only same-host HTTPS paths from
-  the validated response. Its persistent target selector includes This Mac
-  and discovered graves; a native terminal exists only when the selected
-  summary explicitly advertises the standard terminal link. The optional This
-  Mac publisher is off by default, binds only loopback while the app runs, and
-  never changes Tailscale Serve.
+  dashboard. macOS 15+ is a standalone native SwiftUI Dock/menu-bar app:
+  first run offers remote-first **Connect to Graves** or **Share This Mac**;
+  Graveyard selects validated remote graves, with native This Mac, Work,
+  Network, Terminal, and Settings surfaces. It opens only T3 in the default
+  browser. Tailscale discovery is read-only; Graveyard, Settings, and the menu
+  bar can open Tailscale for you to sign in. **Start Local Host** is off by
+  default, binds only loopback while the app runs, and shows an explicit manual
+  Serve command. Both platforms use native SwiftTerm and can use an embedded
+  Tailscale node. Build and distribution details live in
+  `clients/apple/README.md`.
 
 - **Omarchy 4 / Quattro** — `clients/omarchy/` is a native Quickshell bar
   widget. It reads local `tailscale status --json`, probes online peers at
