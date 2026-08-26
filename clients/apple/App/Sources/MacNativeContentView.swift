@@ -31,7 +31,7 @@ struct MacNativeContentView: View {
                 HStack { Text(title).font(.system(size: 14, weight: .bold, design: .monospaced)).tracking(1.4).foregroundStyle(GraveTheme.ink); Spacer(); if selection == .terminal { GraveTargetPicker(graves: graves) }; if selection == .thisMac { Text(model.snapshot?.model ?? "SCANNING").font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.muted) }; Button("↻ REFRESH") { model.refresh(); graves.refresh() }.buttonStyle(GraveButton()) }.padding(.horizontal, 22).frame(height: 54).background(GraveTheme.surface).overlay(alignment: .bottom) { Rectangle().fill(GraveTheme.ring).frame(height: 1) }
                 Group {
                 switch selection {
-                case .graveyard: GraveyardView(graves: graves)
+                case .graveyard: GraveyardView(graves: graves, selection: $selection)
                 case .thisMac: SystemView(snapshot: model.snapshot)
                 case .work: WorkView(model: model)
                 case .network: NetworkView(model: model)
@@ -139,6 +139,7 @@ private struct InterfaceCard: View {
 
 private struct GraveyardView: View {
     @ObservedObject var graves: GraveMenuModel
+    @Binding var selection: MacNativeContentView.Section
     var body: some View {
         ScrollView { LazyVGrid(columns: [GridItem(.adaptive(minimum: 330), spacing: 12)], spacing: 14) {
             if graves.graves.isEmpty { GravePanel("status") { TailscaleOnboardingView(model: graves) } }
@@ -147,7 +148,7 @@ private struct GraveyardView: View {
                     HStack { StatusSquare(good: grave.reachable); Image(systemName: icon(for: GravePresentation.condition(summary: grave.summary, reachable: grave.reachable))); Text(grave.candidate.name.uppercased()).fontWeight(.bold); Spacer(); Text(grave.reachable ? "ONLINE" : "UNREACHABLE").foregroundStyle(grave.reachable ? GraveTheme.good : GraveTheme.muted) }.font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.ink)
                     if let summary = grave.summary { Text("\(summary.node.platform.uppercased()) // CPU \(GravePresentation.percent(summary.resources.cpu_pct))").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.ink2) }
                     if let s = grave.summary { VStack(alignment: .leading, spacing: 5) { HStack { Text("MEM \(GravePresentation.percent(s.resources.memory_pct))"); Text("DISK \(GravePresentation.percent(s.resources.disk_pct))"); Spacer(); Text("UP \(GravePresentation.uptime(s.node.uptime_s))") }.foregroundStyle(GraveTheme.muted); HStack { Text("SESSIONS \(s.activity.sessions_live)"); Text("PROBLEMS \(s.problems)").foregroundStyle(s.problems > 0 ? GraveTheme.crit : GraveTheme.good) } }.font(.system(size: 9, design: .monospaced)) }
-                    HStack { CapabilityButton(title: "T3", host: grave.candidate.dns, path: grave.summary?.capabilities.t3); CapabilityButton(title: "DASHBOARD", host: grave.candidate.dns, path: grave.summary?.capabilities.dashboard); if grave.summary?.capabilities.terminal != nil { Button("TERMINAL") { graves.select(grave) }.buttonStyle(GraveButton()) } }
+                    HStack { CapabilityButton(title: "T3", host: grave.candidate.dns, path: grave.summary?.capabilities.t3); CapabilityButton(title: "DASHBOARD", host: grave.candidate.dns, path: grave.summary?.capabilities.dashboard); if grave.summary?.capabilities.terminal != nil { Button("TERMINAL") { graves.select(grave); selection = .terminal }.buttonStyle(GraveButton()) } }
                 }}.contentShape(Rectangle()).overlay(Rectangle().stroke(graves.selectedID == grave.id ? GraveTheme.amber : .clear, lineWidth: 2)).onTapGesture { graves.selectedID = grave.id }
             }
         }.frame(maxWidth: 980).padding(24) }.background(GraveTheme.page)
@@ -180,7 +181,7 @@ struct TailscaleOnboardingView: View {
         switch model.state {
         case .missingTailscale: return "INSTALL THE OFFICIAL TAILSCALE APP TO DISCOVER GRAVES."
         case .loggedOut: return "OPEN TAILSCALE, CONNECT OR SIGN IN, THEN REFRESH."
-        case .noAppliances: return model.tailscaleUnavailable ? "TAILSCALE IS INSTALLED BUT STATUS IS UNAVAILABLE. CHECK THE APP, THEN REFRESH." : "NO REACHABLE GRAVEDECAY GRAVES FOUND. CHECK TAILSCALE, THEN REFRESH."
+        case .noAppliances: return model.tailscaleUnavailable ? "TAILSCALE IS INSTALLED BUT STATUS IS UNAVAILABLE. CHECK THE APP, THEN REFRESH." : "NO REACHABLE GRAVES FOUND. CHECK TAILSCALE, THEN REFRESH."
         case .scanning: return "DISCOVERING TAILNET GRAVES…"
         default: return "REFRESH TO DISCOVER TAILNET GRAVES."
         }
