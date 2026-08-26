@@ -77,13 +77,19 @@ public final class TtydWebSocket: NSObject, TtydConnection {
     }
 }
 
-/// GET /term/token — like app.js, any failure degrades to an empty token
-/// (ttyd without -c accepts it).
+/// GET /term/token. An empty token is valid for ttyd without `-c`, but a
+/// failed or malformed HTTP request is not silently treated as one.
 public enum TerminalToken {
-    public static func fetch(from url: URL, session: URLSession = .shared) async -> String {
-        struct Reply: Decodable { let token: String? }
-        guard let (data, _) = try? await session.data(from: url) else { return "" }
-        return (try? JSONDecoder().decode(Reply.self, from: data))?.token ?? ""
+    public static func fetch(from url: URL, session: URLSession = .shared) async -> TerminalTokenResult {
+        do {
+            let (data, response) = try await session.data(from: url)
+            guard let http = response as? HTTPURLResponse else { return .invalidResponse }
+            return TerminalTokenResponse.classify(data: data, statusCode: http.statusCode)
+        } catch {
+            let error = error as NSError
+            let domain = error.domain.prefix(64).filter { $0.isLetter || $0.isNumber || $0 == "." || $0 == "_" || $0 == "-" }
+            return .transport("\(domain)/\(error.code)")
+        }
     }
 }
 #endif

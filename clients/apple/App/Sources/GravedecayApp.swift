@@ -1,30 +1,122 @@
 import SwiftUI
 import GravedecayKit
+#if os(macOS)
+import AppKit
+#endif
 
 @main
 struct GravedecayApp: App {
     @StateObject private var model = AppModel()
+    #if os(macOS)
+    @StateObject private var graveMenu = GraveMenuModel()
+    @StateObject private var macDashboard = MacDashboardModel()
+    @StateObject private var macHost = MacNativeHost()
+    @State private var macSelection: MacNativeContentView.Section = .graveyard
+    @AppStorage("macWelcomeCompleted") private var macWelcomeCompleted = false
+    #endif
+
+    #if os(macOS)
+    init() {
+        if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"), let image = NSImage(contentsOf: url) {
+            NSApplication.shared.applicationIconImage = image
+        }
+    }
+    #endif
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "main") {
+            #if os(macOS)
+            Group {
+                if macWelcomeCompleted {
+                    MacNativeContentView(graves: graveMenu, model: macDashboard, host: macHost, selection: $macSelection)
+                } else {
+                    MacWelcomeView { choice in
+                        macWelcomeCompleted = true
+                        switch choice {
+                        case .connect:
+                            macSelection = .graveyard
+                            graveMenu.refresh()
+                        case .share:
+                            macHost.enable()
+                            macSelection = .settings
+                        }
+                    }
+                }
+            }
+                .onAppear { macDashboard.setNativeHost(macHost); macHost.restoreIfRequested() }
+            #else
             ContentView()
                 .environmentObject(model)
+            #endif
         }
         #if os(macOS)
+        .defaultSize(width: 1040, height: 680)
+        .windowStyle(.hiddenTitleBar)
+        #endif
+        #if os(macOS)
+        MenuBarExtra {
+            GraveMenuView(model: graveMenu)
+                .onAppear { graveMenu.refresh() }
+        } label: {
+            Image("MenuBarSkull")
+                .renderingMode(.template)
+                .accessibilityLabel("Gravedecay, \(menuStatus)")
+        }
+        .menuBarExtraStyle(.window)
         Settings {
-            SettingsView()
-                .environmentObject(model)
-                .frame(width: 420)
-                .padding()
+            MacSettingsView(graves: graveMenu, model: macDashboard, host: macHost)
+                .frame(width: 520, height: 620)
+                .graveRoot()
         }
         #endif
     }
+
+    #if os(macOS)
+    private var menuCondition: GravePresentation.Condition { GravePresentation.condition(summary: graveMenu.selected?.summary, reachable: graveMenu.selected?.reachable ?? false) }
+    private var menuStatus: String { switch menuCondition { case .unreachable: return "unreachable"; case .warning: return "warning"; case .active: return "active"; case .frozen: return "frozen"; case .healthy: return "healthy" } }
+    #endif
 }
+
+#if os(macOS)
+private struct GraveMenuView: View {
+    @ObservedObject var model: GraveMenuModel
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack { GraveMark(color: GraveTheme.ink).accessibilityHidden(true); Text("GRAVEDECAY").tracking(1.2).foregroundStyle(GraveTheme.amber); Spacer(); Button("↻ REFRESH") { model.refresh() }.buttonStyle(GraveButton()).accessibilityLabel("Refresh graves") }.font(.system(size: 11, weight: .bold, design: .monospaced))
+            Picker("TARGET", selection: $model.selectedID) { ForEach(model.graves) { Text($0.candidate.name.uppercased()).tag(Optional($0.id)) } }.pickerStyle(.menu).tint(GraveTheme.amber).font(.system(size: 10, design: .monospaced))
+            if model.graves.isEmpty {
+                TailscaleOnboardingView(model: model)
+            } else if let grave = model.selected, let summary = grave.summary {
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack { Rectangle().fill(color(for: condition)).frame(width: 8, height: 8); Text(title(for: condition).uppercased()) }.foregroundStyle(color(for: condition))
+                    Text("\(summary.node.host) // \(summary.node.mode) // \(summary.node.platform)").foregroundStyle(GraveTheme.muted)
+                    HStack(spacing: 6) { menuTile("CPU", GravePresentation.percent(summary.resources.cpu_pct), GraveTheme.good); menuTile("MEM", GravePresentation.percent(summary.resources.memory_pct), GraveTheme.ink2); menuTile("DISK", GravePresentation.percent(summary.resources.disk_pct), GraveTheme.amber) }.accessibilityLabel("CPU \(GravePresentation.percent(summary.resources.cpu_pct)), memory \(GravePresentation.percent(summary.resources.memory_pct)), disk \(GravePresentation.percent(summary.resources.disk_pct))")
+                    Text("TEMP CPU \(GravePresentation.temperature(summary.resources.cpu_temp_c)) // GPU \(GravePresentation.temperature(summary.resources.gpu_temp_c))").foregroundStyle(GraveTheme.muted)
+                    Text("\(summary.activity.sessions_live) ACTIVE // \(summary.activity.sessions_frozen) FROZEN // \(summary.problems) PROBLEMS").foregroundStyle(summary.problems > 0 ? GraveTheme.crit : GraveTheme.ink2)
+                    Text("UP \(GravePresentation.uptime(summary.node.uptime_s)) // SEEN \(GravePresentation.age(summary.observed_at))").foregroundStyle(GraveTheme.muted)
+                    HStack { link("T3", summary.capabilities.t3); if summary.capabilities.terminal != nil { Button("TERMINAL") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true); NotificationCenter.default.post(name: .openNativeTerminal, object: nil) }.buttonStyle(GraveButton()) } }
+                }.font(.system(size: 9, design: .monospaced))
+            } else { Text("SELECT A REACHABLE GRAVE.").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.muted) }
+            Rectangle().fill(GraveTheme.ring).frame(height: 1)
+            HStack { Button("OPEN APP") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }; Button("QUIT") { NSApp.terminate(nil) } }.buttonStyle(GraveButton())
+        }.padding().frame(width: 390).graveRoot()
+    }
+    private var condition: GravePresentation.Condition { GravePresentation.condition(summary: model.selected?.summary, reachable: model.selected?.reachable ?? false) }
+    private func title(for condition: GravePresentation.Condition) -> String { switch condition { case .unreachable: return "Unreachable (last summary)"; case .warning: return "Reachable · Warning"; case .active: return "Reachable · Active"; case .frozen: return "Reachable · Frozen"; case .healthy: return "Reachable · Healthy" } }
+    private func color(for condition: GravePresentation.Condition) -> Color { switch condition { case .warning: return GraveTheme.amber; case .active, .healthy: return GraveTheme.good; case .frozen: return GraveTheme.accentSoft; case .unreachable: return GraveTheme.muted } }
+    @ViewBuilder private func link(_ title: String, _ path: String?) -> some View { if let grave = model.selected, GravePresentation.link(host: grave.candidate.dns, path: path) != nil { Button(title.uppercased()) { model.open(path) }.buttonStyle(GraveButton()) } }
+    private func menuTile(_ label: String, _ value: String, _ color: Color) -> some View { VStack(alignment: .leading, spacing: 2) { Text(label).foregroundStyle(GraveTheme.muted); Text(value).foregroundStyle(color) }.frame(maxWidth: .infinity, alignment: .leading).padding(6).background(GraveTheme.inset).overlay(Rectangle().stroke(GraveTheme.hairline)) }
+}
+
+extension Notification.Name { static let openNativeTerminal = Notification.Name("openNativeTerminal") }
+#endif
 
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
+        #if os(iOS)
         if let box = model.box {
             TabView {
                 WebPane(url: box.t3URL, proxy: model.proxy)
@@ -49,6 +141,9 @@ struct ContentView: View {
         } else {
             SetupView()
         }
+        #else
+        EmptyView()
+        #endif
     }
 }
 

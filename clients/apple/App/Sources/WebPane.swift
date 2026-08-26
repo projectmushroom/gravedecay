@@ -1,3 +1,6 @@
+// T3 and the legacy dashboard remain iOS-only web panes.  macOS opens those
+// explicitly in the user's browser and never embeds a web dashboard.
+#if os(iOS)
 import SwiftUI
 import WebKit
 import Network
@@ -32,14 +35,8 @@ struct WebPane {
     }
 }
 
-#if os(iOS)
 extension WebPane: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView { makeWebView() }
     func updateUIView(_ webView: WKWebView, context: Context) {}
-}
-#else
-extension WebPane: NSViewRepresentable {
-    func makeNSView(context: Context) -> WKWebView { makeWebView() }
-    func updateNSView(_ webView: WKWebView, context: Context) {}
 }
 #endif

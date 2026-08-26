@@ -35,4 +35,63 @@ final class BoxConfigTests: XCTestCase {
         XCTAssertEqual(box.terminalWebSocketURL(arg: "agents").absoluteString,
                        "wss://box.ts.net/term/ws?arg=agents")
     }
+
+    func testGitPorcelainCount() {
+        XCTAssertEqual(WorkStatus.changedFileCount(""), 0)
+        XCTAssertEqual(WorkStatus.changedFileCount(" M one\n?? two\n"), 2)
+    }
+
+    func testGitHubRemoteAllowlist() {
+        XCTAssertEqual(GitHubRemote.repository("git@github.com:projectmushroom/gravedecay.git"), "projectmushroom/gravedecay")
+        XCTAssertEqual(GitHubRemote.url("https://github.com/projectmushroom/gravedecay")?.host, "github.com")
+        XCTAssertNil(GitHubRemote.repository("https://github.com.evil.example/a/b"))
+    }
+
+    func testNativeParsersAreBoundedAndSafe() throws {
+        let cpu = try XCTUnwrap(NativeParsers.cpuActivity("Processes: 500\nCPU usage: 12.3% user, 4.50% sys, 83.2% idle"))
+        XCTAssertEqual(cpu.user, 12.3); XCTAssertEqual(cpu.system, 4.5); XCTAssertEqual(cpu.total, 16.8, accuracy: 0.001)
+        XCTAssertEqual(NativeParsers.githubRows(Data(#"[{"number":3,"title":"safe","state":"OPEN","url":"https://github.com/a/b/pull/3"},{"number":4,"title":"bad","state":"OPEN","url":"https://evil.example"}]"#.utf8)).count, 1)
+        let netstat = "Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll\nlo0 16384 <Link#1> 00:00 1 0 2 3 0 4 0\ngif0* 1280 <Link#2> 00:00 0 0 0 0 0 0 0\nen5 1500 <Link#8> aa:bb 11 0 100 12 0 200 0\n"
+        let interfaces = NativeParsers.interfaceBytes(netstat)
+        XCTAssertEqual(interfaces.count, 1); XCTAssertEqual(interfaces.first?.0, "en5"); XCTAssertEqual(interfaces.first?.1, 100); XCTAssertEqual(interfaces.first?.2, 200)
+    }
+
+    func testNativeMemoryThermalAndSwapParsers() throws {
+        let memory = NativeParsers.memoryActivity(
+            pressure: "The system has 17179869184 bytes.\nSystem-wide memory free percentage: 61%",
+            vmStat: "Mach Virtual Memory Statistics: (page size of 4096 bytes)\nPages occupied by compressor: 12345."
+        )
+        XCTAssertEqual(memory.usedPercent, 39)
+        XCTAssertEqual(memory.compressedBytes, 50_565_120)
+
+        let thermal = NativeParsers.thermalActivity("""
+        Note: No thermal warning level has been recorded
+        Note: No performance warning level has been recorded
+        2026-08-24 CPU Power notify
+            CPU_Scheduler_Limit = 100
+            CPU_Available_CPUs = 8
+            CPU_Speed_Limit = 80
+        """)
+        XCTAssertTrue(thermal.throttled)
+        XCTAssertEqual(thermal.speedLimit, 80)
+        XCTAssertEqual(thermal.availableCPUs, 8)
+        XCTAssertFalse(NativeParsers.thermalActivity("CPU_Speed_Limit = 100\nCPU_Available_CPUs = 16").throttled)
+
+        let swap = try XCTUnwrap(NativeParsers.swapActivity("total = 2048.00M  used = 706.00M  free = 1342.00M  (encrypted)"))
+        XCTAssertEqual(swap.totalBytes, 2_147_483_648)
+        XCTAssertEqual(swap.usedBytes, 740_294_656)
+        XCTAssertEqual(swap.usedPercent, 34.47265625, accuracy: 0.001)
+        XCTAssertNil(NativeParsers.swapActivity("swap unavailable"))
+    }
+
+    func testGitHubRunParserUsesConclusionAndRejectsUnsafeURLs() {
+        let success = #"[{"databaseId":7,"displayTitle":"Build","workflowName":"CI","status":"completed","conclusion":"success","url":"https://github.com/a/b/actions/runs/7"}]"#
+        XCTAssertEqual(NativeParsers.githubRun(Data(success.utf8))?.state, "success")
+        let running = #"[{"databaseId":8,"workflowName":"CI","status":"in_progress","conclusion":"","url":"https://github.com/a/b/actions/runs/8"}]"#
+        XCTAssertEqual(NativeParsers.githubRun(Data(running.utf8))?.state, "in_progress")
+        let bad = #"[{"databaseId":9,"workflowName":"CI","status":"completed","url":"https://github.com.evil/a"}]"#
+        XCTAssertNil(NativeParsers.githubRun(Data(bad.utf8)))
+        let long = "[{\"databaseId\":10,\"displayTitle\":\"" + String(repeating: "x", count: 241) + "\",\"status\":\"completed\",\"url\":\"https://github.com/a/b/actions/runs/10\"}]"
+        XCTAssertNil(NativeParsers.githubRun(Data(long.utf8)))
+    }
 }
