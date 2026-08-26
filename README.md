@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/projectmushroom/gravedecay/actions/workflows/ci.yml/badge.svg)](https://github.com/projectmushroom/gravedecay/actions/workflows/ci.yml)
 
-<img src="clients/apple/App/Assets/gravedecay-skull.svg" width="128" align="right" alt="gravedecay skull logo">
+<img src="assets/gravedecay-skull.svg" width="128" align="right" alt="gravedecay skull logo">
 
 **Turn any Linux box into an always-on AI dev appliance. The box never sleeps — your agents work the graveyard shift.** 🪦
 

@@ -17,6 +17,11 @@ final class TerminalStatus: ObservableObject {
     @Published private(set) var failureCount = 0
     @Published private(set) var reconnectCount = 0
     @Published private(set) var retryID = 0
+    @Published private(set) var inputEvents = 0
+    @Published private(set) var inputBytes = 0
+    @Published private(set) var outputFrames = 0
+    @Published private(set) var outputBytes = 0
+    @Published private(set) var lastCause = "NONE"
 
     #if os(macOS)
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.projectmushroom.gravedecay", category: "terminal")
@@ -28,13 +33,17 @@ final class TerminalStatus: ObservableObject {
         logger.info("terminal state=\(value.rawValue, privacy: .public) failures=\(self.failureCount) reconnects=\(self.reconnectCount)")
         #endif
     }
-    func failed() {
+    func failed(_ cause: String) {
         failureCount += 1
+        lastCause = cause
         transition(.error)
     }
     func reconnecting() { reconnectCount += 1; transition(.reconnecting) }
+    func remoteClosed() { lastCause = "REMOTE CLOSED" }
     func retry() { retryID &+= 1; transition(.reconnecting) }
-    var diagnostics: String { "TERMINAL STATE: \(state.rawValue)\nFAILURES: \(failureCount)\nRECONNECTS: \(reconnectCount)" }
+    func input(_ count: Int) { inputEvents = inputEvents == Int.max ? Int.max : inputEvents + 1; inputBytes = inputBytes > Int.max - count ? Int.max : inputBytes + count }
+    func output(_ count: Int) { outputFrames = outputFrames == Int.max ? Int.max : outputFrames + 1; outputBytes = outputBytes > Int.max - count ? Int.max : outputBytes + count }
+    var diagnostics: String { "TERMINAL STATE: \(state.rawValue)\nLAST CAUSE: \(lastCause)\nFAILURES: \(failureCount)\nRECONNECTS: \(reconnectCount)\nINPUT EVENTS: \(inputEvents)\nINPUT BYTES: \(inputBytes)\nOUTPUT FRAMES: \(outputFrames)\nOUTPUT BYTES: \(outputBytes)" }
 }
 
 /// Drives one SwiftTerm view against the box's web terminal: fetches the
@@ -54,6 +63,8 @@ final class TerminalController: NSObject {
     private var session: TtydSession?
     private var retry = 0
     private var opened = false
+    private var generation = 0
+    private var reconnectTask: Task<Void, Never>?
     private(set) weak var terminalView: TerminalView?
 
     init(box: BoxConfig, arg: String?, urlSession: URLSession, status: TerminalStatus = TerminalStatus()) {
@@ -74,20 +85,22 @@ final class TerminalController: NSObject {
         socket?.close()
         socket = nil
         session = nil
+        generation &+= 1
+        reconnectTask?.cancel(); reconnectTask = nil
         status.transition(.unavailable)
     }
 
-    func retryNow() {
-        socket?.close(); socket = nil; session = nil; retry = 0; opened = false
-        connect()
-    }
-
     private func connect() {
+        let expectedGeneration = generation
         Task { @MainActor [weak self] in
-            guard let self, self.terminalView != nil else { return }
+            guard let self, self.terminalView != nil, self.generation == expectedGeneration else { return }
             self.status.transition(.fetchingToken)
-            guard let token = await TerminalToken.fetch(from: self.box.terminalTokenURL, session: self.urlSession) else { self.status.failed(); return }
-            self.open(token: token)
+            switch await TerminalToken.fetch(from: self.box.terminalTokenURL, session: self.urlSession) {
+            case .token(let token): guard self.generation == expectedGeneration else { return }; self.open(token: token)
+            case .http(let code): self.failed("TOKEN HTTP \(code)")
+            case .invalidResponse: self.failed("TOKEN RESPONSE INVALID")
+            case .transport(let category): self.failed("TOKEN TRANSPORT \(category)")
+            }
         }
     }
 
@@ -123,8 +136,19 @@ final class TerminalController: NSObject {
         socket.connect()
     }
 
+    private func failed(_ cause: String) {
+        status.failed(cause)
+        scheduleReconnect()
+    }
+
     private func closed(_ error: Error?) {
-        if error != nil { status.failed(); socket = nil; session = nil; return }
+        if let error {
+            let error = error as NSError
+            let domain = error.domain.prefix(64).filter { $0.isLetter || $0.isNumber || $0 == "." || $0 == "_" || $0 == "-" }
+            failed("WEBSOCKET TRANSPORT \(domain)/\(error.code)")
+            return
+        }
+        status.remoteClosed()
         scheduleReconnect()
     }
 
@@ -138,9 +162,11 @@ final class TerminalController: NSObject {
         opened = false
         retry += 1
         status.reconnecting()
-        Task { @MainActor [weak self] in
+        let expectedGeneration = generation
+        reconnectTask?.cancel()
+        reconnectTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-            guard let self, self.socket == nil else { return }
+            guard !Task.isCancelled, let self, self.generation == expectedGeneration, self.socket == nil, self.terminalView != nil else { return }
             self.connect()
         }
     }
@@ -148,6 +174,7 @@ final class TerminalController: NSObject {
 
 extension TerminalController: TtydSessionDelegate {
     func ttydSession(_ session: TtydSession, output: Data, done: @escaping () -> Void) {
+        status.output(output.count)
         terminalView?.feed(byteArray: ArraySlice([UInt8](output)))
         done() // SwiftTerm parses synchronously
     }
@@ -158,6 +185,7 @@ extension TerminalController: TtydSessionDelegate {
 
 extension TerminalController: TerminalViewDelegate {
     func send(source: TerminalView, data: ArraySlice<UInt8>) {
+        status.input(data.count)
         session?.send(bytes: Array(data))
     }
 
@@ -225,6 +253,9 @@ struct TerminalPane {
         view.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
         #endif
         coordinator.controller.attach(view)
+        #if os(macOS)
+        DispatchQueue.main.async { [weak view] in view?.window?.makeFirstResponder(view) }
+        #endif
         return view
     }
 }

@@ -24,7 +24,7 @@ final class GraveMenuModel: ObservableObject {
     var isThisMac: Bool { selectedID == Self.thisMacID }
 
     init() {
-        selectedID = UserDefaults.standard.string(forKey: "graveSelectedTarget")
+        selectedID = UserDefaults.standard.string(forKey: "graveSelectedTarget") ?? Self.thisMacID
         start()
     }
 
@@ -39,11 +39,11 @@ final class GraveMenuModel: ObservableObject {
         guard state != .scanning else { return }; state = .scanning
         guard let statusData = await Task.detached(priority: .utility, operation: Self.tailscaleStatus).value,
               let status = try? JSONSerialization.jsonObject(with: statusData) as? [String: Any] else {
-            graves = []; state = .missingTailscale; return
+            graves = []; selectedID = Self.thisMacID; state = .missingTailscale; return
         }
-        guard !(status["BackendState"] as? String == "Stopped" || status["BackendState"] as? String == "NeedsLogin") else { graves = []; state = .loggedOut; return }
+        guard !(status["BackendState"] as? String == "Stopped" || status["BackendState"] as? String == "NeedsLogin") else { graves = []; selectedID = Self.thisMacID; state = .loggedOut; return }
         let candidates = GraveDiscovery.candidates(statusData: statusData)
-        guard !candidates.isEmpty else { graves = []; state = .noAppliances; return }
+        guard !candidates.isEmpty else { graves = []; selectedID = Self.thisMacID; state = .noAppliances; return }
         var found: [Grave] = []
         for candidate in candidates {
             if let summary = await fetch(candidate) {
@@ -53,8 +53,8 @@ final class GraveMenuModel: ObservableObject {
             }
         }
         graves = found
-        if selectedID == nil { selectedID = found.first?.id }
-        else if selectedID != Self.thisMacID && !found.contains(where: { $0.id == selectedID }) { selectedID = found.first?.id }
+        if selectedID != Self.thisMacID && !found.contains(where: { $0.id == selectedID }) { selectedID = found.first?.id ?? Self.thisMacID }
+        if found.isEmpty { selectedID = Self.thisMacID }
         state = found.isEmpty ? .noAppliances : .ready
     }
 

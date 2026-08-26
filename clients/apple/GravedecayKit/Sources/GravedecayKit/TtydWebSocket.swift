@@ -80,12 +80,28 @@ public final class TtydWebSocket: NSObject, TtydConnection {
 /// GET /term/token. An empty token is valid for ttyd without `-c`, but a
 /// failed or malformed HTTP request is not silently treated as one.
 public enum TerminalToken {
-    public static func fetch(from url: URL, session: URLSession = .shared) async -> String? {
-        struct Reply: Decodable { let token: String? }
-        guard let (data, response) = try? await session.data(from: url),
-              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-              data.count <= 8_192 else { return nil }
-        return (try? JSONDecoder().decode(Reply.self, from: data))?.token ?? ""
+    public enum Result: Equatable { case token(String), http(Int), invalidResponse, transport(String) }
+    public static func fetch(from url: URL, session: URLSession = .shared) async -> Result {
+        struct Reply: Decodable {
+            let token: String?
+            enum Keys: String, CodingKey { case token }
+            init(from decoder: Decoder) throws {
+                let values = try decoder.container(keyedBy: Keys.self)
+                guard values.contains(.token) else { throw DecodingError.keyNotFound(Keys.token, .init(codingPath: [], debugDescription: "missing token")) }
+                token = try values.decodeIfPresent(String.self, forKey: .token)
+            }
+        }
+        do {
+            let (data, response) = try await session.data(from: url)
+            guard let http = response as? HTTPURLResponse else { return .invalidResponse }
+            guard (200..<300).contains(http.statusCode) else { return .http(http.statusCode) }
+            guard data.count <= 8_192, let reply = try? JSONDecoder().decode(Reply.self, from: data) else { return .invalidResponse }
+            return .token(reply.token ?? "")
+        } catch {
+            let error = error as NSError
+            let domain = error.domain.prefix(64).filter { $0.isLetter || $0.isNumber || $0 == "." || $0 == "_" || $0 == "-" }
+            return .transport("\(domain)/\(error.code)")
+        }
     }
 }
 #endif

@@ -40,6 +40,23 @@ final class GraveSummaryTests: XCTestCase {
         XCTAssertEqual(MacHostingPlan.preflight(legacyCompanionActive: false), .attemptListener)
     }
 
+    func testNativePublisherHTTPBoundaryAndSummary() throws {
+        let summary = MacPublisherSummary.data(host: "Mac", uptime: nil, cpu: nil, memory: nil, disk: nil)
+        let decoded = try XCTUnwrap(GraveSummary.decode(summary))
+        XCTAssertEqual(decoded.product, "gravedecay")
+        XCTAssertEqual(decoded.api_version, 1)
+        XCTAssertEqual(decoded.capabilities, GraveCapabilities(links: .init(dashboard: nil, t3: nil, terminal: nil, network: nil)))
+
+        func reply(_ request: String) -> String { String(decoding: MacPublisherHTTP.response(request: Data(request.utf8), summary: summary), as: UTF8.self) }
+        XCTAssertTrue(reply("GET /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n").hasPrefix("HTTP/1.1 200"))
+        let head = reply("HEAD /api/v1/summary HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        XCTAssertTrue(head.hasPrefix("HTTP/1.1 200")); XCTAssertFalse(head.contains("\"product\""))
+        XCTAssertTrue(reply("GET /unknown HTTP/1.1\r\n\r\n").hasPrefix("HTTP/1.1 404"))
+        XCTAssertTrue(reply("POST /healthz HTTP/1.1\r\n\r\n").hasPrefix("HTTP/1.1 405"))
+        XCTAssertTrue(reply("GET /healthz HTTP/1.1\r\nContent-Length: 1\r\n\r\nx").hasPrefix("HTTP/1.1 400"))
+        XCTAssertTrue(String(decoding: MacPublisherHTTP.response(request: Data(repeating: 65, count: MacPublisherHTTP.maxRequestBytes + 1), summary: summary), as: UTF8.self).hasPrefix("HTTP/1.1 400"))
+    }
+
     func testConditionsAndClampedFormatting() {
         let summary = GraveSummary.decode(#"{"product":"gravedecay","api_version":1,"node":{"host":"grave","platform":"macos","mode":"developer","uptime_s":-1},"resources":{},"activity":{"sessions_live":1,"sessions_frozen":1},"health":{"services_failed":-2,"containers_problem":3},"links":{}}"#.data(using: .utf8)!)!
         XCTAssertEqual(summary.problems, 3)
