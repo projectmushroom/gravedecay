@@ -1,6 +1,7 @@
 # macOS companion (source install)
 
-The macOS path is a small, user-scoped companion: the gravedecay dashboard on
+A Mac never takes the full raise; the companion is how it joins the
+graveyard. It is a small, user-scoped install: the gravedecay dashboard on
 `127.0.0.1:4712` and the network monitor on `127.0.0.1:4714`. It is not the
 Linux appliance. It never installs or manages T3, Docker, ttyd, systemd,
 firewall rules, SSH, or Tailscale. Tailscale is optional for localhost-only

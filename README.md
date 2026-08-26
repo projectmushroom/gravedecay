@@ -106,8 +106,26 @@ Build the unsigned Universal 2 DMG — or grab the Apple CI artifact — per
 Gatekeeper, signing, and notarization. **Share This Mac** never touches
 Tailscale login or Serve: it listens on `127.0.0.1:4712` only while the app
 runs and shows you the exact Serve command to run yourself. Coexistence with
-the legacy Python companion (which fails the native host closed if it owns
+the source companion below (which fails the native host closed if it owns
 the port) is covered in [the macOS guide](docs/MACOS.md).
+
+**macOS companion** is the closest a Mac comes to a raise: a user-scoped
+dashboard and network monitor from a source checkout — no sudo, and no T3,
+Docker, terminal, firewall, or system services. With Tailscale signed in it
+publishes `/grave` and `/net`, and from then on the Mac sits in the graveyard
+like any other grave — discovered by the native app and the Omarchy widget,
+its dashboard reachable from any tailnet browser.
+
+```sh
+git clone https://github.com/projectmushroom/gravedecay
+cd gravedecay
+./macos/install.sh                 # dashboard + network monitor; /grave and /net
+./macos/install.sh --no-serve      # localhost only; no Tailscale Serve changes
+```
+
+It needs only macOS and `python3`. See [the macOS guide](docs/MACOS.md) for
+component-only modes, `grave upgrade` channels, status, uninstall, and its
+intentional feature limits.
 
 ### The agent way (recommended)
 
