@@ -8,12 +8,30 @@ struct GravedecayApp: App {
     @StateObject private var graveMenu = GraveMenuModel()
     @StateObject private var macDashboard = MacDashboardModel()
     @StateObject private var macHost = MacNativeHost()
+    @State private var macSelection: MacNativeContentView.Section = .graveyard
+    @AppStorage("macWelcomeCompleted") private var macWelcomeCompleted = false
     #endif
 
     var body: some Scene {
         WindowGroup(id: "main") {
             #if os(macOS)
-            MacNativeContentView(graves: graveMenu, model: macDashboard, host: macHost)
+            Group {
+                if macWelcomeCompleted {
+                    MacNativeContentView(graves: graveMenu, model: macDashboard, host: macHost, selection: $macSelection)
+                } else {
+                    MacWelcomeView { choice in
+                        macWelcomeCompleted = true
+                        switch choice {
+                        case .connect:
+                            macSelection = .graveyard
+                            graveMenu.refresh()
+                        case .share:
+                            macHost.enable()
+                            macSelection = .settings
+                        }
+                    }
+                }
+            }
                 .onAppear { macDashboard.setNativeHost(macHost); macHost.restoreIfRequested() }
             #else
             ContentView()
@@ -34,7 +52,7 @@ struct GravedecayApp: App {
         }
         .menuBarExtraStyle(.window)
         Settings {
-            MacSettingsView(model: macDashboard, host: macHost)
+            MacSettingsView(graves: graveMenu, model: macDashboard, host: macHost)
                 .frame(width: 520, height: 620)
                 .graveRoot()
         }

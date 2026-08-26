@@ -12,7 +12,7 @@ struct MacNativeContentView: View {
     @ObservedObject var graves: GraveMenuModel
     @ObservedObject var model: MacDashboardModel
     @ObservedObject var host: MacNativeHost
-    @State private var selection: Section = .graveyard
+    @Binding var selection: Section
 
     enum Section: Hashable { case graveyard, thisMac, work, network, terminal, settings }
 
@@ -36,7 +36,7 @@ struct MacNativeContentView: View {
                 case .work: WorkView(model: model)
                 case .network: NetworkView(model: model)
                 case .terminal: TerminalDestination(graves: graves)
-                case .settings: MacSettingsView(model: model, host: host)
+                case .settings: MacSettingsView(graves: graves, model: model, host: host)
                 }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }.background(GraveTheme.page)
@@ -46,6 +46,56 @@ struct MacNativeContentView: View {
         .frame(minWidth: 900, minHeight: 600).graveRoot().background(GraveTheme.page.ignoresSafeArea())
     }
     private var title: String { switch selection { case .graveyard: "GRAVEYARD // TAILNET"; case .thisMac: "THIS MAC // SYSTEM"; case .work: "THIS MAC // WORK"; case .network: "THIS MAC // NETWORK"; case .terminal: "TERMINAL // \(graves.selected?.candidate.name.uppercased() ?? "REMOTE")"; case .settings: "SETTINGS" } }
+}
+
+struct MacWelcomeView: View {
+    enum Choice { case connect, share }
+    let choose: (Choice) -> Void
+
+    var body: some View {
+        ZStack {
+            GraveTheme.page.ignoresSafeArea()
+            VStack(alignment: .leading, spacing: 24) {
+                HStack(spacing: 14) {
+                    GraveMark(color: GraveTheme.ink, size: 46)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("GRAVEDECAY // TAILNET")
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            .tracking(1.4)
+                        Text("NATIVE MACOS CLIENT")
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(GraveTheme.muted)
+                    }
+                }
+                Text("WHAT WILL THIS MAC DO FIRST?")
+                    .font(.system(size: 20, weight: .bold, design: .monospaced))
+                    .foregroundStyle(GraveTheme.ink)
+                HStack(alignment: .top, spacing: 14) {
+                    role("CONNECT TO GRAVES", "DISCOVER AND OPEN REMOTE GRAVES OVER TAILSCALE. THIS MAC WILL NOT HOST A SERVICE.", .connect)
+                    role("SHARE THIS MAC", "START THIS MAC'S OPT-IN LOOPBACK PUBLISHER. FINISH TAILSCALE PUBLICATION IN SETTINGS.", .share)
+                }
+                Text("YOU CAN DO BOTH LATER.")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(GraveTheme.amber)
+            }
+            .padding(34)
+            .frame(maxWidth: 800, alignment: .leading)
+        }
+        .frame(minWidth: 900, minHeight: 600)
+        .graveRoot()
+    }
+
+    private func role(_ title: String, _ detail: String, _ choice: Choice) -> some View {
+        Button { choose(choice) } label: {
+            VStack(alignment: .leading, spacing: 13) {
+                Text(title).font(.system(size: 13, weight: .bold, design: .monospaced)).foregroundStyle(GraveTheme.ink)
+                Text(detail).font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.muted).lineSpacing(3)
+                Text("[ SELECT ]").font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(GraveTheme.amber)
+            }
+            .padding(18).frame(maxWidth: .infinity, minHeight: 142, alignment: .leading)
+            .background(GraveTheme.surface).overlay(Rectangle().stroke(GraveTheme.ring))
+        }.buttonStyle(.plain)
+    }
 }
 
 private struct GraveTargetPicker: View {
@@ -140,10 +190,10 @@ private struct InterfaceCard: View {
 private struct GraveyardView: View {
     @ObservedObject var graves: GraveMenuModel
     @Binding var selection: MacNativeContentView.Section
-    @State private var detailID: String?
+    @State private var showingAll = false
     var body: some View {
-        if let grave = graves.graves.first(where: { $0.id == detailID }) {
-            GraveDetailView(grave: grave, graves: graves, selection: $selection) { detailID = nil }
+        if !showingAll, let grave = graves.selected {
+            GraveDetailView(grave: grave, graves: graves, selection: $selection) { showingAll = true }
         } else {
         ScrollView { LazyVGrid(columns: [GridItem(.adaptive(minimum: 330), spacing: 12)], spacing: 14) {
             if graves.graves.isEmpty { GravePanel("status") { TailscaleOnboardingView(model: graves) } }
@@ -153,7 +203,7 @@ private struct GraveyardView: View {
                     if let summary = grave.summary { Text("\(summary.node.platform.uppercased()) // CPU \(GravePresentation.percent(summary.resources.cpu_pct))").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.ink2) }
                     if let s = grave.summary { VStack(alignment: .leading, spacing: 5) { HStack { Text("MEM \(GravePresentation.percent(s.resources.memory_pct))"); Text("DISK \(GravePresentation.percent(s.resources.disk_pct))"); Spacer(); Text("UP \(GravePresentation.uptime(s.node.uptime_s))") }.foregroundStyle(GraveTheme.muted); HStack { Text("SESSIONS \(s.activity.sessions_live)"); Text("PROBLEMS \(s.problems)").foregroundStyle(s.problems > 0 ? GraveTheme.crit : GraveTheme.good) } }.font(.system(size: 9, design: .monospaced)) }
                     HStack { CapabilityButton(title: "T3", host: grave.candidate.dns, path: grave.summary?.capabilities.t3); if grave.summary?.capabilities.terminal != nil { Button("TERMINAL") { graves.select(grave); selection = .terminal }.buttonStyle(GraveButton()) } }
-                }}.contentShape(Rectangle()).onTapGesture { graves.select(grave); detailID = grave.id }
+                }}.contentShape(Rectangle()).onTapGesture { graves.select(grave); showingAll = false }
             }
         }.frame(maxWidth: 980).padding(24) }.background(GraveTheme.page)
         }
@@ -248,11 +298,21 @@ private struct TerminalDestination: View {
 }
 
 struct MacSettingsView: View {
+    @ObservedObject var graves: GraveMenuModel
     @ObservedObject var model: MacDashboardModel
     @ObservedObject var host: MacNativeHost
+    @AppStorage("macWelcomeCompleted") private var macWelcomeCompleted = false
     @State private var root = ""; @State private var linearKey = ""
     var body: some View {
-        ScrollView { VStack(spacing: 20) { GravePanel("work root") { VStack(alignment: .leading, spacing: 9) { Text("LOCAL DIRECTORY SCANNED FOR GIT REPOSITORIES").foregroundStyle(GraveTheme.muted); TextField("Repository folder", text: $root).textFieldStyle(.plain).padding(8).background(GraveTheme.inset).overlay(Rectangle().stroke(GraveTheme.hairline)); Button("SAVE ROOT") { model.setWorkRoot(root) }.buttonStyle(GraveButton()); if let status = model.workRootStatus { Text(status).foregroundStyle(GraveTheme.crit) } } }; GravePanel("linear // read-only") { VStack(alignment: .leading, spacing: 9) { Text("THE TOKEN STAYS IN THIS MAC'S KEYCHAIN").foregroundStyle(GraveTheme.muted); SecureField("lin_api_…", text: $linearKey).textFieldStyle(.plain).padding(8).background(GraveTheme.inset).overlay(Rectangle().stroke(GraveTheme.hairline)); HStack { Button("SAVE KEY") { model.saveLinearKey(linearKey); linearKey = "" }; Button("REMOVE KEY") { model.removeLinearKey() } }.buttonStyle(GraveButton()); Text(model.keychainStatus).foregroundStyle(GraveTheme.muted) } }; GravePanel("local host") { VStack(alignment: .leading, spacing: 9) { Text(host.detail).foregroundStyle(host.state == .hosted ? GraveTheme.good : GraveTheme.muted); HStack { Button(host.state == .existingCompanion ? "RETRY LOCAL HOST" : "START LOCAL HOST") { host.enable() }.buttonStyle(GraveButton()).disabled(host.state == .hosted || host.state == .starting); Button(host.state == .hosted ? "STOP LOCAL HOST" : "CANCEL HOST REQUEST") { host.disable() }.buttonStyle(GraveButton()).disabled(host.state != .hosted && !host.hostRequested); if host.state == .hosted { Button("COPY TAILSCALE PUBLISH COMMAND") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(host.manualServeCommand, forType: .string) }.buttonStyle(GraveButton()) } }; if host.state == .existingCompanion { Text("NATIVE HOSTING WAS NOT STARTED: LEGACY COMPANION OWNS 4712.").foregroundStyle(GraveTheme.crit) }; Text("DOES NOT CHANGE TAILSCALE. HOSTING STOPS WHEN THIS APP QUITS; ENABLE LAUNCH AT LOGIN TO KEEP THE APP AVAILABLE.").foregroundStyle(GraveTheme.muted) } }; GravePanel("startup") { Toggle("LAUNCH AT LOGIN", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) })).toggleStyle(.switch).tint(GraveTheme.good); if let error = model.launchAtLoginError { Text(error).foregroundStyle(GraveTheme.crit) } }; GravePanel("about") { Text("NATIVE MACOS 15+ // T3 AND LEGACY DASHBOARDS OPEN IN YOUR BROWSER").foregroundStyle(GraveTheme.muted) } }.font(.system(size: 10, design: .monospaced)).frame(maxWidth: 760).padding(24) }.background(GraveTheme.page).onAppear { root = model.workRoot }
+        ScrollView { VStack(spacing: 20) {
+            GravePanel("first action") { HStack { Text("CONNECT AND SHARE CAN BOTH BE USED.").foregroundStyle(GraveTheme.muted); Spacer(); Button("CHOOSE ROLE AGAIN") { macWelcomeCompleted = false }.buttonStyle(GraveButton()) } }
+            GravePanel("tailnet access") { TailscaleOnboardingView(model: graves) }
+            GravePanel("work root") { VStack(alignment: .leading, spacing: 9) { Text("LOCAL DIRECTORY SCANNED FOR GIT REPOSITORIES").foregroundStyle(GraveTheme.muted); TextField("Repository folder", text: $root).textFieldStyle(.plain).padding(8).background(GraveTheme.inset).overlay(Rectangle().stroke(GraveTheme.hairline)); Button("SAVE ROOT") { model.setWorkRoot(root) }.buttonStyle(GraveButton()); if let status = model.workRootStatus { Text(status).foregroundStyle(GraveTheme.crit) } } }
+            GravePanel("linear // read-only") { VStack(alignment: .leading, spacing: 9) { Text("THE TOKEN STAYS IN THIS MAC'S KEYCHAIN").foregroundStyle(GraveTheme.muted); SecureField("lin_api_…", text: $linearKey).textFieldStyle(.plain).padding(8).background(GraveTheme.inset).overlay(Rectangle().stroke(GraveTheme.hairline)); HStack { Button("SAVE KEY") { model.saveLinearKey(linearKey); linearKey = "" }; Button("REMOVE KEY") { model.removeLinearKey() } }.buttonStyle(GraveButton()); Text(model.keychainStatus).foregroundStyle(GraveTheme.muted) } }
+            GravePanel("local host") { VStack(alignment: .leading, spacing: 9) { Text(host.detail).foregroundStyle(host.state == .hosted ? GraveTheme.good : GraveTheme.muted); HStack { Button(host.state == .existingCompanion ? "RETRY LOCAL HOST" : "START LOCAL HOST") { host.enable() }.buttonStyle(GraveButton()).disabled(host.state == .hosted || host.state == .starting); Button(host.state == .hosted ? "STOP LOCAL HOST" : "CANCEL HOST REQUEST") { host.disable() }.buttonStyle(GraveButton()).disabled(host.state != .hosted && !host.hostRequested); if host.state == .hosted { Button("COPY TAILSCALE PUBLISH COMMAND") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(host.manualServeCommand, forType: .string) }.buttonStyle(GraveButton()) } }; if host.state == .existingCompanion { Text("NATIVE HOSTING WAS NOT STARTED: LEGACY COMPANION OWNS 4712.").foregroundStyle(GraveTheme.crit) }; Text("DOES NOT CHANGE TAILSCALE. HOSTING STOPS WHEN THIS APP QUITS; ENABLE LAUNCH AT LOGIN TO KEEP THE APP AVAILABLE.").foregroundStyle(GraveTheme.muted) } }
+            GravePanel("startup") { Toggle("LAUNCH AT LOGIN", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) })).toggleStyle(.switch).tint(GraveTheme.good); if let error = model.launchAtLoginError { Text(error).foregroundStyle(GraveTheme.crit) } }
+            GravePanel("about") { Text("NATIVE MACOS 15+ // T3 AND LEGACY DASHBOARDS OPEN IN YOUR BROWSER").foregroundStyle(GraveTheme.muted) }
+        }.font(.system(size: 10, design: .monospaced)).frame(maxWidth: 760).padding(24) }.background(GraveTheme.page).onAppear { root = model.workRoot }
     }
 }
 
