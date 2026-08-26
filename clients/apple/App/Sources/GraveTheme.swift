@@ -63,7 +63,9 @@ struct GraveButton: ButtonStyle {
 
 struct GraveMeter: View {
     let value: Double?
-    var body: some View { GeometryReader { proxy in ZStack(alignment: .leading) { GraveTheme.hairline; if let value { Rectangle().fill(value > 85 ? GraveTheme.crit : value > 70 ? GraveTheme.amber : GraveTheme.good).frame(width: proxy.size.width * min(max(value, 0), 100) / 100) } } }.frame(height: 8).overlay(Rectangle().stroke(GraveTheme.ring)) }
+    let goodAtHigh: Bool
+    init(value: Double?, goodAtHigh: Bool = false) { self.value = value; self.goodAtHigh = goodAtHigh }
+    var body: some View { GeometryReader { proxy in ZStack(alignment: .leading) { GraveTheme.hairline; if let value { Rectangle().fill(goodAtHigh ? (value > 85 ? GraveTheme.good : value > 70 ? GraveTheme.amber : GraveTheme.crit) : (value > 85 ? GraveTheme.crit : value > 70 ? GraveTheme.amber : GraveTheme.good)).frame(width: proxy.size.width * min(max(value, 0), 100) / 100) } } }.frame(height: 8).overlay(Rectangle().stroke(GraveTheme.ring)) }
 }
 
 private struct GraveAtmosphere: View {

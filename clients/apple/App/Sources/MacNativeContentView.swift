@@ -67,7 +67,7 @@ private struct SystemView: View {
                 MetricCard(title: "MEMORY PRESSURE", value: s.memory, detail: s.memoryDetail, percent: s.memoryPercent)
                 MetricCard(title: "DISK", value: s.disk, detail: s.diskDetail, percent: s.diskPercent)
                 MetricCard(title: "THERMAL", value: s.thermal, detail: s.thermalDetail, percent: nil)
-                MetricCard(title: "BATTERY", value: s.battery, detail: s.batteryDetail, percent: s.batteryPercent)
+                MetricCard(title: "BATTERY", value: s.battery, detail: s.batteryDetail, percent: s.batteryPercent, goodAtHigh: true)
                 MetricCard(title: "SWAP", value: s.swap, detail: s.swapDetail, percent: s.swapPercent)
             }; GravePanel("identity") { HStack { Text(s.model).foregroundStyle(GraveTheme.ink); Spacer(); Text("macOS \(s.os) // up \(s.uptime)").foregroundStyle(GraveTheme.muted) } } }
             else { Text("[ sampling host metrics... ]").foregroundStyle(GraveTheme.muted) }
@@ -76,9 +76,10 @@ private struct SystemView: View {
 }
 
 private struct MetricCard: View {
-    let title: String; let value: String; let detail: String; let percent: Double?
+    let title: String; let value: String; let detail: String; let percent: Double?; let goodAtHigh: Bool
+    init(title: String, value: String, detail: String, percent: Double?, goodAtHigh: Bool = false) { self.title = title; self.value = value; self.detail = detail; self.percent = percent; self.goodAtHigh = goodAtHigh }
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) { Text(title).font(.system(size: 10, weight: .bold, design: .monospaced)).tracking(1).foregroundStyle(GraveTheme.muted); Text(value).font(.system(size: 23, weight: .bold, design: .monospaced)).foregroundStyle(GraveTheme.ink).shadow(color: GraveTheme.good.opacity(0.3), radius: 6); Text(detail).font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.muted).lineLimit(2); GraveMeter(value: percent) }
+        VStack(alignment: .leading, spacing: 8) { Text(title).font(.system(size: 10, weight: .bold, design: .monospaced)).tracking(1).foregroundStyle(GraveTheme.muted); Text(value).font(.system(size: 23, weight: .bold, design: .monospaced)).foregroundStyle(GraveTheme.ink).shadow(color: GraveTheme.good.opacity(0.3), radius: 6); Text(detail).font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.muted).lineLimit(2); GraveMeter(value: percent, goodAtHigh: goodAtHigh) }
             .frame(maxWidth: .infinity, minHeight: 106, alignment: .leading).padding(13).background(GraveTheme.surface).overlay(Rectangle().stroke(GraveTheme.ring))
     }
 }
