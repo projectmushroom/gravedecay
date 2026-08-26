@@ -22,7 +22,7 @@ struct MacNativeContentView: View {
                 GraveMark(color: GraveTheme.ink, size: 36).shadow(color: GraveTheme.good.opacity(0.45), radius: 8).accessibilityHidden(true)
                 Text("gravedecay").font(.system(size: 15, weight: .bold, design: .monospaced)).foregroundStyle(GraveTheme.ink)
                 Text("MACOS NATIVE // ONLINE").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.good).padding(.bottom, 18)
-                ForEach([(Section.system,"THIS MAC","desktopcomputer"),(Section.work,"WORK","folder"),(Section.network,"NETWORK","network"),(Section.appliances,"APPLIANCES","server.rack"),(Section.terminal,"TERMINAL","terminal"),(Section.settings,"SETTINGS","gearshape")], id: \.0) { item in
+                ForEach([(Section.system,"GRAVEYARD","desktopcomputer"),(Section.work,"WORK","folder"),(Section.network,"NETWORK","network"),(Section.appliances,"APPLIANCES","server.rack"),(Section.terminal,"TERMINAL","terminal"),(Section.settings,"SETTINGS","gearshape")], id: \.0) { item in
                     Button { selection = item.0 } label: { HStack { Text(selection == item.0 ? "[" : " "); Image(systemName: item.2); Text(item.1).tracking(1); Spacer(); Text(selection == item.0 ? "]" : " ") }.frame(height: 30) }.buttonStyle(.plain).foregroundStyle(selection == item.0 ? GraveTheme.amber : GraveTheme.muted)
                 }
                 Spacer(); Text("NO WEBVIEW // NO DAEMON").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.muted)
