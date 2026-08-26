@@ -1,10 +1,21 @@
-# gravedecay
+<p align="center">
+  <img src="assets/gravedecay-skull.svg" width="128" alt="gravedecay skull logo">
+</p>
 
-[![CI](https://github.com/projectmushroom/gravedecay/actions/workflows/ci.yml/badge.svg)](https://github.com/projectmushroom/gravedecay/actions/workflows/ci.yml)
+<h1 align="center">gravedecay</h1>
 
-<img src="assets/gravedecay-skull.svg" width="128" align="right" alt="gravedecay skull logo">
+<p align="center">
+  <b>Raise any Linux box into an always-on AI dev appliance.<br>
+  The box never sleeps — your agents work the graveyard shift.</b> 🪦
+</p>
 
-**Turn any Linux box into an always-on AI dev appliance. The box never sleeps — your agents work the graveyard shift.** 🪦
+<p align="center">
+  <a href="https://github.com/projectmushroom/gravedecay/actions/workflows/ci.yml"><img alt="Main CI status" src="https://github.com/projectmushroom/gravedecay/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/projectmushroom/gravedecay/actions/workflows/apple.yml"><img alt="Apple clients CI status" src="https://github.com/projectmushroom/gravedecay/actions/workflows/apple.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+</p>
+
+---
 
 gravedecay converts a spare machine (old laptop, mini PC, Steam Machine) into a
 personal, tailnet-only AI development server: your repos, databases, and coding
@@ -79,11 +90,31 @@ above: T3, persistent agent sessions, Docker backing services, terminal,
 system controls, and the full dashboard. The Linux quickstarts below are for
 that installation.
 
-**macOS companion** is a separate, small source install for a Mac you already
-use: a user-scoped system dashboard, local Git work view, and live network monitor. It
-does not raise an appliance or install/manage T3, Docker, terminal access,
-system services, firewall, or SSH. A signed-in Tailscale app is needed only to
-publish its two tailnet paths; it can otherwise stay localhost-only.
+**Native macOS client** is a standalone Universal 2 app for macOS 15+ (Apple
+silicon and Intel) — not a web wrapper, not an appliance installer, but the
+dashboard's grave dark rendered native: phosphor green on black, monospace
+throughout, a Dock app plus a skull menu-bar summary. It is remote-first:
+sign in to Tailscale and it discovers your graves. First run asks what this
+Mac is for — **Connect to Graves** (discovery only) or **Share This Mac**
+(an opt-in, loopback-only summary publisher); either role can be enabled
+later. Its window has native Graveyard, This Mac, Work, Network, Terminal,
+and Settings surfaces; Work is read-only Git state plus optional GitHub CLI
+and Linear links.
+
+Build the unsigned Universal 2 DMG — or grab the Apple CI artifact — per
+[clients/apple/README.md](clients/apple/README.md), which also covers
+Gatekeeper, signing, and notarization. **Share This Mac** never touches
+Tailscale login or Serve: it listens on `127.0.0.1:4712` only while the app
+runs and shows you the exact Serve command to run yourself. Coexistence with
+the source companion below (which fails the native host closed if it owns
+the port) is covered in [the macOS guide](docs/MACOS.md).
+
+**macOS companion** is the closest a Mac comes to a raise: a user-scoped
+dashboard and network monitor from a source checkout — no sudo, and no T3,
+Docker, terminal, firewall, or system services. With Tailscale signed in it
+publishes `/grave` and `/net`, and from then on the Mac sits in the graveyard
+like any other grave — discovered by the native app and the Omarchy widget,
+its dashboard reachable from any tailnet browser.
 
 ```sh
 git clone https://github.com/projectmushroom/gravedecay
@@ -92,11 +123,9 @@ cd gravedecay
 ./macos/install.sh --no-serve      # localhost only; no Tailscale Serve changes
 ```
 
-The companion needs macOS and `python3`; it has no Linux, systemd, Docker, or
-RAM requirement. It is a source install for now — see [the macOS companion
-guide](docs/MACOS.md) for component-only modes, update/status/uninstall
-commands, Tailscale behavior, and its intentional feature limits. DMG and
-notarized distribution are deferred.
+It needs only macOS and `python3`. See [the macOS guide](docs/MACOS.md) for
+component-only modes, `grave upgrade` channels, status, uninstall, and its
+intentional feature limits.
 
 ### The agent way (recommended)
 
@@ -186,12 +215,6 @@ clobbered (conf, stacks, and secrets are create-if-missing), while services,
 templates, and the dashboard refresh — and doctor verifies the result.
 Releases are plain git tags (`v0.1.0`, …) with notes on GitHub: pin to them
 for stability, or ride main if the box is also where you hack on gravedecay.
-
-On macOS, rerun `macos/install.sh` once on an older companion to bootstrap its
-user updater. Then use `grave releases`, `grave upgrade --release`, `grave
-upgrade --tag vX.Y.Z`, or `grave upgrade --edge` (or the dashboard panel).
-See [MACOS.md](docs/MACOS.md): no new port; T3, Tailscale login, Docker, SSH,
-and Linux services remain unmanaged.
 
 ### Uninstalling
 
@@ -502,6 +525,8 @@ is in `docs/SECRETS.md`.
 | [docs/API.md](docs/API.md) | Versioned, read-only summary contract for thin clients |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, tailnet-only, T3 Connect trade-offs, sudoers scope, terminal trust |
 | [docs/CLIENTS.md](docs/CLIENTS.md) | Clients: official T3 apps, native Apple shell, and Omarchy widget |
+| [clients/apple/README.md](clients/apple/README.md) | Native iOS/macOS client, DMG, signing, and build details |
+| [docs/MACOS.md](docs/MACOS.md) | Legacy Python companion, native publisher coexistence, and macOS operations |
 | [docs/SECRETS.md](docs/SECRETS.md) | Secrets + MCP wiring for agent CLIs |
 | [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md) | Notifications: Web Push to the PWA + ntfy — agents, failing units, and doctor page your phone |
 | [docs/PORTS.md](docs/PORTS.md) | Every port, documented or it doesn't exist |
