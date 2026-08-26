@@ -275,7 +275,7 @@ struct TailscaleOnboardingView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            HStack { StatusSquare(good: false); Text(title).foregroundStyle(GraveTheme.ink) }
+            HStack { StatusSquare(good: model.state == .ready); Text(title).foregroundStyle(model.state == .ready ? GraveTheme.good : GraveTheme.ink) }
             Text(detail).foregroundStyle(GraveTheme.muted)
             HStack {
                 if model.state == .missingTailscale { Button("GET TAILSCALE") { model.getTailscale() }.buttonStyle(GraveButton()) }
