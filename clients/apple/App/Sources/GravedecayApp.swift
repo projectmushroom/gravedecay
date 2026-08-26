@@ -54,7 +54,7 @@ private struct GraveMenuView: View {
     @Environment(\.openWindow) private var openWindow
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack { GraveMark(color: GraveTheme.ink).accessibilityHidden(true); Text("GRAVEDECAY").tracking(1.2).foregroundStyle(GraveTheme.amber); Spacer(); Button("↻ REFRESH") { model.refresh() }.buttonStyle(GraveButton()).accessibilityLabel("Refresh appliances") }.font(.system(size: 11, weight: .bold, design: .monospaced))
+            HStack { GraveMark(color: GraveTheme.ink).accessibilityHidden(true); Text("GRAVEDECAY").tracking(1.2).foregroundStyle(GraveTheme.amber); Spacer(); Button("↻ REFRESH") { model.refresh() }.buttonStyle(GraveButton()).accessibilityLabel("Refresh graves") }.font(.system(size: 11, weight: .bold, design: .monospaced))
             Picker("TARGET", selection: $model.selectedID) { Text("THIS MAC").tag(Optional(GraveMenuModel.thisMacID)); ForEach(model.graves) { Text($0.candidate.name.uppercased()).tag(Optional($0.id)) } }.pickerStyle(.menu).tint(GraveTheme.amber).font(.system(size: 10, design: .monospaced))
             if model.graves.isEmpty {
                 TailscaleOnboardingView(model: model)
@@ -69,8 +69,8 @@ private struct GraveMenuView: View {
                     HStack { link("Dashboard", summary.capabilities.dashboard); link("T3", summary.capabilities.t3); link("Terminal", summary.capabilities.terminal); link("Network", summary.capabilities.network) }
                 }.font(.system(size: 9, design: .monospaced))
             } else if model.isThisMac {
-                Text("THIS MAC // DASHBOARD + NETWORK ONLY // TERMINAL NOT PUBLISHED").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.muted)
-            } else { Text("SELECT A REACHABLE APPLIANCE.").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.muted) }
+                Text("THIS MAC // OPEN APP FOR LOCAL METRICS").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.muted)
+            } else { Text("SELECT A REACHABLE GRAVE.").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.muted) }
             Rectangle().fill(GraveTheme.ring).frame(height: 1)
             HStack { Button("OPEN APP") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }; Button("QUIT") { NSApp.terminate(nil) } }.buttonStyle(GraveButton())
         }.padding().frame(width: 390).graveRoot()

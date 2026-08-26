@@ -12,29 +12,29 @@ struct MacNativeContentView: View {
     @ObservedObject var graves: GraveMenuModel
     @ObservedObject var model: MacDashboardModel
     @ObservedObject var host: MacNativeHost
-    @State private var selection: Section = .system
+    @State private var selection: Section = .graveyard
 
-    enum Section: Hashable { case system, work, network, appliances, terminal, settings }
+    enum Section: Hashable { case graveyard, thisMac, work, network, terminal, settings }
 
     var body: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
                 GraveMark(color: GraveTheme.ink, size: 36).shadow(color: GraveTheme.good.opacity(0.45), radius: 8).accessibilityHidden(true)
                 Text("gravedecay").font(.system(size: 15, weight: .bold, design: .monospaced)).foregroundStyle(GraveTheme.ink)
-                Text("MACOS NATIVE // ONLINE").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.good).padding(.bottom, 18)
-                ForEach([(Section.system,"GRAVEYARD","desktopcomputer"),(Section.work,"WORK","folder"),(Section.network,"NETWORK","network"),(Section.appliances,"APPLIANCES","server.rack"),(Section.terminal,"TERMINAL","terminal"),(Section.settings,"SETTINGS","gearshape")], id: \.0) { item in
+                Text("NATIVE MACOS CLIENT").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.muted).padding(.bottom, 18)
+                ForEach([(Section.graveyard,"GRAVEYARD","server.rack"),(Section.thisMac,"THIS MAC","desktopcomputer"),(Section.work,"WORK","folder"),(Section.network,"NETWORK","network"),(Section.terminal,"TERMINAL","terminal"),(Section.settings,"SETTINGS","gearshape")], id: \.0) { item in
                     Button { selection = item.0 } label: { HStack { Text(selection == item.0 ? "[" : " "); Image(systemName: item.2); Text(item.1).tracking(1); Spacer(); Text(selection == item.0 ? "]" : " ") }.frame(height: 30) }.buttonStyle(.plain).foregroundStyle(selection == item.0 ? GraveTheme.amber : GraveTheme.muted)
                 }
-                Spacer(); Text("NO WEBVIEW // NO DAEMON").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.muted)
+                Spacer()
             }.padding(18).padding(.top, 22).frame(width: 210).background(GraveTheme.inset).overlay(alignment: .trailing) { Rectangle().fill(GraveTheme.ring).frame(width: 1) }
             VStack(spacing: 0) {
-                HStack { Text(title).font(.system(size: 14, weight: .bold, design: .monospaced)).tracking(1.4).foregroundStyle(GraveTheme.ink); Spacer(); GraveTargetPicker(graves: graves); Text(model.snapshot?.model ?? "SCANNING").font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.muted); Button("↻ REFRESH") { model.refresh(); graves.refresh() }.buttonStyle(GraveButton()) }.padding(.horizontal, 22).frame(height: 54).background(GraveTheme.surface).overlay(alignment: .bottom) { Rectangle().fill(GraveTheme.ring).frame(height: 1) }
+                HStack { Text(title).font(.system(size: 14, weight: .bold, design: .monospaced)).tracking(1.4).foregroundStyle(GraveTheme.ink); Spacer(); if selection == .terminal { GraveTargetPicker(graves: graves) }; if selection == .thisMac { Text(model.snapshot?.model ?? "SCANNING").font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.muted) }; Button("↻ REFRESH") { model.refresh(); graves.refresh() }.buttonStyle(GraveButton()) }.padding(.horizontal, 22).frame(height: 54).background(GraveTheme.surface).overlay(alignment: .bottom) { Rectangle().fill(GraveTheme.ring).frame(height: 1) }
                 Group {
                 switch selection {
-                case .system: SystemView(snapshot: model.snapshot)
+                case .graveyard: GraveyardView(graves: graves)
+                case .thisMac: SystemView(snapshot: model.snapshot)
                 case .work: WorkView(model: model)
                 case .network: NetworkView(model: model)
-                case .appliances: AppliancesView(graves: graves)
                 case .terminal: TerminalDestination(graves: graves)
                 case .settings: MacSettingsView(model: model, host: host)
                 }
@@ -44,14 +44,14 @@ struct MacNativeContentView: View {
         .task { model.refresh(); graves.refresh() }
         .frame(minWidth: 900, minHeight: 600).graveRoot().background(GraveTheme.page.ignoresSafeArea())
     }
-    private var title: String { switch selection { case .system: "SYSTEM // THIS MAC"; case .work: "WORK // REPOSITORIES"; case .network: "NETWORK // INTERFACES"; case .appliances: "TAILNET // APPLIANCES"; case .terminal: "TERMINAL // REMOTE"; case .settings: "SETTINGS // LOCAL" } }
+    private var title: String { switch selection { case .graveyard: "GRAVEYARD // TAILNET"; case .thisMac: "THIS MAC // SYSTEM"; case .work: "THIS MAC // WORK"; case .network: "THIS MAC // NETWORK"; case .terminal: "TERMINAL // \(graves.selected?.candidate.name.uppercased() ?? "REMOTE")"; case .settings: "SETTINGS" } }
 }
 
 private struct GraveTargetPicker: View {
     @ObservedObject var graves: GraveMenuModel
     var body: some View {
         Picker("TARGET", selection: $graves.selectedID) {
-            Text("THIS MAC").tag(Optional(GraveMenuModel.thisMacID))
+            Text("SELECT GRAVE").tag(Optional<String>.none)
             ForEach(graves.graves) { grave in Text(grave.candidate.name.uppercased()).tag(Optional(grave.id)) }
         }.labelsHidden().pickerStyle(.menu).tint(GraveTheme.amber).font(.system(size: 10, weight: .bold, design: .monospaced))
             .accessibilityLabel("Target")
@@ -137,7 +137,7 @@ private struct InterfaceCard: View {
     } } }
 }
 
-private struct AppliancesView: View {
+private struct GraveyardView: View {
     @ObservedObject var graves: GraveMenuModel
     var body: some View {
         ScrollView { LazyVGrid(columns: [GridItem(.adaptive(minimum: 330), spacing: 12)], spacing: 14) {
@@ -148,7 +148,7 @@ private struct AppliancesView: View {
                     if let summary = grave.summary { Text("\(summary.node.platform.uppercased()) // CPU \(GravePresentation.percent(summary.resources.cpu_pct))").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.ink2) }
                     if let s = grave.summary { VStack(alignment: .leading, spacing: 5) { HStack { Text("MEM \(GravePresentation.percent(s.resources.memory_pct))"); Text("DISK \(GravePresentation.percent(s.resources.disk_pct))"); Spacer(); Text("UP \(GravePresentation.uptime(s.node.uptime_s))") }.foregroundStyle(GraveTheme.muted); HStack { Text("SESSIONS \(s.activity.sessions_live)"); Text("PROBLEMS \(s.problems)").foregroundStyle(s.problems > 0 ? GraveTheme.crit : GraveTheme.good) } }.font(.system(size: 9, design: .monospaced)) }
                     HStack { CapabilityButton(title: "T3", host: grave.candidate.dns, path: grave.summary?.capabilities.t3); CapabilityButton(title: "DASHBOARD", host: grave.candidate.dns, path: grave.summary?.capabilities.dashboard); if grave.summary?.capabilities.terminal != nil { Button("TERMINAL") { graves.select(grave) }.buttonStyle(GraveButton()) } }
-                }}.contentShape(Rectangle()).onTapGesture { graves.selectedID = grave.id }
+                }}.contentShape(Rectangle()).overlay(Rectangle().stroke(graves.selectedID == grave.id ? GraveTheme.amber : .clear, lineWidth: 2)).onTapGesture { graves.selectedID = grave.id }
             }
         }.frame(maxWidth: 980).padding(24) }.background(GraveTheme.page)
     }
@@ -170,7 +170,7 @@ struct TailscaleOnboardingView: View {
         switch model.state {
         case .missingTailscale: return "TAILSCALE NOT INSTALLED"
         case .loggedOut: return "TAILSCALE ACTION REQUIRED"
-        case .noAppliances: return model.tailscaleUnavailable ? "TAILSCALE UNAVAILABLE" : "NO APPLIANCES"
+        case .noAppliances: return model.tailscaleUnavailable ? "TAILSCALE UNAVAILABLE" : "NO GRAVES"
         case .scanning: return "SCANNING TAILNET"
         default: return "WAITING FOR TAILSCALE"
         }
@@ -178,11 +178,11 @@ struct TailscaleOnboardingView: View {
 
     private var detail: String {
         switch model.state {
-        case .missingTailscale: return "INSTALL THE OFFICIAL TAILSCALE APP TO DISCOVER APPLIANCES."
+        case .missingTailscale: return "INSTALL THE OFFICIAL TAILSCALE APP TO DISCOVER GRAVES."
         case .loggedOut: return "OPEN TAILSCALE, CONNECT OR SIGN IN, THEN REFRESH."
-        case .noAppliances: return model.tailscaleUnavailable ? "TAILSCALE IS INSTALLED BUT STATUS IS UNAVAILABLE. CHECK THE APP, THEN REFRESH." : "NO REACHABLE GRAVEDECAY APPLIANCES FOUND. CHECK TAILSCALE, THEN REFRESH."
-        case .scanning: return "DISCOVERING TAILNET APPLIANCES…"
-        default: return "REFRESH TO DISCOVER TAILNET APPLIANCES."
+        case .noAppliances: return model.tailscaleUnavailable ? "TAILSCALE IS INSTALLED BUT STATUS IS UNAVAILABLE. CHECK THE APP, THEN REFRESH." : "NO REACHABLE GRAVEDECAY GRAVES FOUND. CHECK TAILSCALE, THEN REFRESH."
+        case .scanning: return "DISCOVERING TAILNET GRAVES…"
+        default: return "REFRESH TO DISCOVER TAILNET GRAVES."
         }
     }
 
@@ -209,7 +209,7 @@ private struct TerminalDestination: View {
             TerminalPane(box: box, urlSession: .shared, status: status).id("\(grave.id)-\(status.retryID)").padding(1).background(GraveTheme.ring)
         }.padding(20).background(GraveTheme.page) }
         else if graves.selected != nil { ThemedEmpty(title: "TERMINAL NOT PUBLISHED BY THIS GRAVE", detail: "SELECT A GRAVE THAT ADVERTISES A SAFE TERMINAL LINK") .padding(24).frame(maxWidth: .infinity, maxHeight: .infinity).background(GraveTheme.page) }
-        else { ThemedEmpty(title: "CHOOSE AN APPLIANCE", detail: "SELECT A TARGET IN APPLIANCES AFTER TAILSCALE DISCOVERY") .padding(24).frame(maxWidth: .infinity, maxHeight: .infinity).background(GraveTheme.page) }
+        else { ThemedEmpty(title: "CHOOSE A GRAVE", detail: "SELECT A GRAVE IN GRAVEYARD AFTER TAILSCALE DISCOVERY") .padding(24).frame(maxWidth: .infinity, maxHeight: .infinity).background(GraveTheme.page) }
     }
 }
 
