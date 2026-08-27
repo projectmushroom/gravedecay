@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>io.gravedecay.t3</string>
+  <!-- Loopback-only, same origin layout as the appliance: Serve maps / here.
+       Pairing state lives beside the companion (agents/t3code) so the
+       dashboard's t3-pair action mints tokens where this instance reads them.
+       Sessions root at the agent jail (~/Grave), not the whole HOME. -->
+  <key>ProgramArguments</key><array>
+    <string>@T3@</string><string>serve</string><string>--mode</string><string>web</string>
+    <string>--host</string><string>127.0.0.1</string><string>--port</string><string>4711</string>
+    <string>--base-dir</string><string>@ROOT@/agents/t3code</string><string>@JAIL@</string>
+  </array>
+  <key>WorkingDirectory</key><string>@JAIL@</string>
+  <key>EnvironmentVariables</key><dict>
+    <key>PATH</key><string>@AGENT_PATH@</string>
+  </dict>
+  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>@ROOT@/logs/t3.log</string>
+  <key>StandardErrorPath</key><string>@ROOT@/logs/t3.error.log</string>
+</dict></plist>

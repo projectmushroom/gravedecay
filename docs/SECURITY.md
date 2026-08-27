@@ -149,6 +149,22 @@ your user for **anyone who can reach it** — ttyd does not check the
 you already extend via Tailscale SSH; on a shared tailnet, restrict who can
 reach this node with Tailscale ACLs or disable `gravedecay-term`.
 
+### macOS agents layer
+
+`macos/install.sh --agents` extends the same trust trade to a serving Mac,
+stated plainly: tailnet identity ⇒ your macOS Unix account. The Mac's ttyd
+(`io.gravedecay.term`, `/term`) is a shell as the logged-in Mac user for
+anyone who can reach it, exactly like the Linux note above, and T3 sessions
+run as that user too. Mitigations, not absolution: agent sessions and T3's
+project root live in a dedicated `~/Grave` jail rather than the whole HOME,
+every reopened dashboard endpoint (pairing, session kill/copy) stays behind
+the exact-`LoginName` `ALLOWED_USERS` gate, binds stay on loopback behind
+Tailscale Serve, and nothing runs with sudo. A shell can still leave the
+jail — that is what shells do — so on a Mac that is also a personal machine,
+do not enable this mode; on a dedicated mini, prefer a separate macOS user
+account. Companion secrets (Linear key, ntfy) stay in owner-only files under
+the Application Support root, outside the jail.
+
 ## Portable Docker workspace
 
 The portable Compose deployment is not a way to containerize the trusted host

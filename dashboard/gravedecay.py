@@ -42,6 +42,25 @@ PORT = int(os.environ.get("GRAVEDECAY_PORT", os.environ.get("DASH_PORT", "4712")
 GRAVE_ROOT = os.environ.get("GRAVE_ROOT", "/srv/dev")
 PLATFORM = os.environ.get("GRAVEDECAY_PLATFORM", "linux").lower()
 MACOS = PLATFORM == "macos"
+# Opt-in macOS agents layer (macos/install.sh --agents): the Mac serves T3
+# and the web terminal, so exactly the identity-gated pairing/session subset
+# of the endpoint allowlist reopens. Set only by the installer's LaunchAgent.
+MACOS_AGENTS = MACOS and os.environ.get("GRAVEDECAY_MACOS_AGENTS") == "1"
+# The macOS endpoint allowlists ARE the authorization boundary (hiding UI is
+# not); keep them module-level constants so they are auditable in one place.
+# The agents layer adds: the pairing SSE console (viewer- and CSRF-gated in
+# _stream_action), /api/action (whose macOS ACTIONS table only ever contains
+# t3-pair), and session kill/scrollback for the tmux -L agents panel — every
+# POST still passes the exact-LoginName ALLOWED_USERS gate in do_POST.
+MACOS_GETS = frozenset((
+    "/", "/healthz", "/api/state", "/api/v1/summary", "/api/admin/releases",
+    "/api/admin/update-status", "/manifest.webmanifest", "/sw.js",
+    "/offline.html", "/apple-touch-icon.png", "/icon-180.png",
+    "/icon-192.png", "/icon-512.png",
+) + (("/api/action-stream",) if MACOS_AGENTS else ()))
+MACOS_POSTS = frozenset(("/api/settings", "/api/admin/upgrade")
+                        + (("/api/action", "/api/session-kill", "/api/session-capture")
+                           if MACOS_AGENTS else ()))
 PORTABLE = PLATFORM in ("container", "portable")
 BIND_HOST = "0.0.0.0" if PORTABLE else "127.0.0.1"
 # tmux socket carrying the agent sessions. Single-user uses "agents"; a workspace
@@ -256,9 +275,11 @@ ACTIONS = {
     "keepalive-off": [GRAVE, "keepalive", "off"],
 }
 # The source macOS companion is intentionally observability-only.  Keep this
-# gate server-side: hiding buttons is not an authorization boundary.
+# gate server-side: hiding buttons is not an authorization boundary.  The
+# opt-in agents layer reopens exactly pairing — no sudo/systemd action ever
+# exists on a Mac.
 if MACOS:
-    ACTIONS = {}
+    ACTIONS = {"t3-pair": ACTIONS["t3-pair"]} if MACOS_AGENTS else {}
 elif PORTABLE:
     # A portable workspace has no authority over its Docker host. Pairing and
     # tmux session endpoints stay useful; every host-mutating grave action is
@@ -991,7 +1012,7 @@ def _summary_links():
     links = {"dashboard": (BASE or "") + "/"}
     if not PORTABLE and (not MACOS or any(a.get("url") == "/net/" for a in APPS)):
         links["network"] = "/net/"
-    if not MACOS:
+    if not MACOS or MACOS_AGENTS:
         links.update({"t3": "/", "terminal": "/term/"})
     return links
 
@@ -1022,7 +1043,10 @@ def _summary():
     tmux = []
     services = collect_services()
     containers_problem = 0
-    if not MACOS:
+    if MACOS:
+        if MACOS_AGENTS:
+            tmux = collect_tmux()
+    else:
         mode = "developer" if unit_state("t3code").get("active") == "active" else "gaming"
         tmux = collect_tmux()
         try:
@@ -1819,11 +1843,15 @@ def state(headers):
                                      "truncated": inventory.get("truncated", False)}}
         return {"host": HOST, "now": time.strftime("%H:%M:%S"),
                 "viewer": viewer or "local", "platform": "macos",
+                "macos_agents": MACOS_AGENTS,
                 "mode": "developer", "boot_mode": None, "gamewatch": None,
                 "keepalive": None, "apps": list(APPS), "settings": settings,
                 "github": private["github"], "linear": private["linear"], "ci": private["ci"],
                 "usage": None, "notify": None, "services": collect_services(),
-                "docker": {"error": "not managed on macOS", "containers": []}, "tmux": [],
+                "docker": {"error": "not managed on macOS", "containers": []},
+                # Session names are owner-private like the rest of the work
+                # plane; killing them is POST-gated separately.
+                "tmux": collect_tmux() if MACOS_AGENTS and owner else [],
                 "torpor": 0, "repos": private["repos"], "repo_scan": private["repo_scan"], "journal": [], "system": collect_system(),
                 "backups": {"count": 0, "latest": None}, "inbox": [], "agent_history": []}
     if PORTABLE:
@@ -2276,7 +2304,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self._backend_forbidden(p):
             return
-        if MACOS and p not in ("/", "/healthz", "/api/state", "/api/v1/summary", "/api/admin/releases", "/api/admin/update-status", "/manifest.webmanifest", "/sw.js", "/offline.html", "/apple-touch-icon.png", "/icon-180.png", "/icon-192.png", "/icon-512.png"):
+        if MACOS and p not in MACOS_GETS:
             self._send(404, '{"error":"unavailable in macOS companion"}')
             return
         if p == "/api/action-stream":
@@ -2387,7 +2415,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self._backend_forbidden(p):
             return
-        if MACOS and p not in ("/api/settings", "/api/admin/upgrade"):
+        if MACOS and p not in MACOS_POSTS:
             self._send(404, '{"error":"unavailable in macOS companion"}')
             return
         viewer = self.headers.get("Tailscale-User-Login")
@@ -2418,8 +2446,13 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/api/settings":
             try:
                 if MACOS:
+                    # t3_tile/yolo_apps are UI preferences the settings modal
+                    # always includes in its payload (they ride in
+                    # DEFAULT_SETTINGS) — rejecting them made every real ⚙️
+                    # save 400 on macOS.
                     allowed = {"panel_order", "hidden_panels", "hidden_apps", "newtab_apps",
-                               "modal_apps", "custom_apps", "poll_ms", "repo_root", "linear_key"}
+                               "modal_apps", "custom_apps", "poll_ms", "repo_root", "linear_key",
+                               "t3_tile", "yolo_apps"}
                     if set(data) - allowed:
                         raise ValueError("macOS settings only accept UI preferences")
                     if "repo_root" in data:

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>io.gravedecay.term</string>
+  <!-- Same contract as gravedecay-term.service on Linux: loopback ttyd with
+       the clipboard-capable frontend, attached to the shared tmux -L agents
+       socket via the webterm session picker. Sessions start in the agent
+       jail (~/Grave); terminal access is still a shell as this Mac user. -->
+  <key>ProgramArguments</key><array>
+    <string>@TTYD@</string><string>-p</string><string>4713</string>
+    <string>-i</string><string>127.0.0.1</string><string>-W</string><string>--url-arg</string>
+    <string>-I</string><string>@ROOT@/web/term/index.html</string>
+    <string>-t</string><string>fontSize=14</string>
+    <string>-t</string><string>theme={"background":"#0d0d0d"}</string>
+    <string>-t</string><string>titleFixed=gravedecay</string>
+    <string>@ROOT@/scripts/webterm</string>
+  </array>
+  <key>WorkingDirectory</key><string>@JAIL@</string>
+  <key>EnvironmentVariables</key><dict>
+    <key>GRAVE_ROOT</key><string>@ROOT@</string>
+    <key>TMUX_CONF</key><string>@ROOT@/config/tmux.conf</string>
+    <key>PATH</key><string>@AGENT_PATH@</string>
+  </dict>
+  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>@ROOT@/logs/term.log</string>
+  <key>StandardErrorPath</key><string>@ROOT@/logs/term.error.log</string>
+</dict></plist>

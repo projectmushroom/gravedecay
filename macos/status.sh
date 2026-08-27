@@ -16,16 +16,21 @@ while [ $# -gt 0 ]; do case "$1" in
 esac; shift; done
 state="$ROOT/config/components"; rc=0
 if [ ! -f "$ROOT/.gravedecay-macos" ] || [ ! -f "$state" ]; then echo "gravedecay macOS companion: not installed at $ROOT"; exit 0; fi
-dash=$(sed -n 's/^dashboard=//p' "$state"); net=$(sed -n 's/^network=//p' "$state"); serve=$(sed -n 's/^serve=//p' "$state"); keep=$(sed -n 's/^keepawake=//p' "$state"); uid=$(id -u)
+dash=$(sed -n 's/^dashboard=//p' "$state"); net=$(sed -n 's/^network=//p' "$state"); serve=$(sed -n 's/^serve=//p' "$state"); keep=$(sed -n 's/^keepawake=//p' "$state"); agentsmode=$(sed -n 's/^agents=//p' "$state"); uid=$(id -u)
 case "$dash:$net:$serve" in 1:1:[01]|1:0:[01]|0:1:[01]) ;; *) echo "invalid component metadata" >&2; exit 2;; esac
 # Pre-keepawake installs have no keepawake= line; a serving Mac is then
 # expected to hold the assertion, so the missing agent fails loudly below.
 [ -n "$keep" ] || keep=1
 case "$keep" in 0|1) ;; *) echo "invalid component metadata" >&2; exit 2;; esac
-check(){ label=$1 port=$2 enabled=$3; [ "$enabled" = 1 ] || return 0
+# Pre-agents installs have no agents= line: observability-only.
+[ -n "$agentsmode" ] || agentsmode=0
+case "$agentsmode" in 0|1) ;; *) echo "invalid component metadata" >&2; exit 2;; esac
+check(){ label=$1 port=$2 enabled=$3 path=${4:-/healthz}; [ "$enabled" = 1 ] || return 0
   if launchctl print "gui/$uid/$label" >/dev/null 2>&1; then echo "$label: loaded"; else echo "$label: not loaded"; rc=1; fi
-  if curl -fsS "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then echo ":$port health: ok"; else echo ":$port health: failed"; rc=1; fi; }
+  if curl -fsS --max-time 5 "http://127.0.0.1:$port$path" >/dev/null 2>&1; then echo ":$port health: ok"; else echo ":$port health: failed"; rc=1; fi; }
 check io.gravedecay.dashboard 4712 "$dash"; check io.gravedecay.network 4714 "$net"
+# t3/ttyd have no /healthz; their answering root page is the liveness signal.
+check io.gravedecay.t3 4711 "$agentsmode" /; check io.gravedecay.term 4713 "$agentsmode" /
 if [ -n "$PYTHON" ] && [ -f "$ROOT/config/release.json" ]; then
   "$PYTHON" - "$ROOT/config/release.json" <<'PY' 2>/dev/null || true
 import json, sys
@@ -45,6 +50,9 @@ elif [ -n "$ts" ]; then
   [ -z "$out" ] || echo "$out"
   [ "$dash" != 1 ] || printf '%s\n' "$out" | grep -q '/grave' || rc=1
   [ "$net" != 1 ] || printf '%s\n' "$out" | grep -q '/net' || rc=1
+  # Agents mode publishes the whole origin layout: / -> 4711 and /term -> 4713.
+  [ "$agentsmode" != 1 ] || printf '%s\n' "$out" | grep -q '127.0.0.1:4711' || rc=1
+  [ "$agentsmode" != 1 ] || printf '%s\n' "$out" | grep -q '/term' || rc=1
 else
   echo "Tailscale CLI: missing"; rc=1
 fi
@@ -67,6 +75,8 @@ drift(){ name=$1 rel=$2 enabled=$3; [ "$enabled" = 1 ] || return 0; [ -d "$SRC/.
   else echo "$name: drifted from the managed checkout (rerun macos/install.sh)"; rc=1; fi; }
 drift gravedecay.py dashboard/gravedecay.py "$dash"
 drift gravenet.py dashboard/gravenet.py "$net"
+# Every terminal session runs the copied webterm; stale copies serve silently.
+drift webterm bin/webterm "$agentsmode"
 NOTIFY_ENV="$ROOT/config/secrets/notify.env"
 if [ -f "$NOTIFY_ENV" ]; then
   # GNU stat first: its -c errors cleanly on BSD, while BSD's -f "succeeds"

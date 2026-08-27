@@ -36,7 +36,12 @@ def args_for_components():
   d,n,s=values["dashboard"],values["network"],values["serve"]
  except Exception: raise RuntimeError("invalid component metadata")
  if (d,n,s) not in (("1","1","1"),("1","1","0"),("1","0","1"),("1","0","0"),("0","1","1"),("0","1","0")): raise RuntimeError("invalid component metadata")
- return (["--dashboard-only"] if n=="0" else ["--network-only"] if d=="0" else [])+(["--no-serve"] if s=="0" else [])
+ # --agents is a per-run opt-in (not sticky), so an unattended update must
+ # restate it or it would silently converge the agents layer off. Malformed
+ # values fail loudly like the tuple above — never as a silent "off".
+ a=values.get("agents","0")
+ if a not in ("0","1"): raise RuntimeError("invalid component metadata")
+ return (["--dashboard-only"] if n=="0" else ["--network-only"] if d=="0" else [])+(["--no-serve"] if s=="0" else [])+(["--agents"] if a=="1" else [])
 def install(repo, extra, channel):
  env=dict(os.environ,GRAVEDECAY_UPDATER="1",GRAVEDECAY_UPDATE_CHANNEL=("release" if channel=="tag" else channel))
  return run(os.path.join(repo,"macos","install.sh"),"--root",ROOT,*extra,cwd=repo,env=env)

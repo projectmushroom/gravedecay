@@ -309,13 +309,20 @@ body.gaming #foot{display:none}
   .topbar .meta{display:none}
   .apps{grid-template-columns:1fr}
 }
-/* macOS has a local-work dashboard but deliberately no Linux/T3 controls. */
-body.macos [data-panel="tmux"],body.macos [data-panel="sessions"],body.macos [data-panel="usage"],body.macos [data-panel="inbox"],
+/* macOS has a local-work dashboard but deliberately no Linux/T3 controls.
+   The opt-in agents layer (body.macagents) brings back exactly the agent
+   sessions panel plus the rows tagged macagents-setting (pairing, T3 tile).
+   Keep the default CLOSED: a future .mac-linux-setting row stays hidden on
+   agents Macs unless it is explicitly opted in with macagents-setting.
+   Hiding is UI polish — the server allowlist is the authorization boundary. */
+body.macos:not(.macagents) [data-panel="tmux"],body.macos [data-panel="sessions"],body.macos [data-panel="usage"],body.macos [data-panel="inbox"],
 body.macos [data-panel="docker"],
 body.macos [data-panel="journal"],body.macos #game-banner,body.macos #mode,
 body.macos #boot-mode-head,body.macos #boot-mode-row,body.macos #throttle-head,
 body.macos #throttle-row,body.macos #t3connect-head,body.macos #t3connect-row{display:none!important}
 body.macos .mac-linux-setting,body.macos .linear-create{display:none!important}
+body.macos.macagents .macagents-setting.setrow{display:flex!important}
+body.macos.macagents .macagents-setting.sethead{display:block!important}
 body:not(.macos) .mac-only-setting{display:none!important}
 body.macos [data-panel="actions"] .actions{display:none!important}
 /* Portable workspaces intentionally cannot observe or control their Docker host. */
@@ -388,8 +395,8 @@ body.portable #sec-notify{display:none!important}
     <span class="setlabel dim2" id="keepalive-state"></span>
   </div>
 
-  <div class="sethead mac-linux-setting">Auth &amp; pairing</div>
-  <div class="setrow mac-linux-setting">
+  <div class="sethead mac-linux-setting macagents-setting">Auth &amp; pairing</div>
+  <div class="setrow mac-linux-setting macagents-setting">
     <button class="mini" id="t3-pair-btn">🔑 New T3 pairing token</button>
     <a class="mini abtn" data-auth="auth-claude">🤖 Re-auth Claude</a>
     <a class="mini abtn" data-auth="auth-codex">🧠 Re-auth Codex</a>
@@ -403,7 +410,7 @@ body.portable #sec-notify{display:none!important}
     <a class="mini abtn" data-auth="auth-t3full">🌐 full relay</a>
     <button class="mini" id="t3c-off">⏸ off</button>
   </div>
-  <div class="setrow mac-linux-setting"><span class="setlabel">T3 tile opens<span class="dim2" title="'official T3 app' hands the launcher tile off to the installed T3 Code app via its t3code:// scheme — pair the app first (pairing tokens print an app link too). Devices without the app should stay on the web UI." style="margin-left:7px;border:1px solid var(--ring);border-radius:50%;padding:0 5px;cursor:help">ⓘ</span></span>
+  <div class="setrow mac-linux-setting macagents-setting"><span class="setlabel">T3 tile opens<span class="dim2" title="'official T3 app' hands the launcher tile off to the installed T3 Code app via its t3code:// scheme — pair the app first (pairing tokens print an app link too). Devices without the app should stay on the web UI." style="margin-left:7px;border:1px solid var(--ring);border-radius:50%;padding:0 5px;cursor:help">ⓘ</span></span>
     <select id="set-t3tile">
       <option value="pwa">the web UI (in-PWA)</option>
       <option value="app">the official T3 app</option>
@@ -652,7 +659,14 @@ function statusDot(state){
 // viewed on a bare port (localhost:4712) rather than mounted at /grave/
 let macosCompanion=false,portableCompanion=false;
 const appUrl=u=>portableCompanion?u:(macosCompanion&&location.port&&u==='/net/')
-  ?`http://${location.hostname}:4714/`:(location.port&&location.port!=='443'&&u.startsWith('/'))
+  ?`http://${location.hostname}:4714/`
+  // agents-mode Mac viewed on its bare port: T3 and terminal live on their
+  // own loopback ports, not under this origin's path routing
+  :(macosCompanion&&location.port&&u==='/')
+  ?`http://${location.hostname}:4711/`
+  :(macosCompanion&&location.port&&u.startsWith('/term/'))
+  ?`http://${location.hostname}:4713/${u.slice('/term/'.length)}`
+  :(location.port&&location.port!=='443'&&u.startsWith('/'))
   ?`https://${location.hostname}${u}`:u;
 // 'claude' or 'codex' if this tile launches that agent CLI via /term/?arg=…,
 // else null. Gates the ⚡ skip-perms toggle and the -yolo session rewrite.
@@ -761,6 +775,7 @@ function render(s){
   macosCompanion=s.platform==='macos';
   portableCompanion=s.platform==='container';
   document.body.classList.toggle('macos',macosCompanion);
+  document.body.classList.toggle('macagents',macosCompanion&&!!s.macos_agents);
   document.body.classList.toggle('portable',portableCompanion);
   if(macosCompanion&&!macUpdateSeen){macUpdateSeen=true;macUpdateStatus(true);}
   if(macosCompanion)document.querySelector('[data-panel="actions"] h2').textContent='⬆ Update Gravedecay';
