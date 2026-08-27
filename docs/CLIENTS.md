@@ -55,6 +55,14 @@ over the same origins and never require new listening ports on the box.
   development. It never stores tailnet inventory, credentials, or remote
   content, and it cannot control an appliance.
 
+- **macOS menu bar** — `clients/macos-menubar/` is a macOS 15+ SwiftUI
+  `MenuBarExtra` fleet widget. Every roughly 45 seconds (and when opened), it
+  reads local `tailscale status --json` and independently probes online Self
+  and peers at `/grave/api/v1/summary`. It holds only reachable validated v1
+  summaries in memory; it stores no tailnet inventory, credentials, or
+  history, opens no listener, and has no controls. Each displayed box exposes
+  only summary-contract vitals and an optional same-host dashboard link.
+
 House rules that apply to any future client:
 
 - Talk to the box only through its tailnet HTTPS origin — never add or

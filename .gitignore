@@ -16,6 +16,7 @@ clients/apple/build/
 clients/apple/Vendor/
 clients/apple/vendor/
 clients/apple/GravedecayKit/.build/
+clients/macos-menubar/.build/
 clients/apple/App/Assets.xcassets/AppIcon.appiconset/icon-16.png
 clients/apple/App/Assets.xcassets/AppIcon.appiconset/icon-32.png
 clients/apple/App/Assets.xcassets/AppIcon.appiconset/icon-64.png
