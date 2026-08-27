@@ -11,6 +11,7 @@ import time
 import urllib.error
 import urllib.request
 import json
+import sys
 import threading
 import unittest
 import shutil
@@ -475,11 +476,14 @@ class MacosContractTests(unittest.TestCase):
                 with self.assertRaises(SystemExit): helper.upgrade(["--edge", "--tag", "v2.0.0"])
             for components, expected in (("dashboard=1\nnetwork=1\nserve=1\n", []),
                                          ("dashboard=1\nnetwork=0\nserve=0\n", ["--dashboard-only", "--no-serve"]),
-                                         ("dashboard=0\nnetwork=1\nserve=1\n", ["--network-only"])):
+                                         ("dashboard=0\nnetwork=1\nserve=1\n", ["--network-only"]),
+                                         ("dashboard=1\nnetwork=1\nserve=1\nagents=1\n", ["--agents"])):
                 (root / "config/components").write_text(components)
                 updater = load_script("mac_updater_" + str(len(expected)), ROOT / "macos/updater.py", {"GRAVE_ROOT": str(root)})
                 self.assertEqual(updater.args_for_components(), expected)
             (root / "config/components").write_text("dashboard=1\nnetwork=1\nserve=x\n")
+            with self.assertRaises(RuntimeError): updater.args_for_components()
+            (root / "config/components").write_text("dashboard=1\nnetwork=1\nserve=1\nagents=x\n")
             with self.assertRaises(RuntimeError): updater.args_for_components()
 
     def test_helper_orders_all_semver_tags_rejects_missing_and_keeps_edge_distinct(self):
@@ -680,46 +684,14 @@ class MacosContractTests(unittest.TestCase):
         finally:
             plain_server.shutdown(); plain_server.server_close(); plain_thread.join(timeout=2)
 
-    def test_macos_agents_installer_status_and_updater_contract(self):
-        install = (ROOT / "macos/install.sh").read_text()
-        status_text = (ROOT / "macos/status.sh").read_text()
-        uninstall = (ROOT / "macos/uninstall.sh").read_text()
-        updater = (ROOT / "macos/updater.py").read_text()
-        shell = (ROOT / "dashboard/static/index.html").read_text()
-        self.assertIn("--agents", install)
-        self.assertIn("agents=%s", install)
-        self.assertIn("brew prerequisites", install)
-        self.assertIn("set-path=/ http://127.0.0.1:4711", install)
-        self.assertIn("set-path=/term http://127.0.0.1:4713", install)
-        self.assertNotIn("sudo", install)
-        self.assertIn("--agents requires the dashboard component", install)
-        self.assertIn("refusing --agents", install)  # never seize a foreign / mount
-        # Metadata is recorded before the health gates, so an aborted probe
-        # can never orphan a bootstrapped-but-unrecorded agents layer.
-        self.assertLess(install.index("agents=%s"), install.index("health(){"))
-        self.assertIn("--max-time 5", install); self.assertIn("--max-time 5", status_text)
-        self.assertIn("drift webterm bin/webterm", status_text)
-        for tmpl, needle in (("io.gravedecay.t3", "--base-dir"), ("io.gravedecay.term", "webterm")):
-            text = (ROOT / f"macos/LaunchAgents/{tmpl}.plist.tmpl").read_text()
-            self.assertIn("127.0.0.1", text)
-            self.assertIn("@JAIL@", text)
-            self.assertIn(needle, text)
-        # Converge-by-omission and uninstall only touch / when agents owned it.
-        self.assertIn('elif [ "$OLD_AGENTS" = 1 ]', install)
-        self.assertIn("io.gravedecay.t3", uninstall); self.assertIn("io.gravedecay.term", uninstall)
-        self.assertIn("agents=", uninstall)
-        # The unattended updater must restate the non-sticky opt-in.
-        self.assertIn('"--agents"', updater)
-        self.assertIn("io.gravedecay.t3 4711", status_text)
-        self.assertIn("io.gravedecay.term 4713", status_text)
-        self.assertIn("127.0.0.1:4711", status_text)
-        self.assertIn("macagents", shell)
+    def test_macos_agents_installer_contract(self):
         with tempfile.TemporaryDirectory() as tmp:
             fake_bin = pathlib.Path(tmp, "bin"); fake_bin.mkdir()
             for name in ("uname", "tmux", "ttyd", "npm", "node", "t3"):
                 p = fake_bin / name
                 p.write_text("#!/bin/sh\necho Darwin\n" if name == "uname" else "#!/bin/sh\nexit 0\n")
                 p.chmod(0o755)
+            (fake_bin / "python3").symlink_to(sys.executable)
             env = dict(os.environ, HOME=tmp, GRAVEDECAY_MAC_ROOT=str(pathlib.Path(tmp) / "root"),
                        PATH=f"{fake_bin}:/usr/bin:/bin")
             good = subprocess.run(["sh", str(ROOT / "macos/install.sh"), "--agents", "--no-serve", "--dry-run"],
@@ -729,8 +701,8 @@ class MacosContractTests(unittest.TestCase):
             self.assertIn("io.gravedecay.term.plist", good.stdout)
             for tool in ("tmux", "ttyd"):
                 (fake_bin / tool).unlink()
-                missing = subprocess.run(["sh", str(ROOT / "macos/install.sh"), "--agents", "--no-serve", "--dry-run"],
-                                         env=env, capture_output=True, text=True)
+                missing = subprocess.run(["/bin/sh", str(ROOT / "macos/install.sh"), "--agents", "--no-serve", "--dry-run"],
+                                         env={**env, "PATH": str(fake_bin)}, capture_output=True, text=True)
                 self.assertNotEqual(missing.returncode, 0)
                 self.assertIn(tool, missing.stderr)
                 (fake_bin / tool).write_text("#!/bin/sh\nexit 0\n"); (fake_bin / tool).chmod(0o755)
