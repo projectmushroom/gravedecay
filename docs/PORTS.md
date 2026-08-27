@@ -34,6 +34,11 @@ Dev servers still bind loopback; `grave preview <port>` runs `tailscale serve
 served at the port root, not a path, so HMR/websockets/absolute URLs work with
 no per-project config. Previews persist until `grave preview off <port>`.
 
+On macOS the dashboard may read containers from the active standard Docker CLI
+context, but it creates no Docker listener or backing port. Any existing
+container port remains its runtime's responsibility and must be loopback-only
+before it is deliberately published over the tailnet.
+
 T3 Connect (`grave t3 connect full`) adds **no listener**: the T3 server
 opens an outbound `cloudflared` tunnel to upstream's relay. It widens the
 box's reachability without touching this table — the invariant for it lives

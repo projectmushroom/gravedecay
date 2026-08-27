@@ -489,17 +489,21 @@ def collect_services():
 
 
 def collect_docker():
-    rc, out, err = sh(["docker", "ps", "-a", "--format",
-                       "{{.Names}}\t{{.State}}\t{{.Status}}\t{{.Label \"com.docker.compose.project\"}}"])
-    if rc != 0:
-        return {"error": "docker unavailable (gaming mode?)", "containers": []}
-    rows = []
-    for line in out.splitlines():
-        f = line.split("\t")
-        if len(f) >= 3:
-            rows.append({"name": f[0], "state": f[1], "status": f[2],
-                         "project": f[3] if len(f) > 3 else ""})
-    return {"error": None, "containers": sorted(rows, key=lambda r: (r["project"], r["name"]))}
+    def fetch():
+        cmd = ["docker", "ps", "-a", "--format",
+               "{{.Names}}\t{{.State}}\t{{.Status}}\t{{.Label \"com.docker.compose.project\"}}"]
+        rc, out, err = sh(cmd, timeout=3) if MACOS else sh(cmd)
+        if rc != 0:
+            error = "not managed on macOS" if MACOS else "docker unavailable (gaming mode?)"
+            return {"error": error, "containers": []}
+        rows = []
+        for line in out.splitlines():
+            f = line.split("\t")
+            if len(f) >= 3:
+                rows.append({"name": f[0], "state": f[1], "status": f[2],
+                             "project": f[3] if len(f) > 3 else ""})
+        return {"error": None, "containers": sorted(rows, key=lambda r: (r["project"], r["name"]))}
+    return cached("macos-docker", 15, fetch) if MACOS else fetch()
 
 
 def collect_tmux():
@@ -1816,7 +1820,8 @@ def t3_connect_state():
 
 def state(headers):
     if MACOS:
-        # No T3, terminal, Docker, privileged controls, or Linux data on Mac.
+        # No T3, terminal, Docker management, privileged controls, or Linux
+        # data on Mac.
         # Unlike machine vitals, project names, commit subjects and integration
         # data are owner-private.  Localhost is trusted; a Serve viewer must
         # exactly match the installer-configured local Tailscale login.
@@ -1848,7 +1853,7 @@ def state(headers):
                 "keepalive": None, "apps": list(APPS), "settings": settings,
                 "github": private["github"], "linear": private["linear"], "ci": private["ci"],
                 "usage": None, "notify": None, "services": collect_services(),
-                "docker": {"error": "not managed on macOS", "containers": []},
+                "docker": collect_docker(),
                 # Session names are owner-private like the rest of the work
                 # plane; killing them is POST-gated separately.
                 "tmux": collect_tmux() if MACOS_AGENTS and owner else [],

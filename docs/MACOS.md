@@ -8,6 +8,13 @@ rules, SSH, or Tailscale; T3 and ttyd are also unmanaged unless you opt into
 the agents layer (below). Tailscale is optional for localhost-only
 use; install and sign into the official app when publishing tailnet paths.
 
+If OrbStack or Colima is already installed (Docker Desktop also works) and its
+standard `docker` CLI context works, the dashboard read-only lists its
+containers. The companion never installs, starts, stops, or otherwise manages
+Docker; an unavailable or unusable CLI simply shows `not managed on macOS`.
+Publish any container ports to `127.0.0.1` only, then expose them deliberately
+through Tailscale if needed.
+
 From a source checkout, run `macos/install.sh`. It uses no `sudo`, installs
 LaunchAgents and logs under `~/Library/Application Support/Gravedecay`, and
 normally publishes only `/grave` and `/net` through the already-installed
@@ -38,7 +45,7 @@ accepts an explicit Linear API key for assigned-to-me issues; the key is stored
 locally with owner-only settings writes and is never returned to the browser.
 
 Without the opt-in agents layer below, the dashboard intentionally has no T3
-pairing/connect, update/restart, terminal, Docker, gaming, reboot, journal,
+pairing/connect, update/restart, terminal, Docker management, gaming, reboot, journal,
 or Linux service controls.
 
 ## The agents layer (opt-in): `--agents`
@@ -80,7 +87,7 @@ the endpoint allowlist restored). Live `tmux -L agents` sessions are never
 killed implicitly — converging off prints how to attach or end them, and
 neither uninstall nor `--purge` ever touches `~/Grave` (it is your work, not
 companion data). The unattended updater preserves the mode.
-Gaming/torpor, firewall management, Docker, and multi-user workspaces remain
+Gaming/torpor, firewall management, Docker management, and multi-user workspaces remain
 permanent non-goals on macOS.
 
 ## Native app publisher
