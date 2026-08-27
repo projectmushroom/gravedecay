@@ -90,8 +90,10 @@ above: T3, persistent agent sessions, Docker backing services, terminal,
 system controls, and the full dashboard. The Linux quickstarts below are for
 that installation.
 
-**Native macOS client** is a standalone Universal 2 app for macOS 15+ (Apple
-silicon and Intel) — not a web wrapper, not an appliance installer, but the
+**Native macOS client** is the *viewer* — an app you run, not a service you
+install: quit it and nothing of it keeps running. A standalone Universal 2 app
+for macOS 15+ (Apple silicon and Intel) — not a web wrapper, not an appliance
+installer, but the
 dashboard's grave dark rendered native: phosphor green on black, monospace
 throughout, a Dock app plus a skull menu-bar summary. It is remote-first:
 sign in to Tailscale and it discovers your graves. First run asks what this
@@ -101,16 +103,19 @@ later. Its window has native Graveyard, This Mac, Work, Network, Terminal,
 and Settings surfaces; Work is read-only Git state plus optional GitHub CLI
 and Linear links.
 
-Build the unsigned Universal 2 DMG — or grab the Apple CI artifact — per
-[clients/apple/README.md](clients/apple/README.md), which also covers
-Gatekeeper, signing, and notarization. **Share This Mac** never touches
+Download `Gravedecay-macOS.dmg` from the
+[latest release](https://github.com/projectmushroom/gravedecay/releases/latest)
+— or build the unsigned Universal 2 DMG yourself, or grab the Apple CI
+artifact, per [clients/apple/README.md](clients/apple/README.md), which also
+covers Gatekeeper, signing, and notarization. **Share This Mac** never touches
 Tailscale login or Serve: it listens on `127.0.0.1:4712` only while the app
 runs and shows you the exact Serve command to run yourself. Coexistence with
 the source companion below (which fails the native host closed if it owns
 the port) is covered in [the macOS guide](docs/MACOS.md).
 
-**macOS companion** is the closest a Mac comes to a raise: a user-scoped
-dashboard and network monitor — no sudo, and no T3,
+**macOS companion** is the opposite direction: it makes the Mac itself *serve*
+as a grave — background LaunchAgents, no app icon or window. The closest a Mac
+comes to a raise: a user-scoped dashboard and network monitor — no sudo, and no T3,
 Docker, terminal, firewall, or system services. With Tailscale signed in it
 publishes `/grave` and `/net`, and from then on the Mac sits in the graveyard
 like any other grave — discovered by the native app and the Omarchy widget,
