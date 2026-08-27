@@ -69,7 +69,9 @@ drift gravedecay.py dashboard/gravedecay.py "$dash"
 drift gravenet.py dashboard/gravenet.py "$net"
 NOTIFY_ENV="$ROOT/config/secrets/notify.env"
 if [ -f "$NOTIFY_ENV" ]; then
-  perm=$( { stat -f %Lp "$NOTIFY_ENV" || stat -c %a "$NOTIFY_ENV"; } 2>/dev/null )
+  # GNU stat first: its -c errors cleanly on BSD, while BSD's -f "succeeds"
+  # on GNU by dumping filesystem status instead of the permission bits.
+  perm=$( { stat -c %a "$NOTIFY_ENV" || stat -f %Lp "$NOTIFY_ENV"; } 2>/dev/null )
   if [ "$perm" = 600 ]; then echo "ntfy secret: private (600)"; else echo "ntfy secret: must be chmod 600 (is ${perm:-unknown})"; rc=1; fi
   # Probe without publishing: the poll endpoint exercises the URL and auth
   # without paging the phone on every doctor run.
