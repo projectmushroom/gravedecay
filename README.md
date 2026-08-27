@@ -116,8 +116,7 @@ publishes `/grave` and `/net`, and from then on the Mac sits in the graveyard
 like any other grave — discovered by the native app and the Omarchy widget,
 its dashboard reachable from any tailnet browser.
 
-Once the planned `projectmushroom/homebrew-gravedecay` tap publishes this
-release template, install with:
+The `projectmushroom/homebrew-gravedecay` tap is the normal install path:
 
 ```sh
 brew install projectmushroom/gravedecay/gravedecay-companion

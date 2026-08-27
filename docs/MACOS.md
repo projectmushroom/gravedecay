@@ -15,9 +15,7 @@ Docker; an unavailable or unusable CLI simply shows `not managed on macOS`.
 Publish any container ports to `127.0.0.1` only, then expose them deliberately
 through Tailscale if needed.
 
-Homebrew will be the normal install path when the planned
-`projectmushroom/homebrew-gravedecay` tap publishes the release template in
-this repository:
+The `projectmushroom/homebrew-gravedecay` tap is the normal install path:
 
 ```sh
 brew install projectmushroom/gravedecay/gravedecay-companion
