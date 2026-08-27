@@ -7,11 +7,13 @@ on:
     branches: [master]
     paths:
       - "clients/apple/**"
+      - "clients/macos-menubar/**"
       - "!clients/apple/**.md"
       - ".github/workflows/apple.yml"
   pull_request:
     paths:
       - "clients/apple/**"
+      - "clients/macos-menubar/**"
       - "!clients/apple/**.md"
       - ".github/workflows/apple.yml"
 
@@ -34,6 +36,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Core tests (Darwin, includes TtydWebSocket)
         run: swift test --package-path clients/apple/GravedecayKit
+      - name: Test and build menu-bar fleet widget
+        run: |
+          swift test --package-path clients/macos-menubar
+          swift build --package-path clients/macos-menubar -c release
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate project
