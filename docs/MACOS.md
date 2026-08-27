@@ -12,8 +12,8 @@ LaunchAgents and logs under `~/Library/Application Support/Gravedecay`, and
 normally publishes only `/grave` and `/net` through the already-installed
 Tailscale CLI. It never changes the `/` Serve mount, so an official T3 app or
 T3 Connect remains outside its scope. Use `--dashboard-only`, `--network-only`,
-`--no-serve` (localhost only), `--root PATH` (an absolute descendant of your
-home directory), or `--dry-run`. Re-running is an
+`--no-serve` (localhost only), `--allow-sleep` (skip the keep-awake agent),
+`--root PATH` (an absolute descendant of your home directory), or `--dry-run`. Re-running is an
 update; changing components converges by unloading the omitted agent and
 removing its corresponding path mount.
 
@@ -70,11 +70,36 @@ user-scoped, no-sudo companion installs or depends on. Thermal is instead
 reported as nominal or throttled from `pmset -g therm`; desktop Macs simply
 have no battery card.
 
-Run `macos/status.sh` for a read-only doctor-lite: it checks selected
-LaunchAgents, loopback health, Serve paths, installed checkout/version/channel, and the detached updater. `macos/uninstall.sh --root PATH` unloads and removes its LaunchAgents (including the updater) and Serve
-path mounts. It preserves the Application Support data by default; `--purge`
+Run `macos/status.sh` for doctor-lite. Like `grave doctor` on the appliance,
+it is the contract: it exits non-zero when an invariant fails. It checks
+selected LaunchAgents loaded, loopback health, Serve path mounts matching the
+enabled components, installed checkout/version/channel, the detached updater
+and periodic doctor agents, the keep-awake agent and sleep assertion while
+serving, install drift (`gravedecay.py`/`gravenet.py` are copies — a managed
+checkout that moved on without a rerun fails the check), and ntfy secret
+hygiene/reachability when configured. The installed copy runs every 30
+minutes as `io.gravedecay.doctor`; with an ntfy topic configured a failing
+run pages you (`--page`, see [NOTIFICATIONS.md](NOTIFICATIONS.md)).
+
+`macos/uninstall.sh --root PATH` unloads and removes its LaunchAgents
+(including the updater, keep-awake and doctor agents) and Serve path mounts.
+It preserves the Application Support data by default; `--purge`
 explicitly removes it. Neither mode uninstalls Tailscale. Native-app DMG,
 signing, and notarization details live in [clients/apple/README.md](../clients/apple/README.md).
+
+## Staying awake while serving
+
+A Mac that publishes tailnet paths but idle-sleeps is worse than no server —
+the paths just go dark. When Serve is enabled the installer therefore loads
+`io.gravedecay.keepawake`, which holds a `caffeinate -si` assertion for as
+long as launchd runs; pass `--allow-sleep` (persisted across reruns) if you
+are on a laptop and *want* sleep. The no-sudo ceiling, honestly: caffeinate
+prevents idle sleep, but closing the lid still sleeps a MacBook unless it is
+on AC power in clamshell mode (external display + input device). Overriding
+lid-close sleep is `sudo pmset disablesleep 1` territory, which this
+user-scoped installer refuses — run it yourself if you accept the
+lid-thermals caveat. `status.sh` fails when serving is enabled, sleep is not
+opted out, and the agent or its assertion is missing.
 
 ## Updating the companion
 

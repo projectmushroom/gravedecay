@@ -317,6 +317,89 @@ class MacosContractTests(unittest.TestCase):
                                      env=env, capture_output=True, text=True)
             self.assertNotEqual(refused.returncode, 0)
 
+    def test_macos_reliability_keepawake_doctor_and_ntfy_contract(self):
+        install = (ROOT / "macos/install.sh").read_text()
+        status_text = (ROOT / "macos/status.sh").read_text()
+        uninstall = (ROOT / "macos/uninstall.sh").read_text()
+        grave = (ROOT / "macos/grave").read_text()
+        # Keep-awake ships with Serve, can be declined, and is never sudo.
+        self.assertIn("--allow-sleep", install)
+        self.assertIn("io.gravedecay.keepawake", install)
+        self.assertIn("keepawake=%s", install)
+        self.assertNotIn("sudo", install); self.assertNotIn("sudo", status_text)
+        keep = (ROOT / "macos/LaunchAgents/io.gravedecay.keepawake.plist.tmpl").read_text()
+        self.assertIn("caffeinate", keep); self.assertIn("-si", keep)
+        doctor = (ROOT / "macos/LaunchAgents/io.gravedecay.doctor.plist.tmpl").read_text()
+        self.assertIn("StartInterval", doctor); self.assertIn("status.sh", doctor); self.assertIn("--page", doctor)
+        for label in ("io.gravedecay.keepawake", "io.gravedecay.doctor"):
+            self.assertIn(label, uninstall); self.assertIn(label, status_text)
+        self.assertIn("cmp -s", status_text); self.assertIn("notify.env", status_text)
+        # The body never travels via -d, whose @ prefix reads local files.
+        self.assertIn("--data-raw", grave)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp); root = tmp_path / "root"
+            (root / "config/secrets").mkdir(parents=True); (root / "scripts").mkdir(); (root / "logs").mkdir()
+            (root / ".gravedecay-macos").write_text("")
+            fake = tmp_path / "bin"; fake.mkdir(); curl_log = tmp_path / "curl.log"
+            shims = {"launchctl": "exit 0",
+                     "curl": f'printf \'%s\\n\' "$@" >> "{curl_log}"; exit 0',
+                     "pmset": 'echo "pid 7(caffeinate): [0x0] PreventUserIdleSystemSleep named: keepawake"',
+                     "tailscale": 'printf "%s\\n" "https://mac.ts.net/grave proxy"'}
+            for name, body in shims.items():
+                p = fake / name; p.write_text("#!/bin/sh\n" + body + "\n"); p.chmod(0o755)
+            env = dict(os.environ, HOME=str(tmp_path), PATH=f"{fake}:/usr/bin:/bin", GRAVE_ROOT=str(root))
+            src = root / "repos/gravedecay"; (src / ".git").mkdir(parents=True); (src / "dashboard").mkdir()
+            (src / "dashboard/gravedecay.py").write_text("code"); (root / "scripts/gravedecay.py").write_text("code")
+            shutil.copy(ROOT / "macos/grave", root / "scripts/grave"); (root / "scripts/grave").chmod(0o700)
+            (root / "config/components").write_text("dashboard=1\nnetwork=0\nserve=1\nkeepawake=1\n")
+            run_status = lambda *extra: subprocess.run(
+                ["sh", str(ROOT / "macos/status.sh"), "--root", str(root), *extra],
+                env=env, capture_output=True, text=True)
+            healthy = run_status()
+            self.assertEqual(healthy.returncode, 0, healthy.stdout + healthy.stderr)
+            # A copy the managed checkout moved past is a failing contract.
+            (root / "scripts/gravedecay.py").write_text("stale")
+            drifted = run_status()
+            self.assertNotEqual(drifted.returncode, 0); self.assertIn("drifted", drifted.stdout)
+            (root / "scripts/gravedecay.py").write_text("code")
+            # Opting out of keep-awake is honored; pre-keepawake metadata on a
+            # serving Mac is enforced (fails loudly when the agent is missing).
+            (root / "config/components").write_text("dashboard=1\nnetwork=0\nserve=1\nkeepawake=0\n")
+            opted = run_status()
+            self.assertEqual(opted.returncode, 0, opted.stdout + opted.stderr); self.assertIn("opted out", opted.stdout)
+            (fake / "launchctl").write_text('#!/bin/sh\ncase "$*" in *keepawake*) exit 1;; *) exit 0;; esac\n')
+            (root / "config/components").write_text("dashboard=1\nnetwork=0\nserve=1\n")
+            missing = run_status()
+            self.assertNotEqual(missing.returncode, 0); self.assertIn("may idle-sleep", missing.stdout)
+            (fake / "launchctl").write_text("#!/bin/sh\nexit 0\n")
+            (root / "config/components").write_text("dashboard=1\nnetwork=0\nserve=1\nkeepawake=1\n")
+            # grave notify: unconfigured --event is a silent success, direct use says how to set up.
+            quiet = subprocess.run(["python3", str(ROOT / "macos/grave"), "notify", "--event", "doctor", "t"],
+                                   env=env, capture_output=True, text=True)
+            self.assertEqual(quiet.returncode, 0); self.assertEqual(quiet.stdout, "")
+            unconfigured = subprocess.run(["python3", str(ROOT / "macos/grave"), "notify", "t"],
+                                          env=env, capture_output=True, text=True)
+            self.assertNotEqual(unconfigured.returncode, 0); self.assertIn("notify.env", unconfigured.stderr)
+            # Configured: header values are CR/LF-stripped, priority pinned, token attached.
+            notify_env = root / "config/secrets/notify.env"
+            notify_env.write_text("NTFY_URL=https://ntfy.example/topic\nNTFY_TOKEN=tk_x\n"); notify_env.chmod(0o644)
+            loose = run_status()
+            self.assertNotEqual(loose.returncode, 0); self.assertIn("chmod 600", loose.stdout)
+            notify_env.chmod(0o600)
+            secure = run_status()
+            self.assertEqual(secure.returncode, 0, secure.stdout + secure.stderr); self.assertIn("ntfy channel: reachable", secure.stdout)
+            sent = subprocess.run(["python3", str(ROOT / "macos/grave"), "notify", "--priority", "u;rgent", "ti\ntle", "body", "words"],
+                                  env=env, capture_output=True, text=True)
+            self.assertEqual(sent.returncode, 0, sent.stderr)
+            curl_args = curl_log.read_text()
+            self.assertIn("Title: ti tle", curl_args); self.assertIn("Priority: default", curl_args)
+            self.assertIn("Authorization: Bearer tk_x", curl_args); self.assertIn("body words", curl_args)
+            # A failing contract with --page routes through grave notify --event doctor.
+            (root / "scripts/gravedecay.py").write_text("stale"); curl_log.write_text("")
+            paged = run_status("--page")
+            self.assertNotEqual(paged.returncode, 0)
+            self.assertIn("macOS doctor-lite failing", curl_log.read_text())
+
     def test_serve_installer_derives_the_exact_local_tailscale_login_or_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             fake_bin = pathlib.Path(tmp, "bin"); fake_bin.mkdir()
@@ -482,12 +565,12 @@ class MacosContractTests(unittest.TestCase):
             home=tmp_path/"home";home.mkdir(); root=home/"Grave Root"; env=dict(os.environ,HOME=str(home),PATH=f"{fake}:/usr/bin:/bin")
             install=["sh",str(linked/"macos/install.sh"),"--no-serve","--root",str(root)]
             first=subprocess.run(install,env=env,capture_output=True,text=True); self.assertEqual(first.returncode,0,first.stderr)
-            self.assertTrue((root/"repos/gravedecay/.git").exists()); self.assertTrue((root/".gravedecay-macos").exists()); self.assertEqual((root/"config/components").read_text(),"dashboard=1\nnetwork=1\nserve=0\n")
+            self.assertTrue((root/"repos/gravedecay/.git").exists()); self.assertTrue((root/".gravedecay-macos").exists()); self.assertEqual((root/"config/components").read_text(),"dashboard=1\nnetwork=1\nserve=0\nkeepawake=1\n")
             meta=json.loads((root/"config/release.json").read_text()); self.assertEqual(meta["current"],""); self.assertEqual(meta["kind"],"development")
             self.assertTrue((root/"scripts/grave").is_file()); self.assertTrue((root/"scripts/updater.py").is_file()); self.assertTrue((home/"Library/LaunchAgents/io.gravedecay.updater.plist").is_file()); self.assertEqual((home/".local/bin/grave").resolve(),(root/"scripts/grave").resolve())
             second=subprocess.run(install,env=env,capture_output=True,text=True); self.assertEqual(second.returncode,0,second.stderr)
             (root/"config/components").write_text("dashboard=1\nnetwork=0\nserve=0\n")
-            preserved=subprocess.run(install,env=env,capture_output=True,text=True); self.assertEqual(preserved.returncode,0,preserved.stderr); self.assertEqual((root/"config/components").read_text(),"dashboard=1\nnetwork=0\nserve=0\n")
+            preserved=subprocess.run(install,env=env,capture_output=True,text=True); self.assertEqual(preserved.returncode,0,preserved.stderr); self.assertEqual((root/"config/components").read_text(),"dashboard=1\nnetwork=0\nserve=0\nkeepawake=1\n")
             before=log.read_text(); updater=subprocess.run(["sh",str(root/"repos/gravedecay/macos/install.sh"),"--no-serve","--root",str(root)],env=dict(env,GRAVEDECAY_UPDATER="1"),capture_output=True,text=True); self.assertEqual(updater.returncode,0,updater.stderr)
             self.assertNotIn("io.gravedecay.updater",log.read_text()[len(before):])
             for kind, mutate, expected in (("dirty",lambda p:(p/"README.md").write_text("dirty"),"current source has local changes"),("untrusted",lambda p:subprocess.run(["git","-C",str(p),"remote","set-url","origin","https://example.test/nope.git"],check=True),"current source origin is not trusted")):
