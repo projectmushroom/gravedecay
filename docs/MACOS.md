@@ -176,7 +176,7 @@ opted out, and the agent or its assertion is missing.
 
 ## Updating the companion
 
-After the tap is published, update the formula then re-run its command:
+To update a Homebrew install, update the formula then re-run its command:
 
 ```sh
 brew upgrade projectmushroom/gravedecay/gravedecay-companion
@@ -188,7 +188,7 @@ next run it stages that tag into the existing managed checkout before the
 normal converge, so an upgraded Cellar copy cannot be bypassed. Re-run with
 `--agents` when that mode is enabled. Formula releases are rendered from
 [`macos/homebrew/gravedecay-companion.rb.tmpl`](../macos/homebrew/gravedecay-companion.rb.tmpl)
-in the tap; this repository intentionally does not create or publish the tap.
+into the public tap.
 
 The first manual rerun from an older companion (including v0.17.0) bootstraps
 an installer-controlled checkout at `$GRAVE_ROOT/repos/gravedecay`, installs
