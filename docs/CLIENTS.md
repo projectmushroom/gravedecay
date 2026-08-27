@@ -32,6 +32,22 @@ over the same origins and never require new listening ports on the box.
   Tailscale node. Build and distribution details live in
   `clients/apple/README.md`.
 
+- **T3 activity in the dashboard** is opt-in. Create the owner-only
+  `$GRAVE_ROOT/config/secrets/t3-activity.env` (mode 600), then restart the
+  dashboard:
+
+  ```sh
+  T3_ACTIVITY_URL=https://mac.ts.net       # or http://127.0.0.1:4711
+  T3_ACTIVITY_TOKEN=...                    # T3 orchestration:read only
+  T3_ACTIVITY_ENVIRONMENT="Mac T3"
+  T3_ACTIVITY_ENVIRONMENT_ID=...
+  ```
+
+  A remote source must be tailnet HTTPS. The dashboard polls T3's shell
+  projection every few seconds and links to the thread; an expired/revoked
+  bearer renders as unavailable until it is re-paired/replaced. This is
+  dashboard-only metadata, never a notification or peer-summary feed.
+
 - **Omarchy 4 / Quattro** — `clients/omarchy/` is a native Quickshell bar
   widget. It reads local `tailscale status --json`, probes online peers at
   `/grave/api/v1/summary`, and keeps only reachable summaries in shell memory.

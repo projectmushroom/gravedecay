@@ -38,6 +38,7 @@ source "$CONF"
 
 LOG_FILE="$GRAVE_ROOT/logs/grave.log"
 NOTIFY_ENV="$GRAVE_ROOT/config/secrets/notify.env"
+T3_ACTIVITY_ENV="$GRAVE_ROOT/config/secrets/t3-activity.env"
 PUSH_SUBS="$GRAVE_ROOT/config/push-subscriptions.json"
 AGENT_NOTIFY="$GRAVE_ROOT/scripts/grave-agent-notify"
 GAMEWATCH_PREFERENCE="$GRAVE_ROOT/config/gamewatch.preference"
@@ -1265,6 +1266,13 @@ cmd_doctor() { # grave doctor [--no-page]
   else
     say "  ${YLW}– t3code stopped (gaming mode?)${RST}"
   fi
+  if [[ -e "$T3_ACTIVITY_ENV" ]]; then
+    check "T3 activity secret is private" bash -c "[[ \$(stat -c %a '$T3_ACTIVITY_ENV') == 600 ]]"
+    check "T3 activity configuration valid" t3_activity_configured
+    if t3_activity_configured; then
+      check "T3 activity source readable" t3_activity_ok
+    fi
+  fi
   # --- T3 Connect: the mode file is the operator's declared intent; the CLI's
   # persisted state must match it, or a relay tunnel is running (or silently
   # dead) without anyone having decided that. See docs/SECURITY.md.
@@ -1488,6 +1496,8 @@ dashboard_manifest_ok() { dashboard_probe manifest | grep -q '"scope": "/"'; }
 dashboard_sw_ok() { dashboard_probe sw | grep -qi '^Service-Worker-Allowed: /'; }
 dashboard_offline_ok() { [[ "$(sha256sum "$GRAVE_ROOT/scripts/dashboard-static/offline.html" | cut -d' ' -f1 | cut -c-12)" == "$(dashboard_probe health | jq -r .sw)" ]]; }
 dashboard_push_ok() { dashboard_probe push-key | jq -e .ok >/dev/null; }
+t3_activity_configured() { local url; [[ -r "$T3_ACTIVITY_ENV" ]] || return; url=$(sed -n 's/^T3_ACTIVITY_URL=//p' "$T3_ACTIVITY_ENV" | head -1); [[ "$url" =~ ^http://(127\.0\.0\.1|localhost)(:[0-9]+)?/?$ || "$url" =~ ^https://[A-Za-z0-9.-]+\.ts\.net(:[0-9]+)?/?$ ]] && grep -q '^T3_ACTIVITY_TOKEN=.' "$T3_ACTIVITY_ENV" && grep -q '^T3_ACTIVITY_ENVIRONMENT=.' "$T3_ACTIVITY_ENV" && grep -q '^T3_ACTIVITY_ENVIRONMENT_ID=.' "$T3_ACTIVITY_ENV"; }
+t3_activity_ok() { local url token; url=$(sed -n 's/^T3_ACTIVITY_URL=//p' "$T3_ACTIVITY_ENV" | head -1); token=$(sed -n 's/^T3_ACTIVITY_TOKEN=//p' "$T3_ACTIVITY_ENV" | head -1); { printf 'url = "%s/api/orchestration/shell"\nfail\nsilent\nmax-time = 3\nheader = "Authorization: Bearer %s"\n' "${url%/}" "$token"; } | curl --config - | jq -e '.projects|type == "array"' >/dev/null; }
 legacy_t3_disabled() { ! systemctl is-enabled --quiet t3code && ! systemctl is-active --quiet t3code; }
 legacy_terminal_disabled() { ! systemctl is-enabled --quiet gravedecay-term && ! systemctl is-active --quiet gravedecay-term; }
 workspace_doctor_ok() {

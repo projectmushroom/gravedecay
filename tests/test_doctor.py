@@ -62,6 +62,15 @@ class DoctorContractTests(unittest.TestCase):
         self.assertIn('/api/v1/summary', GRAVE)
         self.assertIn('.product == \\"gravedecay\\" and .api_version == 1', GRAVE)
 
+    def test_t3_activity_doctor_keeps_the_source_boundary_and_bearer_off_argv(self):
+        self.assertIn('t3_activity_configured()', GRAVE)
+        self.assertIn('127\\.0\\.0\\.1|localhost', GRAVE)
+        self.assertIn('\\.ts\\.net', GRAVE)
+        self.assertIn('curl --config -', GRAVE)
+        self.assertNotIn('curl -fsS --max-time 3 -H "Authorization: Bearer $token"', GRAVE)
+        self.assertIn('if [[ -e "$T3_ACTIVITY_ENV" ]]; then', GRAVE)
+        self.assertIn('check "T3 activity configuration valid" t3_activity_configured', GRAVE)
+
     def test_workspace_doctor_runs_through_the_root_helper(self):
         # Regression #45: run unprivileged the workspace doctor hits root-owned
         # 0700 paths and fails on a healthy box. Route it through sudo like every

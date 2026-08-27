@@ -573,6 +573,7 @@ body.portable #sec-notify{display:none!important}
   </div>
   <div class="panel" data-panel="usage"><h2>🧾 Agent usage</h2><table id="usage"></table></div>
   <div class="panel" data-panel="tmux"><h2>🤖 Agent sessions — tap to open</h2><table id="tmux"></table></div>
+  <div class="panel" data-panel="t3activity"><h2>🛰️ T3 activity</h2><table id="t3activity"><tr><td class="dim">not configured</td></tr></table></div>
   <div class="panel" data-panel="sessions"><h2>📜 Session history</h2><table id="sessions"></table></div>
   <div class="panel" data-panel="inbox"><h2>🔔 Inbox — pages this box sent</h2><div id="inbox"></div></div>
   <div class="panel" data-panel="repos"><h2>📦 Repos</h2><table id="repos"></table></div>
@@ -671,12 +672,12 @@ const appUrl=u=>portableCompanion?u:(macosCompanion&&location.port&&u==='/net/')
 // else null. Gates the ⚡ skip-perms toggle and the -yolo session rewrite.
 const agentArg=u=>{const m=/[?&]arg=(claude|codex)(?=$|&)/.exec(u||'');return m?m[1]:null;};
 const PANEL_NAMES={prs:'Pull requests',ci:'CI status',
-  linear:'Linear issues',usage:'Agent usage',tmux:'Agent sessions',repos:'Repos',
+  linear:'Linear issues',usage:'Agent usage',tmux:'Agent sessions',t3activity:'T3 activity',repos:'Repos',
   sessions:'Session history',inbox:'Inbox',
   stats:'Stats tiles',actions:'Actions',services:'Services',docker:'Docker',
   journal:'Journal errors'};
 const PANEL_TABS={prs:'work',ci:'work',linear:'work',usage:'work',
-  tmux:'work',repos:'work',sessions:'work',inbox:'work',
+  tmux:'work',t3activity:'work',repos:'work',sessions:'work',inbox:'work',
   stats:'system',actions:'system',services:'system',docker:'system',journal:'system'};
 let linearConfigured=false,lastMode=null,lastTmux=[];
 let cfg=null,cfgSrv='',envApps=[],layoutKey='';
@@ -981,7 +982,22 @@ async function poll(){
     const r=await fetch('api/state');
     if(!r.ok)throw new Error(`HTTP ${r.status}`);
     render(await r.json());
+    pollT3Activity(); // deliberately detached: a remote T3 must not hold up vitals
   }catch(e){pollFailures++;paintConnection();}
+}
+function renderT3Activity(a){
+  const table=$('t3activity'),rows=a.threads||[];
+  if(a.status!=='ok'&&a.status!=='stale'){
+    table.innerHTML=`<tr><td class="dim">T3 ${esc(a.status||'unreachable')}</td></tr>`;return;
+  }
+  table.innerHTML=rows.map(x=>{
+    const plan=x.plan?` · ${esc(x.plan.step)} (${esc(String(x.plan.completed))}/${esc(String(x.plan.total))})`:'';
+    const live=x.liveness?` · ${esc(x.liveness)}`:'';
+    return `<tr><td>${statusDot(x.phase==='failed'?'failed':x.phase==='completed'?'inactive':'active')}<a href="${esc(x.link)}" target="_blank" rel="noopener">${esc(x.environment)} · ${esc(x.project)} · ${esc(x.title)}</a></td><td class="dim">${esc(x.provider)}${x.model?' / '+esc(x.model):''} · ${esc(x.phase.replaceAll('_',' '))}${live}${plan}</td><td class="dim">${a.status==='stale'?'stale · ':''}${esc(x.updated_at||'')}</td></tr>`;
+  }).join('')||`<tr><td class="dim">${a.status==='stale'?'T3 snapshot stale':'no active T3 threads'}</td></tr>`;
+}
+async function pollT3Activity(){
+  try{const r=await fetch('api/t3-activity',{cache:'no-store'});if(r.ok)renderT3Activity(await r.json());}catch(_){}
 }
 function paintConnection(){
   const offline=!navigator.onLine,failed=pollFailures>0,c=$('connection');

@@ -39,6 +39,12 @@ people—not mutually hostile or public tenants.
 5. **Secrets** live in `$GRAVE_ROOT/config/secrets/*.env`, mode 600,
    git-ignored, delivered via systemd `EnvironmentFile=` — never in unit
    files, shell configs, or agent JSON configs (use `${VAR}` expansion).
+   The optional `t3-activity.env` contains only a short-lived
+   `orchestration:read` bearer plus a local-loopback or tailnet-HTTPS source;
+   it must never receive operate, terminal, admin, relay, or provider scope.
+   Grave polls only T3's shell projection, does not read T3 SQLite or request
+   transcripts/details, and keeps it behind the owner/workspace dashboard
+   boundary. Doctor probes it only when all four activity settings exist.
 6. **macOS companion updates** run as the logged-in user through a fixed
    LaunchAgent/helper path. Validated semantic tags/channels, a fixed trusted
    origin, argv execution, root-confined staging, and rollback prevent an

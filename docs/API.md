@@ -30,3 +30,14 @@ summary, not a full grave. `node.platform` is `linux`, `macos`,
 or `container`. Portable (`container`) summaries intentionally return `null`
 host resource and uptime values, retain `dashboard`, `t3`, and `terminal`
 links, and omit `network`.
+
+## Owner-only T3 activity
+
+`GET /grave/api/t3-activity` is an owner/workspace-gated dashboard endpoint,
+not a client API. It polls a configured T3 `GET /api/orchestration/shell`
+source with a three-second cache and two-second timeout, then returns only
+thread-shell metadata (identity, model, phase, plan progress, liveness, update
+time, and deep link). It is deliberately absent from `/api/v1/summary` and
+never requests a transcript or thread-detail endpoint. Upstream auth, timeout,
+or shape failures return `unauthorized`/`unreachable` there and never delay
+`/api/state`.

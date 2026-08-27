@@ -19,6 +19,7 @@
 
 import base64
 import binascii
+import calendar
 import concurrent.futures
 import functools
 import glob
@@ -53,7 +54,7 @@ MACOS_AGENTS = MACOS and os.environ.get("GRAVEDECAY_MACOS_AGENTS") == "1"
 # t3-pair), and session kill/scrollback for the tmux -L agents panel — every
 # POST still passes the exact-LoginName ALLOWED_USERS gate in do_POST.
 MACOS_GETS = frozenset((
-    "/", "/healthz", "/api/state", "/api/v1/summary", "/api/admin/releases",
+    "/", "/healthz", "/api/state", "/api/t3-activity", "/api/v1/summary", "/api/admin/releases",
     "/api/admin/update-status", "/manifest.webmanifest", "/sw.js",
     "/offline.html", "/apple-touch-icon.png", "/icon-180.png",
     "/icon-192.png", "/icon-512.png",
@@ -113,7 +114,7 @@ if MACOS and "GRAVEDECAY_APPS" not in os.environ:
 # exactly like actions). Stored beside the other appliance config.
 SETTINGS_PATH = os.path.join(GRAVE_ROOT, "config", "gravedecay-settings.json")
 DEFAULT_SETTINGS = {
-    "panel_order": ["prs", "linear", "ci", "tmux", "sessions", "usage",
+    "panel_order": ["prs", "linear", "ci", "t3activity", "tmux", "sessions", "usage",
                     "inbox", "repos",
                     "stats", "actions", "services", "docker", "journal"],
     "hidden_panels": [],   # panel ids to hide
@@ -126,6 +127,16 @@ DEFAULT_SETTINGS = {
                            # (hand off to the official T3 Code app, t3code://)
     "poll_ms": 5000,       # dashboard refresh interval
 }
+
+# Read-only T3 shell projection.  The optional EnvironmentFile in the service
+# supplies these values; keeping this a separate endpoint means a bad upstream
+# can never delay /api/state (and it can never leak into the public summary).
+T3_ACTIVITY_URL = os.environ.get("T3_ACTIVITY_URL", "").rstrip("/")
+T3_ACTIVITY_TOKEN = os.environ.get("T3_ACTIVITY_TOKEN", "")
+T3_ACTIVITY_ENVIRONMENT = os.environ.get("T3_ACTIVITY_ENVIRONMENT", "")
+T3_ACTIVITY_ENVIRONMENT_ID = os.environ.get("T3_ACTIVITY_ENVIRONMENT_ID", "")
+T3_ACTIVITY_TIMEOUT = 2
+T3_ACTIVITY_STALE = 30
 # The Mac companion deliberately keeps its project inventory outside its
 # Application Support root.  Expand this at startup so the settings UI shows a
 # useful, absolute default without requiring shell expansion from a browser.
@@ -147,6 +158,18 @@ def _safe_tile_url(url):
     except ValueError:
         return ""
     return url if scheme in ("http", "https") else ""
+
+
+def _t3_activity_configured():
+    """Only loopback HTTP or tailnet HTTPS can be a read-only T3 source."""
+    if not all((T3_ACTIVITY_URL, T3_ACTIVITY_TOKEN, T3_ACTIVITY_ENVIRONMENT,
+                T3_ACTIVITY_ENVIRONMENT_ID)):
+        return False
+    parsed = urllib.parse.urlparse(T3_ACTIVITY_URL)
+    if parsed.username or parsed.password or parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        return False
+    return (parsed.scheme == "https" and parsed.hostname and parsed.hostname.endswith(".ts.net")) or \
+        (parsed.scheme == "http" and parsed.hostname in ("127.0.0.1", "localhost"))
 
 
 def _sanitize_custom_apps(apps):
@@ -1818,6 +1841,97 @@ def t3_connect_state():
             "publish": bool(st and st.get("publishAgentActivity"))}
 
 
+def _t3_phase(thread):
+    """T3's published attention → failure → running → completion precedence."""
+    turn = thread.get("latestTurn") or {}
+    session = thread.get("session") or {}
+    if thread.get("hasPendingApprovals"):
+        return "waiting_approval"
+    if thread.get("hasPendingUserInput"):
+        return "waiting_input"
+    if session.get("status") == "error" or turn.get("state") == "error":
+        return "failed"
+    if session.get("status") == "starting":
+        return "starting"
+    if session.get("status") == "running" or turn.get("state") == "running" or \
+       thread.get("backgroundLiveness") in ("working", "monitoring"):
+        return "working"
+    if turn.get("state") == "completed" or \
+       (turn.get("state") == "interrupted" and turn.get("completedAt")) or \
+       session.get("status") in ("ready", "idle"):
+        return "completed"
+    return None
+
+
+def normalize_t3_activity(snapshot):
+    """Project the shell-only T3 response; unknown/additive fields stay inert."""
+    if not isinstance(snapshot, dict):
+        return []
+    projects = {p.get("id"): p.get("title", "project") for p in snapshot.get("projects", [])
+                if isinstance(p, dict)}
+    rows = []
+    for thread in snapshot.get("threads", []):
+        if not isinstance(thread, dict):
+            continue
+        session = thread.get("session") or {}
+        phase = _t3_phase(thread)
+        liveness = thread.get("backgroundLiveness")
+        if phase is None and liveness not in ("working", "monitoring"):
+            continue
+        progress = thread.get("planProgress")
+        progress = progress if isinstance(progress, dict) else {}
+        rows.append({
+            "environment": T3_ACTIVITY_ENVIRONMENT,
+            "project": str(projects.get(thread.get("projectId"), "project"))[:160],
+            "title": str(thread.get("title", "thread"))[:160],
+            "provider": str(session.get("providerName") or
+                            (thread.get("modelSelection") or {}).get("instanceId") or
+                            (thread.get("modelSelection") or {}).get("provider", ""))[:80],
+            "model": str((thread.get("modelSelection") or {}).get("model", ""))[:120],
+            "phase": phase,
+            "liveness": liveness if liveness in ("working", "monitoring") else None,
+            "plan": {"step": str(progress.get("step", ""))[:240],
+                     "completed": progress.get("completedSteps"), "total": progress.get("totalSteps")}
+                    if progress.get("step") else None,
+            "updated_at": thread.get("updatedAt"),
+            "link": f"{T3_ACTIVITY_URL}/threads/{urllib.parse.quote(T3_ACTIVITY_ENVIRONMENT_ID, safe='')}/{urllib.parse.quote(str(thread.get('id', '')), safe='')}",
+        })
+    return rows
+
+
+def t3_activity():
+    """Fetch the narrow T3 shell read model, never a transcript or detail API."""
+    if not _t3_activity_configured():
+        return {"status": "disabled", "threads": []}
+    def fetch():
+        request = urllib.request.Request(T3_ACTIVITY_URL + "/api/orchestration/shell",
+                                         headers={"Authorization": "Bearer " + T3_ACTIVITY_TOKEN,
+                                                  "Accept": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=T3_ACTIVITY_TIMEOUT) as response:
+                snapshot = json.load(response)
+        except urllib.error.HTTPError as error:
+            return {"status": "unauthorized" if error.code in (401, 403) else "unreachable", "threads": []}
+        except (OSError, ValueError, TimeoutError):
+            return {"status": "unreachable", "threads": []}
+        if not isinstance(snapshot, dict) or not isinstance(snapshot.get("projects"), list) \
+           or not isinstance(snapshot.get("threads"), list):
+            return {"status": "unreachable", "threads": []}
+        updated = snapshot.get("updatedAt")
+        try:
+            updated_at = calendar.timegm(time.strptime(updated[:19], "%Y-%m-%dT%H:%M:%S"))
+        except (TypeError, ValueError):
+            return {"status": "unreachable", "threads": []}
+        stale = time.time() - updated_at > T3_ACTIVITY_STALE
+        try:
+            threads = normalize_t3_activity(snapshot)
+        except (AttributeError, TypeError):
+            return {"status": "unreachable", "threads": []}
+        return {"status": "stale" if stale else "ok", "updated_at": updated,
+                "threads": threads}
+    return cached("t3-activity", 3, fetch)
+
+
 def state(headers):
     if MACOS:
         # No T3, terminal, Docker management, privileged controls, or Linux
@@ -2077,6 +2191,14 @@ class Handler(BaseHTTPRequestHandler):
             return True
         return False
 
+    def _activity_forbidden(self):
+        # The identity gateway has already selected this workspace and stripped
+        # the spoofable tailnet headers.  Owner dashboards retain their normal
+        # exact-login gate; neither path is a public/read-only status route.
+        if BACKEND_TOKEN and self.headers.get("X-Grave-Workspace"):
+            return False
+        return self._forbidden()
+
     def _backend_forbidden(self, path):
         if path == "/healthz":
             return False
@@ -2327,6 +2449,10 @@ class Handler(BaseHTTPRequestHandler):
             }))
         elif p == "/api/state":
             self._send(200, json.dumps(state(self.headers)))
+        elif p == "/api/t3-activity":
+            if self._activity_forbidden():
+                return
+            self._send(200, json.dumps(t3_activity()))
         elif p == "/api/v1/summary":
             self._send(200, json.dumps(summary()))
         elif p == "/api/admin/releases":
