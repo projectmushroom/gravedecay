@@ -14,7 +14,7 @@ fi
 TS=$(command -v tailscale || true); [ -n "$TS" ] || [ ! -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ] || TS=/Applications/Tailscale.app/Contents/MacOS/Tailscale
 run(){ if [ "$DRY" = 1 ]; then printf 'dry-run: '; printf '%s ' "$@"; printf '\n'; else "$@"; fi; }
 uid=$(id -u); agents="$HOME/Library/LaunchAgents"
-for label in io.gravedecay.dashboard io.gravedecay.network io.gravedecay.updater; do plist="$agents/$label.plist"; [ -e "$plist" ] && run launchctl bootout "gui/$uid" "$plist" || true; run rm -f "$plist"; done
+for label in io.gravedecay.dashboard io.gravedecay.network io.gravedecay.updater io.gravedecay.keepawake io.gravedecay.doctor; do plist="$agents/$label.plist"; [ -e "$plist" ] && run launchctl bootout "gui/$uid" "$plist" || true; run rm -f "$plist"; done
 [ "$(readlink "$HOME/.local/bin/grave" 2>/dev/null || true)" != "$ROOT/scripts/grave" ] || run rm -f "$HOME/.local/bin/grave"
 [ -z "$TS" ] || { run "$TS" serve --https=443 --set-path=/grave off; run "$TS" serve --https=443 --set-path=/net off; }
 if [ "$PURGE" = 1 ]; then

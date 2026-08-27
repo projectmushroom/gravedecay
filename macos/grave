@@ -4,6 +4,7 @@ import json, os, re, subprocess, sys, time
 ROOT=os.path.realpath(os.environ.get("GRAVE_ROOT",os.path.expanduser("~/Library/Application Support/Gravedecay")))
 ORIGIN="https://github.com/projectmushroom/gravedecay.git"; REPO=os.path.join(ROOT,"repos","gravedecay"); CONFIG=os.path.join(ROOT,"config")
 META=os.path.join(CONFIG,"release.json"); REQUEST=os.path.join(CONFIG,"update-request.json"); STATUS=os.path.join(CONFIG,"update-status.json"); LOCK=os.path.join(CONFIG,"update.lock"); TAG=re.compile(r"v(\d+)\.(\d+)\.(\d+)$")
+NOTIFY_ENV=os.path.join(CONFIG,"secrets","notify.env")
 def die(s): print(s,file=sys.stderr); raise SystemExit(2)
 def inside(p): return os.path.commonpath((ROOT,os.path.realpath(p)))==ROOT and os.path.realpath(p)!=ROOT
 def read(p,d={}):
@@ -56,12 +57,49 @@ def upgrade(args):
   write(STATUS,{"state":"failed","message":"launchd start failed: "+(r.stderr.strip() or r.stdout.strip())[:800]})
   die("launchd start failed")
  print("macOS update queued; the dashboard will reconnect")
+NOTIFY_USAGE="usage: grave notify [--event <name>] [--priority min|low|default|high|urgent] <title> [body...]"
+def notify(args):
+ # Port of the appliance's ntfy leg (docs/NOTIFICATIONS.md): the channel is
+ # just curl. Event sources (the periodic doctor agent) pass --event and must
+ # never fail or spam their caller — unconfigured means a silent success.
+ event=None; priority="default"
+ while args and args[0].startswith("--"):
+  if args[0]=="--event" and len(args)>1: event=args[1]; args=args[2:]
+  elif args[0]=="--priority" and len(args)>1: priority=args[1]; args=args[2:]
+  else: die(NOTIFY_USAGE)
+ if not args: die(NOTIFY_USAGE)
+ title,body=args[0],(" ".join(args[1:]) or event or args[0])
+ conf={}
+ try:
+  with open(NOTIFY_ENV) as f:
+   for line in f:
+    line=line.strip()
+    if line and not line.startswith("#") and "=" in line:
+     k,v=line.split("=",1); conf[k.strip()]=v.strip().strip("'\"")
+ except OSError: pass
+ url=conf.get("NTFY_URL","")
+ if not re.match(r"https?://",url):
+  if event: return
+  die("notifications are not configured; create %s (chmod 600) with:\n  NTFY_URL=https://ntfy.sh/<your-random-topic>\n  NTFY_TOKEN=tk_...   # optional (authed/self-hosted servers)"%NOTIFY_ENV)
+ # Headers are a protocol boundary — strip CR/LF from interpolated values and
+ # pin the priority to ntfy's vocabulary. The body travels as --data-raw,
+ # never -d, whose @ prefix would read local files into the request.
+ title=re.sub(r"[\r\n]"," ",title)
+ if priority not in ("min","low","default","high","urgent","1","2","3","4","5"): priority="default"
+ cmd=["curl","-sf","-m","10","-o","/dev/null","-H","Title: "+title,"-H","Priority: "+priority]
+ if conf.get("NTFY_TOKEN"): cmd+=["-H","Authorization: Bearer "+re.sub(r"[\r\n]","",conf["NTFY_TOKEN"])]
+ cmd+=["--data-raw",body,url]
+ if subprocess.run(cmd).returncode:
+  if event: return
+  die("ntfy delivery failed")
+ if not event: print("notification sent")
 def main():
- if len(sys.argv)<2: die("usage: grave releases [--json] | grave upgrade [--release|--edge|--tag vX.Y.Z] | grave update-status")
+ if len(sys.argv)<2: die("usage: grave releases [--json] | grave upgrade [--release|--edge|--tag vX.Y.Z] | grave update-status | grave notify <title> [body...]")
  c,a=sys.argv[1],sys.argv[2:]
  if c=="releases" and a in ([],["--json"]):
   x=releases(); print(json.dumps(x) if a else "\n".join(["gravedecay checkout: "+x["checkout"]]+["  "+v for v in x["releases"]]))
  elif c=="upgrade": upgrade(a)
  elif c=="update-status" and not a: print(json.dumps(read(STATUS,{"state":"idle"})))
- else: die("usage: grave releases [--json] | grave upgrade [--release|--edge|--tag vX.Y.Z] | grave update-status")
+ elif c=="notify": notify(a)
+ else: die("usage: grave releases [--json] | grave upgrade [--release|--edge|--tag vX.Y.Z] | grave update-status | grave notify <title> [body...]")
 if __name__=="__main__": main()

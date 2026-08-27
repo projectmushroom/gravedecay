@@ -77,6 +77,29 @@ Every source calls `grave notify --event <class>`, a **silent no-op** when no
 channel is configured or the class is muted — the hooks and `OnFailure=`
 lines ship enabled on every box and cost nothing until you opt in.
 
+## The macOS companion — ntfy only
+
+The [macOS companion](MACOS.md) ports the ntfy leg (the channel is just
+curl); Web Push stays a Linux-appliance feature for now. Same shape, macOS
+paths:
+
+```sh
+install -m 600 /dev/null "$HOME/Library/Application Support/Gravedecay/config/secrets/notify.env"
+cat >> "$HOME/Library/Application Support/Gravedecay/config/secrets/notify.env" <<'EOF'
+NTFY_URL=https://ntfy.sh/<your-random-topic>
+# NTFY_TOKEN=tk_...   # optional: authed / self-hosted ntfy servers
+EOF
+grave notify "hello"   # the companion's grave — a test message
+```
+
+What pages you there: a failing `macos/status.sh` contract, checked every 30
+minutes by the `io.gravedecay.doctor` LaunchAgent — which covers crash-looping
+or unloaded agents, dead healthz, missing Serve mounts, a serving Mac that can
+idle-sleep, and install drift. Unconfigured is a silent no-op, exactly like
+the appliance; the secret is owner-only (600, doctor-lite enforces it) and is
+never read by the dashboard, so it cannot reach a browser. Agent session
+end/bell events arrive with the macOS agents layer (#157).
+
 ## The inbox — pushes are ephemeral, this isn't
 
 Every page that reaches a channel is also appended to

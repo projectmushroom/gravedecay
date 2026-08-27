@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>io.gravedecay.keepawake</string>
+  <!-- caffeinate holds PreventSystemSleep/PreventUserIdleSystemSleep for as
+       long as the agent runs; lid-close sleep is beyond any no-sudo tool
+       (docs/MACOS.md). Installed only while Serve is enabled. -->
+  <key>ProgramArguments</key><array><string>/usr/bin/caffeinate</string><string>-si</string></array>
+  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+</dict></plist>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>io.gravedecay.doctor</string>
+  <!-- Periodic doctor-lite run; --page routes a failing contract through
+       `grave notify --event doctor`, a silent no-op until an ntfy topic is
+       configured (docs/NOTIFICATIONS.md). -->
+  <key>ProgramArguments</key><array><string>/bin/sh</string><string>@ROOT@/scripts/status.sh</string><string>--root</string><string>@ROOT@</string><string>--page</string></array>
+  <key>EnvironmentVariables</key><dict><key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+  <key>StartInterval</key><integer>1800</integer>
+  <key>StandardOutPath</key><string>@ROOT@/logs/doctor.log</string>
+  <key>StandardErrorPath</key><string>@ROOT@/logs/doctor.error.log</string>
+</dict></plist>
