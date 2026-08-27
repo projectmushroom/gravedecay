@@ -15,6 +15,10 @@ over the same origins and never require new listening ports on the box.
      enforces the declared mode.
   The official apps drive T3 only — the dashboard (system overview, controls,
   files, terminal, gravenet) stays on the tailnet origin / PWA.
+  A Mac raised with the agents layer (`macos/install.sh --agents`,
+  docs/MACOS.md) serves the same origin layout (`/` → T3, `/term` →
+  terminal), so pairing tokens minted from its ⚙️ settings enroll phones and
+  the official apps exactly like an appliance.
 
 - **iOS / macOS** — `clients/apple/`. iOS uses webview panes for T3 and the
   dashboard. macOS 15+ is a standalone native SwiftUI Dock/menu-bar app:

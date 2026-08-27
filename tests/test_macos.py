@@ -565,12 +565,12 @@ class MacosContractTests(unittest.TestCase):
             home=tmp_path/"home";home.mkdir(); root=home/"Grave Root"; env=dict(os.environ,HOME=str(home),PATH=f"{fake}:/usr/bin:/bin")
             install=["sh",str(linked/"macos/install.sh"),"--no-serve","--root",str(root)]
             first=subprocess.run(install,env=env,capture_output=True,text=True); self.assertEqual(first.returncode,0,first.stderr)
-            self.assertTrue((root/"repos/gravedecay/.git").exists()); self.assertTrue((root/".gravedecay-macos").exists()); self.assertEqual((root/"config/components").read_text(),"dashboard=1\nnetwork=1\nserve=0\nkeepawake=1\n")
+            self.assertTrue((root/"repos/gravedecay/.git").exists()); self.assertTrue((root/".gravedecay-macos").exists()); self.assertEqual((root/"config/components").read_text(),"dashboard=1\nnetwork=1\nserve=0\nkeepawake=1\nagents=0\n")
             meta=json.loads((root/"config/release.json").read_text()); self.assertEqual(meta["current"],""); self.assertEqual(meta["kind"],"development")
             self.assertTrue((root/"scripts/grave").is_file()); self.assertTrue((root/"scripts/updater.py").is_file()); self.assertTrue((home/"Library/LaunchAgents/io.gravedecay.updater.plist").is_file()); self.assertEqual((home/".local/bin/grave").resolve(),(root/"scripts/grave").resolve())
             second=subprocess.run(install,env=env,capture_output=True,text=True); self.assertEqual(second.returncode,0,second.stderr)
             (root/"config/components").write_text("dashboard=1\nnetwork=0\nserve=0\n")
-            preserved=subprocess.run(install,env=env,capture_output=True,text=True); self.assertEqual(preserved.returncode,0,preserved.stderr); self.assertEqual((root/"config/components").read_text(),"dashboard=1\nnetwork=0\nserve=0\nkeepawake=1\n")
+            preserved=subprocess.run(install,env=env,capture_output=True,text=True); self.assertEqual(preserved.returncode,0,preserved.stderr); self.assertEqual((root/"config/components").read_text(),"dashboard=1\nnetwork=0\nserve=0\nkeepawake=1\nagents=0\n")
             before=log.read_text(); updater=subprocess.run(["sh",str(root/"repos/gravedecay/macos/install.sh"),"--no-serve","--root",str(root)],env=dict(env,GRAVEDECAY_UPDATER="1"),capture_output=True,text=True); self.assertEqual(updater.returncode,0,updater.stderr)
             self.assertNotIn("io.gravedecay.updater",log.read_text()[len(before):])
             for kind, mutate, expected in (("dirty",lambda p:(p/"README.md").write_text("dirty"),"current source has local changes"),("untrusted",lambda p:subprocess.run(["git","-C",str(p),"remote","set-url","origin","https://example.test/nope.git"],check=True),"current source origin is not trusted")):
@@ -609,6 +609,120 @@ class MacosContractTests(unittest.TestCase):
                 with self.assertRaises(urllib.error.HTTPError) as unavailable: post("/api/action",{}, {"Sec-Fetch-Site":"same-origin"})
                 self.assertEqual(unavailable.exception.code,404)
             finally: server.shutdown();server.server_close();thread.join(timeout=2)
+
+    def test_macos_agents_layer_reopens_exactly_the_gated_subset(self):
+        # Observability-only (no flag): everything stays amputated.
+        plain = load(ROOT / "dashboard/gravedecay.py", {"GRAVEDECAY_PLATFORM": "macos"})
+        self.assertEqual(plain.ACTIONS, {})
+        self.assertNotIn("t3", plain._summary_links())
+        dash = load(ROOT / "dashboard/gravedecay.py", {
+            "GRAVEDECAY_PLATFORM": "macos", "GRAVEDECAY_MACOS_AGENTS": "1",
+            "GRAVEDECAY_ALLOWED_USERS": "owner@example.test",
+        })
+        # Exactly pairing comes back — never a sudo/systemd action.
+        self.assertEqual(set(dash.ACTIONS), {"t3-pair"})
+        self.assertEqual(dash._summary_links()["t3"], "/")
+        self.assertEqual(dash._summary_links()["terminal"], "/term/")
+        # Sessions are owner-private in state; a foreign viewer sees none.
+        # (Stub the work collectors so state() stays hermetic and fast.)
+        dash.collect_macos_repo_inventory = lambda: {"root": "/x", "repos": [], "error": None}
+        dash.collect_macos_work = lambda _: {"github": {"login": None, "repos": [], "error": None},
+                                             "ci": {"rows": [], "error": None}}
+        dash.collect_linear = lambda: {"configured": False, "issues": [], "error": None}
+        dash.collect_services = lambda: []
+        dash.collect_system = lambda: {}
+        dash.collect_tmux = lambda: [{"name": "claude", "windows": 1, "attached": 0}]
+        owner_state = dash.state({"Tailscale-User-Login": "owner@example.test"})
+        self.assertEqual(owner_state["tmux"][0]["name"], "claude")
+        self.assertTrue(owner_state["macos_agents"])
+        self.assertEqual(dash.state({"Tailscale-User-Login": "other@example.test"})["tmux"], [])
+        kills = []
+        dash.sh = lambda cmd, timeout=10: (kills.append(cmd) or (0, "", ""))
+        server = dash.ThreadingHTTPServer(("127.0.0.1", 0), dash.Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        origin = f"http://127.0.0.1:{server.server_port}"
+        try:
+            def post(path, data, headers={}):
+                return urllib.request.urlopen(urllib.request.Request(
+                    origin + path, data=json.dumps(data).encode(),
+                    headers={"Content-Type": "application/json", "Sec-Fetch-Site": "same-origin", **headers},
+                    method="POST"), timeout=2)
+            self.assertEqual(post("/api/session-kill", {"name": "claude"}).status, 200)
+            self.assertEqual(kills[-1][:4], ["tmux", "-L", "agents", "kill-session"])
+            self.assertEqual(post("/api/session-capture", {"name": "claude"}).status, 200)
+            with self.assertRaises(urllib.error.HTTPError) as denied:
+                post("/api/session-kill", {"name": "claude"}, {"Tailscale-User-Login": "other@example.test"})
+            self.assertEqual(denied.exception.code, 403)
+            # /api/action exists but only knows t3-pair; the stream route is
+            # reachable (400 unknown-action, not the macOS 404 curtain).
+            with self.assertRaises(urllib.error.HTTPError) as unknown:
+                post("/api/action", {"action": "reboot"})
+            self.assertEqual(unknown.exception.code, 400)
+            with self.assertRaises(urllib.error.HTTPError) as stream:
+                urllib.request.urlopen(origin + "/api/action-stream?action=nope", timeout=2)
+            self.assertEqual(stream.exception.code, 400)
+        finally:
+            server.shutdown(); server.server_close(); thread.join(timeout=2)
+        # Without the flag the same routes stay behind the 404 curtain (the
+        # existing release-routes test covers /api/action; cover kill here).
+        plain_server = plain.ThreadingHTTPServer(("127.0.0.1", 0), plain.Handler)
+        plain_thread = threading.Thread(target=plain_server.serve_forever, daemon=True); plain_thread.start()
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as off:
+                urllib.request.urlopen(urllib.request.Request(
+                    f"http://127.0.0.1:{plain_server.server_port}/api/session-kill",
+                    data=b"{}", headers={"Content-Type": "application/json"}, method="POST"), timeout=2)
+            self.assertEqual(off.exception.code, 404)
+        finally:
+            plain_server.shutdown(); plain_server.server_close(); plain_thread.join(timeout=2)
+
+    def test_macos_agents_installer_status_and_updater_contract(self):
+        install = (ROOT / "macos/install.sh").read_text()
+        status_text = (ROOT / "macos/status.sh").read_text()
+        uninstall = (ROOT / "macos/uninstall.sh").read_text()
+        updater = (ROOT / "macos/updater.py").read_text()
+        shell = (ROOT / "dashboard/static/index.html").read_text()
+        self.assertIn("--agents", install)
+        self.assertIn("agents=%s", install)
+        self.assertIn("brew prerequisites", install)
+        self.assertIn("set-path=/ http://127.0.0.1:4711", install)
+        self.assertIn("set-path=/term http://127.0.0.1:4713", install)
+        self.assertNotIn("sudo", install)
+        for tmpl, needle in (("io.gravedecay.t3", "--base-dir"), ("io.gravedecay.term", "webterm")):
+            text = (ROOT / f"macos/LaunchAgents/{tmpl}.plist.tmpl").read_text()
+            self.assertIn("127.0.0.1", text)
+            self.assertIn("@JAIL@", text)
+            self.assertIn(needle, text)
+        # Converge-by-omission and uninstall only touch / when agents owned it.
+        self.assertIn('elif [ "$OLD_AGENTS" = 1 ]', install)
+        self.assertIn("io.gravedecay.t3", uninstall); self.assertIn("io.gravedecay.term", uninstall)
+        self.assertIn("agents=", uninstall)
+        # The unattended updater must restate the non-sticky opt-in.
+        self.assertIn('"--agents"', updater)
+        self.assertIn("io.gravedecay.t3 4711", status_text)
+        self.assertIn("io.gravedecay.term 4713", status_text)
+        self.assertIn("127.0.0.1:4711", status_text)
+        self.assertIn("macagents", shell)
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_bin = pathlib.Path(tmp, "bin"); fake_bin.mkdir()
+            for name in ("uname", "tmux", "ttyd", "npm", "t3"):
+                p = fake_bin / name
+                p.write_text("#!/bin/sh\necho Darwin\n" if name == "uname" else "#!/bin/sh\nexit 0\n")
+                p.chmod(0o755)
+            env = dict(os.environ, HOME=tmp, GRAVEDECAY_MAC_ROOT=str(pathlib.Path(tmp) / "root"),
+                       PATH=f"{fake_bin}:/usr/bin:/bin")
+            good = subprocess.run(["sh", str(ROOT / "macos/install.sh"), "--agents", "--no-serve", "--dry-run"],
+                                  env=env, capture_output=True, text=True)
+            self.assertEqual(good.returncode, 0, good.stderr)
+            self.assertIn("io.gravedecay.t3.plist", good.stdout)
+            self.assertIn("io.gravedecay.term.plist", good.stdout)
+            for tool in ("tmux", "ttyd"):
+                (fake_bin / tool).unlink()
+                missing = subprocess.run(["sh", str(ROOT / "macos/install.sh"), "--agents", "--no-serve", "--dry-run"],
+                                         env=env, capture_output=True, text=True)
+                self.assertNotEqual(missing.returncode, 0)
+                self.assertIn(tool, missing.stderr)
+                (fake_bin / tool).write_text("#!/bin/sh\nexit 0\n"); (fake_bin / tool).chmod(0o755)
 
     def test_marked_servers_smoke_without_launchd_or_tailscale(self):
         """Real local processes, temporary state only: no launchctl/Serve calls."""

@@ -309,13 +309,19 @@ body.gaming #foot{display:none}
   .topbar .meta{display:none}
   .apps{grid-template-columns:1fr}
 }
-/* macOS has a local-work dashboard but deliberately no Linux/T3 controls. */
-body.macos [data-panel="tmux"],body.macos [data-panel="sessions"],body.macos [data-panel="usage"],body.macos [data-panel="inbox"],
+/* macOS has a local-work dashboard but deliberately no Linux/T3 controls.
+   The opt-in agents layer (body.macagents) brings back exactly the agent
+   sessions panel plus the pairing / T3-tile settings; everything the Mac
+   still can't do (T3 Connect, notifications settings, sudo actions) stays
+   hidden unconditionally. Hiding is UI polish — the server allowlist is
+   the authorization boundary. */
+body.macos:not(.macagents) [data-panel="tmux"],body.macos [data-panel="sessions"],body.macos [data-panel="usage"],body.macos [data-panel="inbox"],
 body.macos [data-panel="docker"],
 body.macos [data-panel="journal"],body.macos #game-banner,body.macos #mode,
 body.macos #boot-mode-head,body.macos #boot-mode-row,body.macos #throttle-head,
 body.macos #throttle-row,body.macos #t3connect-head,body.macos #t3connect-row{display:none!important}
-body.macos .mac-linux-setting,body.macos .linear-create{display:none!important}
+body.macos:not(.macagents) .mac-linux-setting,body.macos .linear-create{display:none!important}
+body.macos .t3connect-only,body.macos #notify-head,body.macos #sec-notify{display:none!important}
 body:not(.macos) .mac-only-setting{display:none!important}
 body.macos [data-panel="actions"] .actions{display:none!important}
 /* Portable workspaces intentionally cannot observe or control their Docker host. */
@@ -761,6 +767,7 @@ function render(s){
   macosCompanion=s.platform==='macos';
   portableCompanion=s.platform==='container';
   document.body.classList.toggle('macos',macosCompanion);
+  document.body.classList.toggle('macagents',macosCompanion&&!!s.macos_agents);
   document.body.classList.toggle('portable',portableCompanion);
   if(macosCompanion&&!macUpdateSeen){macUpdateSeen=true;macUpdateStatus(true);}
   if(macosCompanion)document.querySelector('[data-panel="actions"] h2').textContent='⬆ Update Gravedecay';

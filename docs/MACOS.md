@@ -3,15 +3,18 @@
 A Mac never takes the full raise; the companion is how it joins the
 graveyard. It is a small, user-scoped install: the gravedecay dashboard on
 `127.0.0.1:4712` and the network monitor on `127.0.0.1:4714`. It is not the
-Linux appliance. It never installs or manages T3, Docker, ttyd, systemd,
-firewall rules, SSH, or Tailscale. Tailscale is optional for localhost-only
+Linux appliance. It never installs or manages Docker, systemd, firewall
+rules, SSH, or Tailscale; T3 and ttyd are also unmanaged unless you opt into
+the agents layer (below). Tailscale is optional for localhost-only
 use; install and sign into the official app when publishing tailnet paths.
 
 From a source checkout, run `macos/install.sh`. It uses no `sudo`, installs
 LaunchAgents and logs under `~/Library/Application Support/Gravedecay`, and
 normally publishes only `/grave` and `/net` through the already-installed
-Tailscale CLI. It never changes the `/` Serve mount, so an official T3 app or
+Tailscale CLI. Outside the opt-in agents layer it never changes the `/` Serve
+mount, so an official T3 app or
 T3 Connect remains outside its scope. Use `--dashboard-only`, `--network-only`,
+`--agents` (T3 + web terminal, see below),
 `--no-serve` (localhost only), `--allow-sleep` (skip the keep-awake agent),
 `--root PATH` (an absolute descendant of your home directory), or `--dry-run`. Re-running is an
 update; changing components converges by unloading the omitted agent and
@@ -34,8 +37,43 @@ enable remote results; GitHub data is never changed. The same settings section
 accepts an explicit Linear API key for assigned-to-me issues; the key is stored
 locally with owner-only settings writes and is never returned to the browser.
 
-The dashboard intentionally has no T3 pairing/connect, update/restart,
-terminal, Docker, gaming, reboot, journal, or Linux service controls.
+Without the opt-in agents layer below, the dashboard intentionally has no T3
+pairing/connect, update/restart, terminal, Docker, gaming, reboot, journal,
+or Linux service controls.
+
+## The agents layer (opt-in): `--agents`
+
+The observability-only default was written for a *personal* Mac, where any
+remote action surface implicitly exposes the whole HOME and signed-in
+identity. A Mac deliberately raised as a server (a mini in a drawer) can opt
+into the core of what makes gravedecay valuable — T3 Code, persistent
+`tmux -L agents` sessions, and the ttyd web terminal — none of which needs
+Linux:
+
+```sh
+macos/install.sh --agents
+```
+
+Prerequisites (this mode only): `brew install tmux ttyd node`. A missing one
+is a preflight error, never a half-install; `t3` is npm-installed if absent.
+Still no `sudo`, ever: two more user LaunchAgents run T3 Code on
+`127.0.0.1:4711` (`io.gravedecay.t3`) and ttyd on `127.0.0.1:4713`
+(`io.gravedecay.term`), and Serve adds `/` and `/term` so the origin layout
+matches the appliance — the PWA, the native client, and pairing links work
+unchanged. Pairing works exactly like Linux: ⚙️ settings → "🔑 New T3 pairing
+token". The dashboard's sessions panel lists `tmux -L agents` sessions, ✕
+kills them, and the launcher grows T3/Terminal/Claude/Codex tiles; every
+reopened endpoint stays behind the exact-`LoginName` `ALLOWED_USERS` gate the
+installer fails closed on. Agent sessions and T3's project root live in a
+dedicated `~/Grave` directory, not the whole HOME — but terminal access is
+still a shell as your Mac user (see [SECURITY.md](SECURITY.md)); for a
+dedicated mini, prefer a separate macOS user account.
+
+`--agents` is a per-run opt-in, not sticky: re-running without it converges
+back to observability-only (agents unloaded, `/` and `/term` mounts removed,
+the endpoint allowlist restored). The unattended updater preserves the mode.
+Gaming/torpor, firewall management, Docker, and multi-user workspaces remain
+permanent non-goals on macOS.
 
 ## Native app publisher
 

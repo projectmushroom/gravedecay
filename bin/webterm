@@ -39,6 +39,9 @@ case "$name" in
   *)      cmd=() ;;         # plain login shell
 esac
 
-# -A: attach if the session exists, create it if not
+# -A: attach if the session exists, create it if not.
+# ${cmd[@]+...}: plain-shell sessions leave cmd empty, and bash 3.2 (the
+# macOS /bin/bash the agents layer may run under) treats expanding an empty
+# array as an unbound variable under set -u.
 exec tmux -L "$TMUX_SOCKET" -f "${TMUX_CONF:-$GRAVE_ROOT/config/tmux.conf}" \
-  new-session -A -s "$name" "${cmd[@]}"
+  new-session -A -s "$name" ${cmd[@]+"${cmd[@]}"}

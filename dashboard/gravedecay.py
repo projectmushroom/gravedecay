@@ -42,6 +42,10 @@ PORT = int(os.environ.get("GRAVEDECAY_PORT", os.environ.get("DASH_PORT", "4712")
 GRAVE_ROOT = os.environ.get("GRAVE_ROOT", "/srv/dev")
 PLATFORM = os.environ.get("GRAVEDECAY_PLATFORM", "linux").lower()
 MACOS = PLATFORM == "macos"
+# Opt-in macOS agents layer (macos/install.sh --agents): the Mac serves T3
+# and the web terminal, so exactly the identity-gated pairing/session subset
+# of the endpoint allowlist reopens. Set only by the installer's LaunchAgent.
+MACOS_AGENTS = MACOS and os.environ.get("GRAVEDECAY_MACOS_AGENTS") == "1"
 PORTABLE = PLATFORM in ("container", "portable")
 BIND_HOST = "0.0.0.0" if PORTABLE else "127.0.0.1"
 # tmux socket carrying the agent sessions. Single-user uses "agents"; a workspace
@@ -256,9 +260,11 @@ ACTIONS = {
     "keepalive-off": [GRAVE, "keepalive", "off"],
 }
 # The source macOS companion is intentionally observability-only.  Keep this
-# gate server-side: hiding buttons is not an authorization boundary.
+# gate server-side: hiding buttons is not an authorization boundary.  The
+# opt-in agents layer reopens exactly pairing — no sudo/systemd action ever
+# exists on a Mac.
 if MACOS:
-    ACTIONS = {}
+    ACTIONS = {"t3-pair": ACTIONS["t3-pair"]} if MACOS_AGENTS else {}
 elif PORTABLE:
     # A portable workspace has no authority over its Docker host. Pairing and
     # tmux session endpoints stay useful; every host-mutating grave action is
@@ -991,7 +997,7 @@ def _summary_links():
     links = {"dashboard": (BASE or "") + "/"}
     if not PORTABLE and (not MACOS or any(a.get("url") == "/net/" for a in APPS)):
         links["network"] = "/net/"
-    if not MACOS:
+    if not MACOS or MACOS_AGENTS:
         links.update({"t3": "/", "terminal": "/term/"})
     return links
 
@@ -1022,7 +1028,10 @@ def _summary():
     tmux = []
     services = collect_services()
     containers_problem = 0
-    if not MACOS:
+    if MACOS:
+        if MACOS_AGENTS:
+            tmux = collect_tmux()
+    else:
         mode = "developer" if unit_state("t3code").get("active") == "active" else "gaming"
         tmux = collect_tmux()
         try:
@@ -1819,11 +1828,15 @@ def state(headers):
                                      "truncated": inventory.get("truncated", False)}}
         return {"host": HOST, "now": time.strftime("%H:%M:%S"),
                 "viewer": viewer or "local", "platform": "macos",
+                "macos_agents": MACOS_AGENTS,
                 "mode": "developer", "boot_mode": None, "gamewatch": None,
                 "keepalive": None, "apps": list(APPS), "settings": settings,
                 "github": private["github"], "linear": private["linear"], "ci": private["ci"],
                 "usage": None, "notify": None, "services": collect_services(),
-                "docker": {"error": "not managed on macOS", "containers": []}, "tmux": [],
+                "docker": {"error": "not managed on macOS", "containers": []},
+                # Session names are owner-private like the rest of the work
+                # plane; killing them is POST-gated separately.
+                "tmux": collect_tmux() if MACOS_AGENTS and owner else [],
                 "torpor": 0, "repos": private["repos"], "repo_scan": private["repo_scan"], "journal": [], "system": collect_system(),
                 "backups": {"count": 0, "latest": None}, "inbox": [], "agent_history": []}
     if PORTABLE:
@@ -2276,7 +2289,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self._backend_forbidden(p):
             return
-        if MACOS and p not in ("/", "/healthz", "/api/state", "/api/v1/summary", "/api/admin/releases", "/api/admin/update-status", "/manifest.webmanifest", "/sw.js", "/offline.html", "/apple-touch-icon.png", "/icon-180.png", "/icon-192.png", "/icon-512.png"):
+        macos_gets = ("/", "/healthz", "/api/state", "/api/v1/summary", "/api/admin/releases", "/api/admin/update-status", "/manifest.webmanifest", "/sw.js", "/offline.html", "/apple-touch-icon.png", "/icon-180.png", "/icon-192.png", "/icon-512.png")
+        # Agents layer: the pairing token streams over the same viewer- and
+        # CSRF-gated SSE console as on Linux (_stream_action re-checks both).
+        if MACOS_AGENTS:
+            macos_gets += ("/api/action-stream",)
+        if MACOS and p not in macos_gets:
             self._send(404, '{"error":"unavailable in macOS companion"}')
             return
         if p == "/api/action-stream":
@@ -2387,7 +2405,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self._backend_forbidden(p):
             return
-        if MACOS and p not in ("/api/settings", "/api/admin/upgrade"):
+        macos_posts = ("/api/settings", "/api/admin/upgrade")
+        if MACOS_AGENTS:
+            # Deliberate reopening for the agents layer, still behind the
+            # exact-LoginName ALLOWED_USERS gate just below: session kill and
+            # scrollback copy for the tmux -L agents panel, and /api/action
+            # (which on macOS only ever contains t3-pair).
+            macos_posts += ("/api/action", "/api/session-kill", "/api/session-capture")
+        if MACOS and p not in macos_posts:
             self._send(404, '{"error":"unavailable in macOS companion"}')
             return
         viewer = self.headers.get("Tailscale-User-Login")
