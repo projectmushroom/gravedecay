@@ -769,7 +769,7 @@ class MacosContractTests(unittest.TestCase):
         self.assertIn('gravedecay-mac install --agents', docs)
         self.assertIn('gravedecay-mac uninstall', docs)
         self.assertIn('--with-node --with-tmux --with-ttyd', docs)
-        self.assertIn('Homebrew will be the normal install path when the planned', docs)
+        self.assertIn('tap is the normal install path', docs)
         self.assertIn('brew install projectmushroom/gravedecay/gravedecay-companion', readme)
 
     def test_homebrew_tag_must_be_exact_semver(self):
