@@ -69,9 +69,17 @@ dedicated `~/Grave` directory, not the whole HOME — but terminal access is
 still a shell as your Mac user (see [SECURITY.md](SECURITY.md)); for a
 dedicated mini, prefer a separate macOS user account.
 
+The Claude/Codex tiles (and the `gh` re-auth shortcut) expect those CLIs to
+be installed separately — a tile whose command is missing just shows a dying
+session; install the CLI and reopen it. The installer refuses to seize a `/`
+Serve mount that something else already publishes.
+
 `--agents` is a per-run opt-in, not sticky: re-running without it converges
 back to observability-only (agents unloaded, `/` and `/term` mounts removed,
-the endpoint allowlist restored). The unattended updater preserves the mode.
+the endpoint allowlist restored). Live `tmux -L agents` sessions are never
+killed implicitly — converging off prints how to attach or end them, and
+neither uninstall nor `--purge` ever touches `~/Grave` (it is your work, not
+companion data). The unattended updater preserves the mode.
 Gaming/torpor, firewall management, Docker, and multi-user workspaces remain
 permanent non-goals on macOS.
 

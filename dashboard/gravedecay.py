@@ -46,6 +46,21 @@ MACOS = PLATFORM == "macos"
 # and the web terminal, so exactly the identity-gated pairing/session subset
 # of the endpoint allowlist reopens. Set only by the installer's LaunchAgent.
 MACOS_AGENTS = MACOS and os.environ.get("GRAVEDECAY_MACOS_AGENTS") == "1"
+# The macOS endpoint allowlists ARE the authorization boundary (hiding UI is
+# not); keep them module-level constants so they are auditable in one place.
+# The agents layer adds: the pairing SSE console (viewer- and CSRF-gated in
+# _stream_action), /api/action (whose macOS ACTIONS table only ever contains
+# t3-pair), and session kill/scrollback for the tmux -L agents panel — every
+# POST still passes the exact-LoginName ALLOWED_USERS gate in do_POST.
+MACOS_GETS = frozenset((
+    "/", "/healthz", "/api/state", "/api/v1/summary", "/api/admin/releases",
+    "/api/admin/update-status", "/manifest.webmanifest", "/sw.js",
+    "/offline.html", "/apple-touch-icon.png", "/icon-180.png",
+    "/icon-192.png", "/icon-512.png",
+) + (("/api/action-stream",) if MACOS_AGENTS else ()))
+MACOS_POSTS = frozenset(("/api/settings", "/api/admin/upgrade")
+                        + (("/api/action", "/api/session-kill", "/api/session-capture")
+                           if MACOS_AGENTS else ()))
 PORTABLE = PLATFORM in ("container", "portable")
 BIND_HOST = "0.0.0.0" if PORTABLE else "127.0.0.1"
 # tmux socket carrying the agent sessions. Single-user uses "agents"; a workspace
@@ -2289,12 +2304,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self._backend_forbidden(p):
             return
-        macos_gets = ("/", "/healthz", "/api/state", "/api/v1/summary", "/api/admin/releases", "/api/admin/update-status", "/manifest.webmanifest", "/sw.js", "/offline.html", "/apple-touch-icon.png", "/icon-180.png", "/icon-192.png", "/icon-512.png")
-        # Agents layer: the pairing token streams over the same viewer- and
-        # CSRF-gated SSE console as on Linux (_stream_action re-checks both).
-        if MACOS_AGENTS:
-            macos_gets += ("/api/action-stream",)
-        if MACOS and p not in macos_gets:
+        if MACOS and p not in MACOS_GETS:
             self._send(404, '{"error":"unavailable in macOS companion"}')
             return
         if p == "/api/action-stream":
@@ -2405,14 +2415,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self._backend_forbidden(p):
             return
-        macos_posts = ("/api/settings", "/api/admin/upgrade")
-        if MACOS_AGENTS:
-            # Deliberate reopening for the agents layer, still behind the
-            # exact-LoginName ALLOWED_USERS gate just below: session kill and
-            # scrollback copy for the tmux -L agents panel, and /api/action
-            # (which on macOS only ever contains t3-pair).
-            macos_posts += ("/api/action", "/api/session-kill", "/api/session-capture")
-        if MACOS and p not in macos_posts:
+        if MACOS and p not in MACOS_POSTS:
             self._send(404, '{"error":"unavailable in macOS companion"}')
             return
         viewer = self.headers.get("Tailscale-User-Login")
@@ -2443,8 +2446,13 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/api/settings":
             try:
                 if MACOS:
+                    # t3_tile/yolo_apps are UI preferences the settings modal
+                    # always includes in its payload (they ride in
+                    # DEFAULT_SETTINGS) — rejecting them made every real ⚙️
+                    # save 400 on macOS.
                     allowed = {"panel_order", "hidden_panels", "hidden_apps", "newtab_apps",
-                               "modal_apps", "custom_apps", "poll_ms", "repo_root", "linear_key"}
+                               "modal_apps", "custom_apps", "poll_ms", "repo_root", "linear_key",
+                               "t3_tile", "yolo_apps"}
                     if set(data) - allowed:
                         raise ValueError("macOS settings only accept UI preferences")
                     if "repo_root" in data:

@@ -27,7 +27,7 @@ case "$keep" in 0|1) ;; *) echo "invalid component metadata" >&2; exit 2;; esac
 case "$agentsmode" in 0|1) ;; *) echo "invalid component metadata" >&2; exit 2;; esac
 check(){ label=$1 port=$2 enabled=$3 path=${4:-/healthz}; [ "$enabled" = 1 ] || return 0
   if launchctl print "gui/$uid/$label" >/dev/null 2>&1; then echo "$label: loaded"; else echo "$label: not loaded"; rc=1; fi
-  if curl -fsS "http://127.0.0.1:$port$path" >/dev/null 2>&1; then echo ":$port health: ok"; else echo ":$port health: failed"; rc=1; fi; }
+  if curl -fsS --max-time 5 "http://127.0.0.1:$port$path" >/dev/null 2>&1; then echo ":$port health: ok"; else echo ":$port health: failed"; rc=1; fi; }
 check io.gravedecay.dashboard 4712 "$dash"; check io.gravedecay.network 4714 "$net"
 # t3/ttyd have no /healthz; their answering root page is the liveness signal.
 check io.gravedecay.t3 4711 "$agentsmode" /; check io.gravedecay.term 4713 "$agentsmode" /
@@ -75,6 +75,8 @@ drift(){ name=$1 rel=$2 enabled=$3; [ "$enabled" = 1 ] || return 0; [ -d "$SRC/.
   else echo "$name: drifted from the managed checkout (rerun macos/install.sh)"; rc=1; fi; }
 drift gravedecay.py dashboard/gravedecay.py "$dash"
 drift gravenet.py dashboard/gravenet.py "$net"
+# Every terminal session runs the copied webterm; stale copies serve silently.
+drift webterm bin/webterm "$agentsmode"
 NOTIFY_ENV="$ROOT/config/secrets/notify.env"
 if [ -f "$NOTIFY_ENV" ]; then
   # GNU stat first: its -c errors cleanly on BSD, while BSD's -f "succeeds"

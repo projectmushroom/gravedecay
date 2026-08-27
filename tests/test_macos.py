@@ -163,7 +163,11 @@ class MacosContractTests(unittest.TestCase):
                 with self.assertRaises(urllib.error.HTTPError) as bad:
                     post({"repo_root": "relative"})
                 self.assertIn("absolute path", bad.exception.read().decode())
-                with post({"repo_root": str(sites), "linear_key": "lin_private_test_key"}) as response:
+                # The settings modal always sends t3_tile/yolo_apps (they ride
+                # in DEFAULT_SETTINGS) — the macOS allowlist must accept them
+                # or every real ⚙️ save 400s.
+                with post({"repo_root": str(sites), "linear_key": "lin_private_test_key",
+                           "t3_tile": "app", "yolo_apps": []}) as response:
                     body = response.read().decode()
                 self.assertNotIn("lin_private_test_key", body)
                 self.assertIn(str(sites.resolve()), body)
@@ -688,6 +692,13 @@ class MacosContractTests(unittest.TestCase):
         self.assertIn("set-path=/ http://127.0.0.1:4711", install)
         self.assertIn("set-path=/term http://127.0.0.1:4713", install)
         self.assertNotIn("sudo", install)
+        self.assertIn("--agents requires the dashboard component", install)
+        self.assertIn("refusing --agents", install)  # never seize a foreign / mount
+        # Metadata is recorded before the health gates, so an aborted probe
+        # can never orphan a bootstrapped-but-unrecorded agents layer.
+        self.assertLess(install.index("agents=%s"), install.index("health(){"))
+        self.assertIn("--max-time 5", install); self.assertIn("--max-time 5", status_text)
+        self.assertIn("drift webterm bin/webterm", status_text)
         for tmpl, needle in (("io.gravedecay.t3", "--base-dir"), ("io.gravedecay.term", "webterm")):
             text = (ROOT / f"macos/LaunchAgents/{tmpl}.plist.tmpl").read_text()
             self.assertIn("127.0.0.1", text)
@@ -705,7 +716,7 @@ class MacosContractTests(unittest.TestCase):
         self.assertIn("macagents", shell)
         with tempfile.TemporaryDirectory() as tmp:
             fake_bin = pathlib.Path(tmp, "bin"); fake_bin.mkdir()
-            for name in ("uname", "tmux", "ttyd", "npm", "t3"):
+            for name in ("uname", "tmux", "ttyd", "npm", "node", "t3"):
                 p = fake_bin / name
                 p.write_text("#!/bin/sh\necho Darwin\n" if name == "uname" else "#!/bin/sh\nexit 0\n")
                 p.chmod(0o755)
