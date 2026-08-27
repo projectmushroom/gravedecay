@@ -248,5 +248,4 @@ Writing your own is ~20 lines; see `profiles/README.md`.
 
 ## License
 
-MIT. The name is the vibe: quiet box in the corner, daemons in the dirt,
-shipping while you sleep. 🪦
+MIT. Daemons in the dirt, shipping while you sleep. 🪦
