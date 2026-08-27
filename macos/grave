@@ -85,7 +85,7 @@ def notify(args):
  # pin the priority to ntfy's vocabulary. The body travels as --data-raw,
  # never -d, whose @ prefix would read local files into the request.
  title=re.sub(r"[\r\n]"," ",title)
- if not re.fullmatch(r"[a-z1-5]+",priority): priority="default"
+ if priority not in ("min","low","default","high","urgent","1","2","3","4","5"): priority="default"
  cmd=["curl","-sf","-m","10","-o","/dev/null","-H","Title: "+title,"-H","Priority: "+priority]
  if conf.get("NTFY_TOKEN"): cmd+=["-H","Authorization: Bearer "+re.sub(r"[\r\n]","",conf["NTFY_TOKEN"])]
  cmd+=["--data-raw",body,url]
