@@ -78,6 +78,11 @@ DASH_PORT=4712
 TERM_PORT=4713
 NET_PORT=4714
 
+# Optional owner-only T3 activity source (docs/CLIENTS.md). Put T3_ACTIVITY_URL,
+# T3_ACTIVITY_TOKEN (orchestration:read only), T3_ACTIVITY_ENVIRONMENT and
+# T3_ACTIVITY_ENVIRONMENT_ID in config/secrets/t3-activity.env (mode 600).
+# The URL may be local http://127.0.0.1:$T3_PORT or tailnet HTTPS; it adds no port.
+
 # Opt-in isolated workspaces. `grave users add` prepares records; issue #27's
 # migration command enables this only after validating and backing up owner state.
 MULTI_USER=0

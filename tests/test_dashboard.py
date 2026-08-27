@@ -444,6 +444,108 @@ class DashboardContractTests(unittest.TestCase):
         self.assertEqual(viewer["linear"]["issues"], [])
         self.assertIsNone(viewer["usage"])
 
+    def test_t3_activity_normalizes_shell_states_without_detail_reads(self):
+        saved = {name: getattr(DASHBOARD, name) for name in
+                 ("T3_ACTIVITY_URL", "T3_ACTIVITY_ENVIRONMENT", "T3_ACTIVITY_ENVIRONMENT_ID")}
+        DASHBOARD.T3_ACTIVITY_URL = "https://mac.ts.net"
+        DASHBOARD.T3_ACTIVITY_ENVIRONMENT = "Mac"
+        DASHBOARD.T3_ACTIVITY_ENVIRONMENT_ID = "env-1"
+        snapshot = {"projects": [{"id": "p", "title": "Grave"}], "threads": [
+            {"id": "start", "projectId": "p", "title": "Starting", "modelSelection": {"instanceId": "codex", "model": "gpt"}, "session": {"status": "starting", "providerName": "OpenAI"}},
+            {"id": "approval", "projectId": "p", "title": "Approve", "hasPendingApprovals": True, "session": {"status": "running"}},
+            {"id": "input", "projectId": "p", "title": "Input", "hasPendingUserInput": True, "modelSelection": {"instanceId": "claude"}},
+            {"id": "failed", "projectId": "p", "title": "Fail", "latestTurn": {"state": "error"}},
+            {"id": "done", "projectId": "p", "title": "Done", "latestTurn": {"state": "completed"}},
+            {"id": "bg", "projectId": "p", "title": "Background", "backgroundLiveness": "working", "latestTurn": {"state": "completed"}, "planProgress": {"step": "tests", "completedSteps": 2, "totalSteps": 3}},
+            {"id": "monitor", "projectId": "p", "title": "Monitor", "backgroundLiveness": "monitoring"},
+        ]}
+        try:
+            rows = {row["title"]: row for row in DASHBOARD.normalize_t3_activity(snapshot)}
+        finally:
+            for name, value in saved.items(): setattr(DASHBOARD, name, value)
+        self.assertEqual(rows["Starting"]["phase"], "starting")
+        self.assertEqual(rows["Starting"]["provider"], "OpenAI")
+        self.assertEqual(rows["Approve"]["phase"], "waiting_approval")
+        self.assertEqual(rows["Input"]["phase"], "waiting_input")
+        self.assertEqual(rows["Input"]["provider"], "claude")
+        self.assertEqual(rows["Fail"]["phase"], "failed")
+        self.assertEqual(rows["Done"]["phase"], "completed")
+        self.assertEqual(rows["Background"]["liveness"], "working")
+        self.assertEqual(rows["Background"]["phase"], "working")
+        self.assertEqual(rows["Background"]["plan"]["completed"], 2)
+        self.assertEqual(rows["Monitor"]["liveness"], "monitoring")
+        self.assertEqual(rows["Done"]["link"], "https://mac.ts.net/threads/env-1/done")
+
+    def test_t3_activity_handles_auth_timeout_stale_and_absent_fields(self):
+        saved = {name: getattr(DASHBOARD, name) for name in
+                 ("T3_ACTIVITY_URL", "T3_ACTIVITY_TOKEN", "T3_ACTIVITY_ENVIRONMENT", "T3_ACTIVITY_ENVIRONMENT_ID", "T3_ACTIVITY_STALE", "time")}
+        DASHBOARD.T3_ACTIVITY_URL = "http://127.0.0.1:4711"
+        DASHBOARD.T3_ACTIVITY_TOKEN = "read-only"
+        DASHBOARD.T3_ACTIVITY_ENVIRONMENT = "Local"
+        DASHBOARD.T3_ACTIVITY_ENVIRONMENT_ID = "env"
+        DASHBOARD.T3_ACTIVITY_STALE = 30
+        class Clock:
+            time = staticmethod(lambda: 1000)
+            strptime = staticmethod(__import__("time").strptime)
+            monotonic = staticmethod(__import__("time").monotonic)
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self, *args): return b'{"updatedAt":"1970-01-01T00:00:00Z","projects":[],"threads":[{}]}'
+        original = DASHBOARD.urllib.request.urlopen
+        try:
+            DASHBOARD.time = Clock
+            DASHBOARD._ttl_cache.pop("t3-activity", None)
+            DASHBOARD.urllib.request.urlopen = lambda request, timeout: Response()
+            self.assertEqual(DASHBOARD.t3_activity()["status"], "stale")
+            DASHBOARD._ttl_cache.pop("t3-activity", None)
+            DASHBOARD.urllib.request.urlopen = lambda request, timeout: (_ for _ in ()).throw(
+                urllib.error.HTTPError(request.full_url, 401, "no", {}, None))
+            self.assertEqual(DASHBOARD.t3_activity()["status"], "unauthorized")
+            DASHBOARD._ttl_cache.pop("t3-activity", None)
+            DASHBOARD.urllib.request.urlopen = lambda request, timeout: (_ for _ in ()).throw(TimeoutError())
+            self.assertEqual(DASHBOARD.t3_activity()["status"], "unreachable")
+            DASHBOARD._ttl_cache.pop("t3-activity", None)
+            DASHBOARD.urllib.request.urlopen = lambda request, timeout: Response()
+            Response.read = lambda self, *args: b'{"updatedAt":"not-a-time","projects":{},"threads":[]}'
+            self.assertEqual(DASHBOARD.t3_activity()["status"], "unreachable")
+            DASHBOARD._ttl_cache.pop("t3-activity", None)
+            Response.read = lambda self, *args: b'{"updatedAt":"1970-01-01T00:00:00Z","projects":[],"threads":[{"session":"malformed"}]}'
+            self.assertEqual(DASHBOARD.t3_activity()["status"], "unreachable")
+        finally:
+            DASHBOARD.urllib.request.urlopen = original
+            for name, value in saved.items(): setattr(DASHBOARD, name, value)
+            DASHBOARD._ttl_cache.pop("t3-activity", None)
+        self.assertNotIn("t3_activity", DASHBOARD.summary())
+
+    def test_t3_activity_workspace_header_requires_a_validated_backend(self):
+        single = load_dashboard({"GRAVEDECAY_ALLOWED_USERS": "owner@example.com"})
+        single.t3_activity = lambda: {"status": "ok", "threads": [{"title": "private"}]}
+        server = single.ThreadingHTTPServer(("127.0.0.1", 0), single.Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        origin = f"http://127.0.0.1:{server.server_port}"
+        try:
+            untrusted = urllib.request.Request(origin + "/api/t3-activity", headers={
+                "Tailscale-User-Login": "eve@example.com", "X-Grave-Workspace": "eve"})
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(untrusted, timeout=2)
+            self.assertEqual(error.exception.code, 403)
+        finally:
+            server.shutdown(); server.server_close(); thread.join(timeout=2)
+        workspace = load_dashboard({"GRAVEDECAY_ALLOWED_USERS": "owner@example.com",
+                                    "GRAVEDECAY_BACKEND_TOKEN": "a" * 64})
+        workspace.t3_activity = lambda: {"status": "ok", "threads": [{"title": "private"}]}
+        server = workspace.ThreadingHTTPServer(("127.0.0.1", 0), workspace.Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        origin = f"http://127.0.0.1:{server.server_port}"
+        try:
+            trusted = urllib.request.Request(origin + "/api/t3-activity", headers={
+                "X-Grave-Workspace": "eve", "X-Grave-Backend-Token": "a" * 64})
+            with urllib.request.urlopen(trusted, timeout=2) as response:
+                self.assertEqual(json.loads(response.read())["threads"][0]["title"], "private")
+        finally:
+            server.shutdown(); server.server_close(); thread.join(timeout=2)
+
     def test_collect_repos_is_ttl_cached(self):
         # Regression #48: collect_repos forks 3 git procs per repo on every
         # /api/state poll; it must go through the same TTL cache as the other

@@ -30,6 +30,9 @@ Environment=GRAVEDECAY_UNITS=@UNITS@
 # immutable rootfs (SteamOS) where /usr/local is read-only.
 Environment=GRAVEDECAY_GRAVE=@GRAVE_BIN@
 Environment=GRAVEDECAY_T3=@T3@
+# Optional read-only T3 shell source.  It holds only an orchestration:read
+# bearer and is intentionally not loaded unless the owner configures activity.
+EnvironmentFile=-@GRAVE_ROOT@/config/secrets/t3-activity.env
 # Comma-separated Tailscale logins allowed to press action buttons.
 # Empty = tailnet viewers are read-only. Add yours in a drop-in or here.
 Environment=GRAVEDECAY_ALLOWED_USERS=@ALLOWED_USERS@
