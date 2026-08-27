@@ -757,6 +757,7 @@ class MacosContractTests(unittest.TestCase):
             self.assertIn(f'depends_on "{dependency}" => :optional', formula)
         self.assertIn('depends_on "python"', formula)
         self.assertIn('libexec.install "macos/gravedecay-mac", "macos/install.sh", "macos/status.sh", "macos/uninstall.sh"', formula)
+        self.assertIn('(bin/"gravedecay-mac").write_env_script libexec/"gravedecay-mac",', formula)
         self.assertIn('test do', formula)
         self.assertIn('GRAVEDECAY_MAC_BREW_TAG: "v@VERSION@"', formula)
         for command in ("install", "status", "uninstall"):

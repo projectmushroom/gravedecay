@@ -13,7 +13,7 @@ class GravedecayCompanion < Formula
 
   def install
     libexec.install "macos/gravedecay-mac", "macos/install.sh", "macos/status.sh", "macos/uninstall.sh"
-    bin.write_env_script "gravedecay-mac", libexec/"gravedecay-mac",
+    (bin/"gravedecay-mac").write_env_script libexec/"gravedecay-mac",
                          GRAVEDECAY_MAC_BREW_TAG: "v@VERSION@"
   end
 
