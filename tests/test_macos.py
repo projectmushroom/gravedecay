@@ -36,13 +36,48 @@ class MacosContractTests(unittest.TestCase):
         dash = load(ROOT / "dashboard/gravedecay.py", {"GRAVEDECAY_PLATFORM": "macos"})
         self.assertEqual(dash.ACTIONS, {})
         self.assertEqual(dash.APPS, [{"name": "📡 Network", "url": "/net/"}])
-        state = dash.state({"Tailscale-User-Login": "someone@example.test"})
+        sentinel = {"error": None, "containers": [{"name": "redis"}]}
+        old_docker = dash.collect_docker
+        dash.collect_docker = lambda: sentinel
+        try:
+            state = dash.state({"Tailscale-User-Login": "someone@example.test"})
+        finally:
+            dash.collect_docker = old_docker
         self.assertEqual(state["platform"], "macos")
-        self.assertEqual(state["docker"]["containers"], [])
+        self.assertEqual(state["docker"], sentinel)
         self.assertEqual(state["tmux"], [])
         self.assertEqual(dash._summary_links(), {"dashboard": "/grave/", "network": "/net/"})
         no_net = load(ROOT / "dashboard/gravedecay.py", {"GRAVEDECAY_PLATFORM": "macos", "GRAVEDECAY_APPS": ""})
         self.assertEqual(no_net._summary_links(), {"dashboard": "/grave/"})
+
+    def test_macos_docker_uses_current_cli_context_with_a_bounded_cached_probe(self):
+        dash = load(ROOT / "dashboard/gravedecay.py", {"GRAVEDECAY_PLATFORM": "macos"})
+        calls, old_sh = [], dash.sh
+        def fake_sh(command, timeout=10):
+            calls.append((command, timeout))
+            return 0, "redis\trunning\tUp\tcore\npostgres\trunning\tUp\tcore\n", ""
+        dash.sh = fake_sh
+        try:
+            first = dash.collect_docker()
+            second = dash.collect_docker()
+        finally:
+            dash.sh = old_sh
+        self.assertIsNone(first["error"])
+        self.assertEqual([row["name"] for row in first["containers"]], ["postgres", "redis"])
+        self.assertEqual(second, first)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1], 3)
+        self.assertIn('cached("macos-docker", 15, fetch)',
+                      (ROOT / "dashboard/gravedecay.py").read_text())
+
+    def test_macos_docker_falls_back_when_cli_is_unusable(self):
+        dash = load(ROOT / "dashboard/gravedecay.py", {"GRAVEDECAY_PLATFORM": "macos"})
+        old_sh = dash.sh
+        dash.sh = lambda command, timeout=10: (1, "", "unavailable")
+        try:
+            self.assertEqual(dash.collect_docker(), {"error": "not managed on macOS", "containers": []})
+        finally:
+            dash.sh = old_sh
 
     def test_macos_nested_repo_inventory_is_canonical_bounded_and_safe(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -237,6 +272,7 @@ class MacosContractTests(unittest.TestCase):
         self.assertIn("body:not(.macos) .mac-only-setting", shell)
         self.assertIn("Keep the Linux PR-only presentation", shell)
         self.assertIn('body.macos [data-panel="inbox"]', shell)
+        self.assertNotIn('body.macos [data-panel="docker"]', shell)
 
     def test_installer_rejects_non_darwin(self):
         with tempfile.TemporaryDirectory() as tmp:
