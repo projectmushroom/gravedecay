@@ -752,6 +752,7 @@ class MacosContractTests(unittest.TestCase):
         self.assertIn('url "https://github.com/projectmushroom/gravedecay/archive/refs/tags/v@VERSION@.tar.gz"', formula)
         self.assertIn('sha256 "@SHA256@"', formula)
         self.assertNotIn('option "with-agents"', formula)
+        self.assertIn("depends_on :macos", formula)
         for dependency in ("node", "tmux", "ttyd"):
             self.assertIn(f'depends_on "{dependency}" => :optional', formula)
         self.assertIn('depends_on "python"', formula)
