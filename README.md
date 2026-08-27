@@ -17,13 +17,11 @@
 
 ---
 
-gravedecay converts a spare machine (old laptop, mini PC, Steam Machine) into a
-personal, tailnet-only AI development server: your repos, databases, and coding
-agents live on it 24/7, while your laptops, phones, and tablets become thin
-clients. It presents as a focused dev box by default. If that machine also
-games, an optional gaming layer adds mode switches that freeze your agent
-sessions and free RAM/GPU until you're done. Stock SteamOS enables that layer
-on first raise; every other system leaves it off unless you opt in.
+gravedecay converts a spare machine (old laptop, mini PC, Steam Machine) into
+a personal, tailnet-only AI development server: your repos, databases, and
+coding agents live on it 24/7, while your laptops, phones, and tablets become
+thin clients. If the machine also games, an optional gaming layer freezes
+agent sessions and frees RAM/GPU until you're done.
 
 ```
         ┌─────────────────────────────── the box ─────────────────────────────────┐
@@ -52,106 +50,54 @@ on first raise; every other system leaves it off unless you opt in.
 
 ## Design principles
 
-1. **Native first.** Agent CLIs, the web UI, the terminal, and the dashboard
-   run as plain systemd services on the host — agents need real files, real
-   processes, real builds. Docker is only for backing services on the full
-   appliance; the deliberately reduced [portable work-plane](docs/DOCKER.md)
-   is the separate exception.
+1. **Native first.** Agents, web UI, terminal, and dashboard run as plain
+   systemd services — agents need real files, real processes, real builds.
+   Docker only backs services (postgres, redis, playwright).
 2. **Tailnet-only.** Everything binds `127.0.0.1`; the only ways in are
-   Tailscale (`tailscale serve` for the HTTPS origin, Tailscale SSH as
-   fallback) and key-only sshd. Firewall is default-deny. No port
-   forwarding, ever. One sanctioned, off-by-default exception: `grave t3
-   connect` can let the official T3 apps in via upstream's managed relay —
-   an *outbound* tunnel, doctor-enforced, trade-offs in `docs/SECURITY.md`.
-3. **Dev box first; gaming when needed.** Non-SteamOS hosts default to a clean
-   dev-only dashboard. `grave gamewatch on` adds the gaming switches and
-   automatic detection on any supported host. `grave gaming` then frees
-   RAM/GPU while remote access stays up: 🧊 freeze sessions in place or ☠️ kill
-   them for maximum headroom.
-4. **Agent-operated.** The scripts do the deterministic 90 %; a coding agent
-   (Claude Code, Codex, …) handles the box-specific 10 %. `AGENTS.md` is the
-   playbook you point your agent at.
-5. **Everything is a file under `$GRAVE_ROOT`** (default `/srv/dev`) — repos,
-   configs, logs, backups, docs. Snapshot-friendly (btrfs+snapper supported,
-   not required).
+   Tailscale and key-only sshd. Default-deny firewall, no port forwarding,
+   ever. One off-by-default exception for the official T3 apps: `grave t3
+   connect` — trade-offs in [docs/SECURITY.md](docs/SECURITY.md).
+3. **Dev box first; gaming when needed.** `grave gaming` frees RAM/GPU while
+   remote access stays up. Opt in with `grave gamewatch on`; stock SteamOS
+   starts with it on.
+4. **Agent-operated.** Scripts do the deterministic 90 %; a coding agent
+   handles the box-specific 10 %. [AGENTS.md](AGENTS.md) is its playbook.
+5. **Everything is a file under `$GRAVE_ROOT`** (default `/srv/dev`) —
+   snapshot-friendly (btrfs+snapper supported, not required).
 6. **Doctor is the contract.** Every invariant the platform relies on is a
    `grave doctor` check; a quirk doctor can't see will silently regress.
 
-Need a portable, reduced Docker work-plane rather than the full appliance?
-See [the Docker workspace guide](docs/DOCKER.md). It keeps the same `/`,
-`/grave/`, and `/term/` origin, but intentionally has no host control plane.
+## Choose your install
 
-## Quickstart
+- **Linux appliance** — the complete always-on box above. Quickstart below.
+- **Native macOS client** — the *viewer*: a Universal 2 SwiftUI app (macOS
+  15+) that discovers graves over Tailscale, with native work state and
+  terminal. No services installed; quit it and it's gone. Download the DMG
+  from the [latest release](https://github.com/projectmushroom/gravedecay/releases/latest)
+  or build per [clients/apple/README.md](clients/apple/README.md) (covers
+  Gatekeeper, signing, notarization).
+- **macOS companion** — the *server* side: user-scoped LaunchAgents that make
+  a Mac itself a grave (dashboard + network monitor; no sudo, no system
+  services). Opt into T3 + web terminal with the second form:
 
-### Choose your install
+  ```sh
+  brew install projectmushroom/gravedecay/gravedecay-companion
+  gravedecay-mac install            # /grave and /net on the tailnet
 
-**Linux appliance** is the complete, always-on development box described
-above: T3, persistent agent sessions, Docker backing services, terminal,
-system controls, and the full dashboard. The Linux quickstarts below are for
-that installation.
+  brew install projectmushroom/gravedecay/gravedecay-companion --with-node --with-tmux --with-ttyd
+  gravedecay-mac install --agents   # + T3 at / and terminal at /term
+  ```
 
-**Native macOS client** is the *viewer* — an app you run, not a service you
-install: quit it and nothing of it keeps running. A standalone Universal 2 app
-for macOS 15+ (Apple silicon and Intel) — not a web wrapper, not an appliance
-installer, but the
-dashboard's grave dark rendered native: phosphor green on black, monospace
-throughout, a Dock app plus a skull menu-bar summary. It is remote-first:
-sign in to Tailscale and it discovers your graves. First run asks what this
-Mac is for — **Connect to Graves** (discovery only) or **Share This Mac**
-(an opt-in, loopback-only summary publisher); either role can be enabled
-later. Its window has native Graveyard, This Mac, Work, Network, Terminal,
-and Settings surfaces; Work is read-only Git state plus optional GitHub CLI
-and Linear links.
+  Details, limits, and coexistence with the native app: [docs/MACOS.md](docs/MACOS.md).
+- **Portable Docker workspace** — a reduced work-plane with the same origin
+  layout and no host control plane: [docs/DOCKER.md](docs/DOCKER.md).
 
-Download `Gravedecay-macOS.dmg` from the
-[latest release](https://github.com/projectmushroom/gravedecay/releases/latest)
-— or build the unsigned Universal 2 DMG yourself, or grab the Apple CI
-artifact, per [clients/apple/README.md](clients/apple/README.md), which also
-covers Gatekeeper, signing, and notarization. **Share This Mac** never touches
-Tailscale login or Serve: it listens on `127.0.0.1:4712` only while the app
-runs and shows you the exact Serve command to run yourself. Coexistence with
-the source companion below (which fails the native host closed if it owns
-the port) is covered in [the macOS guide](docs/MACOS.md).
+## Quickstart (Linux appliance)
 
-**macOS companion** is the opposite direction: it makes the Mac itself *serve*
-as a grave — background LaunchAgents, no app icon or window. The closest a Mac
-comes to a raise: a user-scoped dashboard and network monitor — no sudo, and no T3,
-Docker, terminal, firewall, or system services. With Tailscale signed in it
-publishes `/grave` and `/net`, and from then on the Mac sits in the graveyard
-like any other grave — discovered by the native app and the Omarchy widget,
-its dashboard reachable from any tailnet browser.
+Requirements: a systemd distro (Arch-family first-class; Debian/Fedora
+best-effort), ~8 GB RAM, a free [Tailscale](https://tailscale.com) account.
 
-The `projectmushroom/homebrew-gravedecay` tap is the normal install path:
-
-```sh
-brew install projectmushroom/gravedecay/gravedecay-companion
-gravedecay-mac install             # dashboard + network monitor; /grave and /net
-```
-
-For the opt-in T3 and web-terminal layer, install its formula option and pass
-the same opt-in to the companion:
-
-```sh
-brew install projectmushroom/gravedecay/gravedecay-companion --with-node --with-tmux --with-ttyd
-gravedecay-mac install --agents
-```
-
-Contributors can still install directly from a checkout:
-
-```sh
-git clone https://github.com/projectmushroom/gravedecay
-cd gravedecay
-./macos/install.sh                 # dashboard + network monitor; /grave and /net
-./macos/install.sh --no-serve      # localhost only; no Tailscale Serve changes
-```
-
-It needs only macOS and `python3`. See [the macOS guide](docs/MACOS.md) for
-component-only modes, `grave upgrade` channels, status, uninstall, and its
-intentional feature limits.
-
-### The agent way (recommended)
-
-SSH into the fresh box, install your coding agent, and say:
+**The agent way (recommended).** SSH in, install your coding agent, and say:
 
 > Clone `https://github.com/projectmushroom/gravedecay`, read `AGENTS.md`,
 > and raise this box. Host profile: `<generic | aws | t2-macbook | steam-machine>`.
@@ -160,381 +106,126 @@ The agent runs the ritual, fixes distro quirks, walks you through the two
 interactive steps (Tailscale login, T3 pairing), and hands you a passing
 `grave doctor`.
 
-### The one-liner
+**The one-liner** (checks out the latest release; `GRAVEDECAY_CHANNEL=edge`
+follows main):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/projectmushroom/gravedecay/master/install.sh | bash -s -- --profile generic
 ```
 
-Clones to `$GRAVE_ROOT/repos/gravedecay`, checks out the **latest release**,
-and runs the ritual. `GRAVEDECAY_CHANNEL=edge` follows main instead.
-
-### The manual way
+**The manual way:**
 
 ```sh
 git clone https://github.com/projectmushroom/gravedecay
 cd gravedecay
 ./raise.sh --profile generic      # idempotent; uses sudo as needed
 grave doctor                      # verify every invariant
-grave t3 status                   # compare installed and stable T3 Code
-grave t3 update                   # install stable T3 and restart its service
 ```
 
-Linux appliance requirements: a systemd-based distro (Arch-family is
-first-class; Debian/Fedora best-effort), ~8 GB RAM, and a
-[Tailscale](https://tailscale.com) account (free tier is fine).
-
-> **Gaming is optional.** A generic Linux raise is a dev appliance with no
-> gaming controls in the main UI. If the same box also runs games, use `grave
-> gamewatch on` (or **Settings → Gaming features & auto-throttle**) to reveal
-> the mode switcher, boot options, and gaming actions. Stock SteamOS starts with
-> this enabled; all other systems start with it off.
-
-### Optional trusted collaborators
-
-Single-user behavior remains the default. To migrate an existing appliance,
-obtain the owner's stable numeric ID from `tailscale status --json`, then:
+`raise.sh` is idempotent, so updating *is* re-raising: config is never
+clobbered, services and dashboard refresh, doctor verifies the result.
 
 ```sh
-grave multiuser enable <tailscale-user-id> <owner-login> owner --profile steam-machine
-grave users add <id> <login> <safe-slug>
-grave projects grant <slug> <project> <https-or-ssh-remote>
-grave users status
-grave doctor
+grave upgrade                     # latest release tag (also in the dashboard UI)
+grave upgrade --tag vX.Y.Z        # pin an exact release; --edge follows main
+grave uninstall --dry-run         # print the whole teardown, change nothing
+grave uninstall [--purge]         # remove platform; --purge also deletes data
 ```
 
-Enable performs a preflight backup, copies—not moves—the owner's T3 state,
-repos, and integrations into an admin workspace, installs the gateway, and
-switches Serve only after re-raise succeeds. Failure restores single-user
-configuration and retains the prepared workspace for inspection. Developers
-onboard GitHub/Linear in their own HOME; the administrator controls shared
-coding-provider access with `grave provider grant|revoke`. See
-[the multi-user contract](docs/MULTIUSER.md) and [security model](docs/SECURITY.md).
+Uninstall keeps `$GRAVE_ROOT` and docker volumes unless you `--purge`; the
+full contract is in [docs/UNINSTALL.md](docs/UNINSTALL.md).
 
-### Updating
+## Connecting a device
 
-```sh
-grave upgrade           # pull the latest release tag, re-run the ritual
-grave releases          # list stable releases available to this appliance
-grave upgrade --tag v0.5.0  # install one exact stable release
-grave upgrade --edge    # follow main instead (UPGRADE_CHANNEL=edge to default)
-```
+Two routes; most setups use both:
 
-Once the dashboard self-updater has been installed, the same operation is
-available under **System → Actions**. The quick update follows
-`UPGRADE_CHANNEL` from `/etc/gravedecay/grave.conf` (`release` by default),
-while the adjacent release picker installs an exact stable `vX.Y.Z` tag. Both
-run outside the dashboard service so its own restart cannot interrupt them,
-and reconnect the installed app when the raise completes.
+**Route A — the tailnet** (dashboard, terminal, files, gravenet). Install
+[Tailscale](https://tailscale.com/download) on the device, sign into the same
+account as the box, toggle the VPN on (the #1 "it's broken" cause is that
+it's off), then open `https://<box>.<tailnet>.ts.net/grave/` and add it to
+your Home Screen/Dock — everything on the box is one tap from that PWA. To
+use T3's web UI, mint a pairing token from ⚙️ settings on any paired device
+and open the printed `/pair` link on the new one.
 
-The release that first introduces the updater still needs one manual re-raise
-to install its systemd unit. Contributors following merged `master` should use
-`grave upgrade --edge`; release-channel appliances receive it with the next
-tagged release.
-
-`raise.sh` is idempotent, so updating *is* re-raising: your config is never
-clobbered (conf, stacks, and secrets are create-if-missing), while services,
-templates, and the dashboard refresh — and doctor verifies the result.
-Releases are plain git tags (`v0.1.0`, …) with notes on GitHub: pin to them
-for stability, or ride main if the box is also where you hack on gravedecay.
-
-### Uninstalling
-
-```sh
-grave uninstall --dry-run   # print the whole teardown, change nothing
-grave uninstall             # remove the platform, keep the data
-grave uninstall --purge     # also delete $GRAVE_ROOT and every docker volume
-```
-
-The inverse of `raise.sh`: units, CLIs, `/etc/gravedecay`, the sudoers drop-in,
-the tailnet mounts and the containers go. `$GRAVE_ROOT` — repos, agent history,
-secrets, backups — and your docker volumes stay unless you say `--purge`, and
-Docker, Tailscale (still logged in) and the toolchain are left alone. Whatever
-survives is printed at the end rather than left for you to discover. Full
-contract in [docs/UNINSTALL.md](docs/UNINSTALL.md).
-
-## Connecting a device (phone, laptop, tablet)
-
-Two routes. They compose — most boxes want the tailnet for the appliance
-plus the official T3 apps for driving agents.
-
-### Route A — the tailnet (the appliance)
-
-The box's own UIs are reachable **only** over your Tailscale network — no
-public URL, no port forwarding. Every device you want the *dashboard,
-terminal, files, or gravenet* from needs Tailscale installed and on:
-
-1. **Install the Tailscale app** on the client:
-   [iOS](https://apps.apple.com/app/tailscale/id1470499037) ·
-   [Android](https://play.google.com/store/apps/details?id=com.tailscale.ipn) ·
-   [macOS](https://tailscale.com/download/macos) ·
-   [Windows](https://tailscale.com/download/windows) ·
-   [Linux](https://tailscale.com/download/linux)
-2. **Sign in with the same account** you used when raising the box
-   (`tailscale up` during `raise.sh`). Same account = same tailnet = the
-   device can see the box.
-3. **Toggle the VPN on** in the app. On iOS/Android it's the big switch;
-   on desktop it's the menu-bar/tray icon. If it's off, nothing on the box
-   resolves — this is the #1 "it's broken" cause.
-4. **Open the dashboard**: `https://<box>.<tailnet>.ts.net/grave/` — the exact
-   URL is printed by `tailscale status` on the box (the MagicDNS name), or
-   check the [Tailscale admin console](https://login.tailscale.com/admin/machines).
-   Add it to your Home Screen (iOS: Share → Add to Home Screen) or Dock
-   (macOS Safari: File → Add to Dock).
-5. **Pair T3's web UI** (optional if you use the official apps): mint a token
-   from ⚙️ settings → **🔑 New T3 pairing token** on any already-paired
-   device, and tap the printed `/pair` link on the new one.
-
-Everything over this route is end-to-end encrypted by the tailnet.
-
-### Route B — the official T3 apps (driving the agents)
-
-T3 Code ships real clients —
-[iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824) ·
+**Route B — the official T3 apps** ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824) ·
 [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code) ·
-desktop — and they're usually the nicest way to run agents from a phone or a
-second computer. Hook them to the box either way:
+desktop) drive the agents. Connect them over the tailnet with a pairing
+token, or without a VPN on the device via `grave t3 connect full` (managed
+relay), or keep tailnet-only transport and still get phone push with
+`grave t3 connect publish`. Doctor enforces the declared mode; trade-offs in
+[docs/SECURITY.md](docs/SECURITY.md).
 
-- **Over the tailnet** (no extra account): device runs Tailscale, then mint a
-  pairing token — the token console also prints a `t3code://pair?…` link that
-  opens the app pre-filled.
-- **Over T3 Connect** (no VPN on the device): `grave t3 connect full` links
-  the box's T3 instance to your T3 Connect account through upstream's managed
-  relay. Or keep the tailnet as the only transport and still get phone push +
-  Live Activities with `grave t3 connect publish`. Doctor enforces whichever
-  mode you declare; the trust trade-offs live in `docs/SECURITY.md`.
-  (Connect's free tier allows 3 managed tunnels per account; a publish-only
-  link doesn't use one.)
+## What's on the box
 
-The official apps drive T3 only. The dashboard — the system overview and
-controller — stays on Route A, and its T3 tile can be pointed at either the
-web UI or the official app (⚙️ settings → "T3 tile opens").
+**Dashboard** (`/grave/`) — the system overview and controller, installable
+as a PWA. **Work tab:** PRs, Linear issues, CI status, agent token spend,
+live agent sessions, repo state. **System tab:** vitals, services, docker,
+journal errors, one-tap updates with a release picker. **Launcher tiles** for
+T3, terminal, Claude, Codex, GitHub, and a built-in file manager jailed to
+`$GRAVE_ROOT`. **⚙️ Settings:** widgets and tiles, pairing tokens, re-auth
+flows, T3 Connect, notifications.
 
-## The dashboard — the system overview & controller
+**Web terminal** (`/term/`) — ttyd + xterm.js attached to the same
+`tmux -L agents` socket as SSH: close the tab, the session lives on; browser,
+SSH, and phone reach the *same* session. Drag-select copies via OSC 52
+(hold Shift for native browser selection).
 
-gravedecay's own UI is the *appliance* surface: what the box is doing
-(vitals, services, agents, spend, PRs, CI), and the levers to control it
-(modes, updates, doctor, notifications, Connect). Driving the agents
-themselves is T3's job — via the official T3 apps or the bundled T3 web UI,
-whichever you set the tile to.
+**gravenet** (`/net/`) — realtime network view: per-interface RX/TX
+sparklines, topology from upstream gateway through the box, DHCP leases,
+conntrack count, tailnet peers. One stdlib-only Python daemon, no build step.
 
-Install the PWA / macOS web app from `https://<box>.<tailnet>.ts.net/grave/`.
-Everything on the box is one tap from there, all same-origin so navigation
-never leaves the installed app. The manifest deliberately scopes the app to
-the whole origin so `/grave/`, T3, Terminal, and pairing are one appliance app.
-If the tailnet path drops, the installed app shows a cached connection-help
-screen; live machine data and actions are never cached. Terminal-styled
-(phosphor green, TUI frames,
-scanlines), split into **🛠️ Work** and **📟 System** tabs:
+**Game mode** (optional) — `grave gaming` freezes agent sessions with the
+cgroup v2 freezer (zero CPU, RAM kept, resume mid-thought) and stops
+T3/docker; `--kill` for maximum headroom, `--for 2h` auto-restores,
+`grave developer` thaws. Tailscale, SSH, and the dashboard always stay up.
 
-**Launcher** — tiles for T3 Code, Terminal, Claude, Codex, GitHub, a built-in
-**📁 Files** manager, plus any custom tiles you add; each tile opens in-PWA,
-in a modal over the dashboard, or in a new tab (your choice — except T3, which
-always takes the full window). Inside T3, a tiny corner pill (installed-app
-mode only) brings you back.
+**Notifications** — the box pages you (agents finishing or waiting on a
+prompt, failing units, failing doctor) via Web Push to the installed PWA
+and/or an [ntfy](https://ntfy.sh) topic. Wired but silent until you opt in;
+`grave notify "msg"` for scripting. See [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md).
 
-**📁 Files** — a lightweight file manager modal: browse, upload (drag-drop or
-picker), download, rename, delete, and make folders under the appliance root,
-straight from the browser — handy for copying a project onto the box. Jailed
-to `$GRAVE_ROOT` with the secret store carved out; see `docs/SECURITY.md`.
-
-**Work tab**
-- 🔀 **Pull requests** — open PRs across your repos, 👀 marker where your
-  review is requested
-- 📐 **Linear** — issues assigned to you + one-line quick-create
-- 🏗️ **CI status** — latest workflow run per repo
-- 🧾 **Agent usage** — Claude & Codex token spend from local logs (24h/7d),
-  estimated API-value cost, and Codex's real 5h/weekly rate-limit meters
-- 🤖 **Agent sessions** — tap a session to open it in the terminal, ✕ kills it
-- 📦 **Repos** — branch, dirty state, last commit
-
-**System tab** — vitals (CPU/GPU temps, fans, load, memory, disk), action
-buttons, services, docker containers, journal errors. **Update gravedecay**
-starts a detached system upgrade on the configured `UPGRADE_CHANNEL`; the
-release picker can instead pin any published stable release. Both re-run the
-idempotent raise and let the dashboard reconnect after its own restart; agent
-tmux sessions are unaffected.
-
-**⚙️ Settings** (identity-gated, like all actions) — show/hide/reorder
-widgets, manage tiles (show, open-in-modal, open-in-new-tab per tile, and
-⚡ **skip-perms** for the Claude/Codex tiles — launches the agent with all
-permission/approval gates off; power-tool for this single-human box, see
-`docs/SECURITY.md`), refresh rate, **one-tap T3 pairing tokens** (mints a
-15-minute token + ready `/pair` link for enrolling a new phone/laptop),
-re-auth Claude/Codex/GitHub (opens the terminal running the real login flow),
-**T3 Connect** (link/unlink the official-apps route and pick what the T3 tile
-opens), Linear API key, and **🔔 notifications** — enroll this device for Web
-Push, set the ntfy channel, choose which events page you, send a test.
-
-Mode flips and doctor runs stream their real output live into a
-terminal-styled **boot console** — burial and startup sequences, line by line.
-
-## Web terminal
-
-`/term/` is a full terminal in the browser (ttyd + xterm.js) attached to the
-same `tmux -L agents` socket as `grave agents` — close the tab, the session
-lives on; browser, SSH, and phone all reach the *same* session. The Claude and
-Codex tiles drop you straight into persistent CLI sessions. TUIs render
-pixel-correct; on iOS the soft keyboard lacks Esc/Ctrl, so treat the phone as
-a quick-look surface (T3 is the phone-friendly way to drive agents).
-
-**Copying text:** `tmux` runs with `mouse on`, so a drag is a tmux selection
-— tmux copies it to the system clipboard over OSC 52 (works in ttyd/xterm.js
-on the HTTPS tailnet). If a drag doesn't land on your clipboard, hold
-**Shift** while dragging to select natively in the browser, then Cmd/Ctrl+C —
-that always works. (Existing boxes: `raise.sh` won't clobber an existing
-`config/tmux.conf`; re-copy it from the repo to pick up the clipboard config.)
-
-## Network flow monitor
-
-`/net/` is **gravenet** — a realtime ops view of the box's networking: one
-card per interface with live RX/TX sparklines (1 s samples, 3 min window),
-a topology strip from the upstream gateway through the box to whatever it's
-sharing a connection to, the DHCP client table (lease + neighbour state),
-conntrack flow count, and tailnet peer status. One root read-only Python
-daemon (SSE, stdlib only, port 4714) + one self-contained page — no build
-step, no dependencies.
-
-Interface roles (upstream / shared subnet / wifi / overlay) are auto-detected
-from the routing table, dnsmasq lease files, and sysfs. A box with more
-exotic wiring (say, internet shared over a Thunderbolt bridge to a Mac) can
-label its interfaces with a drop-in:
-
-```sh
-sudo systemctl edit gravedecay-net
-# [Service]
-# Environment="GRAVENET_ROLES=thunderbolt0=share:tb-share → Mac;enp69s0=upstream:10GbE"
-```
-
-## Optional game mode
-
-gravedecay does not assume every development box is a console. The watcher
-capability is installed but idle on non-SteamOS systems, and the dashboard stays
-dev-focused. Opt in at any time with `grave gamewatch on`; `off` removes the
-gaming controls again without removing the underlying development appliance.
-
-```
-grave gaming          # 🧊 torpor: stop T3/docker, FREEZE agent sessions
-grave gaming --kill   # ☠️ scorched earth: sessions die, maximum free RAM
-grave gaming --for 2h # ⏱️ torpor, then automatically return to developer mode
-grave developer       # 💻 thaw + restore everything
-```
-
-Torpor uses the **cgroup v2 freezer** (signals don't work — tmux un-stops its
-children), so frozen sessions keep their RAM but provably consume zero CPU,
-and resume mid-thought on wake. In game mode the dashboard swaps to a minimal
-vitals view, stops calling remote APIs, and slows its polling — the resource
-diet is enforced, not implied. Tailscale, SSH, dashboard, and terminal stay
-up; you can always get back in.
-
-`--for` accepts systemd timespans such as `30m`, `2h`, or `1h30m`. It creates a
-transient auto-thaw timer, `grave status` shows the pending restore, and an
-explicit `grave developer` cancels it. Automatic game detection is a separate,
-persistent preference: `grave gamewatch on|off|status`. It defaults on only for
-a first raise on positively detected stock SteamOS and off on every other host;
-your explicit choice survives later raises. The dashboard treats this as its
-gaming-feature switch: when off, the top mode badge, gaming/developer action
-buttons, and boot-mode controls disappear so the appliance reads as a dev-only
-box. The single enable control remains under Settings.
-
-## Notifications — the box wakes you
-
-Two channels, use either or both: **Web Push to the installed PWA** (⚙️
-settings → Notifications → 🔔 enable — native notifications on
-iPhone/iPad/Android/desktop, end-to-end encrypted, a tap deep-links back into
-the app) and/or an **[ntfy](https://ntfy.sh)** topic in
-`config/secrets/notify.env`. The box then pages you: agent sessions ending,
-agents ringing the bell (waiting on a prompt), a platform unit failing, a
-failing `grave doctor`. Event classes are muteable from the same settings
-panel, everything ships wired but silent until you opt in, and
-`grave notify "msg"` is yours for scripting
-(`long-build; grave notify "build done"`). Doctor verifies whatever channels
-you configure. See [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md).
-
-## Previewing a dev server
-
-Start a project's dev server on the box (keep it bound to `127.0.0.1`), then:
-
-```
-grave preview 3000        # → https://<box>.ts.net:3000  (tailnet only)
-grave preview             # auto-pick the one dev server listening in 3000–3999
-grave preview list        # what's exposed
-grave preview off 3000    # stop
-```
-
-It runs `tailscale serve` for that port and serves it at the URL **root**, not
-behind a path — so Vite/Next HMR, websockets, and absolute asset URLs work with
-no per-project config. The server stays on loopback; Tailscale terminates TLS
-and keeps it on the tailnet (never public). Ports are confined to `3000–3999`
-(`PREVIEW_RANGE`), and in-range platform ports like Playwright's 3050 are
-refused. See `docs/PORTS.md`.
+**Dev-server preview** — `grave preview 3000` exposes a loopback dev server
+at `https://<box>.ts.net:3000`, tailnet-only, at the URL root so HMR and
+websockets just work. `grave preview off 3000` stops it.
 
 ## Daily driving
 
 ```
 grave status                     # services, containers, agents, temps, disk
 grave doctor                     # verify every platform invariant
-grave gaming [--kill] [--for 2h] # 🎮 free resources; optionally auto-restore
-grave developer                  # 💻 thaw + restore
 grave agents new mybot [dir]     # persistent tmux agent session
 grave agents attach mybot        # detach: Ctrl-b d — session survives
+grave gaming [--kill] [--for 2h] # 🎮 free resources; optionally auto-restore
+grave developer                  # 💻 thaw + restore
 grave docker ps|up|down|logs     # stack management
-grave preview 3000               # expose a dev server at https://<box>.ts.net:3000
-grave t3 connect publish|full|off  # official T3 apps: notifications-only or
-                                 # managed relay (docs/SECURITY.md); doctor
-                                 # enforces the declared mode
+grave preview 3000               # expose a dev server on the tailnet
 grave logs t3|dash|term|<unit>   # follow logs
 grave update                     # snapshot (if snapper), update pkgs/npm/images
 grave backup / restore           # git bundles + configs + docker volumes
-grave notify "title" ["body"]    # page your devices (PWA push + ntfy)
+grave notify "title" ["body"]    # page your devices
 ```
-
-## What raise.sh does
-
-Each step is idempotent — rerun it any time: packages (pacman/apt/dnf) →
-`$GRAVE_ROOT` layout + `~/Projects` symlink → `grave` CLI + config → scoped
-sudoers → dashboard + web terminal + T3 Code as loopback systemd services →
-docker `devnet` + core stack (random postgres password) + playwright →
-firewall (SSH allowed *before* enabling) → single-origin `tailscale serve`
-mounts (`/`, `/grave`, `/term`) → host profile → `grave doctor`.
 
 ## Host profiles
 
-Machine-specific quirks live in `profiles/*.sh`, applied once by
-`raise.sh --profile <name>`:
+Machine-specific quirks live in `profiles/*.sh`, applied by
+`raise.sh --profile <name>`; each flips matching `CHECK_*` doctor flags.
 
-- **generic** — any always-on dev box; masks suspend by default. Gaming stays
-  out of the main UI unless you opt in with `grave gamewatch on`.
-- **aws** — an EC2 instance (tested: t3.medium, Amazon Linux 2023). Same
-  always-on shape as `generic`, with `CHECK_FIREWALL` set explicitly since a
-  cloud box has a real public IP. `raise.sh`'s `dnf` branch auto-detects
-  Amazon Linux 2023 (no `docker-compose` package, `nodejs` too old for T3,
-  `ttyd` unpackaged) and fills the gaps; see [docs/AWS.md](docs/AWS.md).
-- **t2-macbook** — Intel T2 Macs: sleep masked, lid ignored, amdgpu pinned to
-  a fixed DPM state (dGPU crash workaround).
-- **steam-machine** — stock SteamOS (immutable rootfs). Durable toolchain under
-  `$HOME` (Homebrew + rootless Docker), `GRAVE_ROOT` on `/home`, always-on, and
-  games alongside — survives SteamOS updates untouched. Gamewatch defaults on
-  for detected stock SteamOS, while `grave gamewatch off` is persistent.
-  Bootstrap once with `steamos-toolchain.sh`, then raise; see
-  [docs/STEAMOS.md](docs/STEAMOS.md).
+- **generic** — any always-on dev box; masks suspend.
+- **aws** — EC2 (Amazon Linux 2023): fills the distro's package gaps; see
+  [docs/AWS.md](docs/AWS.md).
+- **t2-macbook** — Intel T2 Macs: sleep/lid handling, amdgpu crash workaround.
+- **steam-machine** — stock SteamOS (immutable rootfs): durable toolchain in
+  `$HOME`, survives OS updates, games alongside; see [docs/STEAMOS.md](docs/STEAMOS.md).
 
-Every profile has the same optional gaming capability. The profile controls
-hardware/platform invariants; `grave gamewatch on|off` controls whether gaming
-behavior and its dashboard switches are part of this particular box.
+Writing your own is ~20 lines; see `profiles/README.md`.
 
-Each profile flips matching `CHECK_*` doctor flags — quirks doctor can't
-verify will silently regress. Writing your own is ~20 lines; see
-`profiles/README.md`.
+## Going further
 
-## Secrets & MCP for your agents
-
-Per-integration secrets live in `$GRAVE_ROOT/config/secrets/*.env`
-(git-ignored, `chmod 600`) and reach T3-spawned agent sessions via a systemd
-drop-in — the same Linear/GitHub/whatever key serves both your Claude and
-Codex sessions. Prefer API-key/bearer auth over OAuth: the box is headless.
-The full pattern (with a worked Linear MCP example, registered in both CLIs)
-is in `docs/SECRETS.md`.
+- **Secrets & MCP** — per-integration keys in `$GRAVE_ROOT/config/secrets/`
+  reach both Claude and Codex sessions via one systemd drop-in; worked
+  example in [docs/SECRETS.md](docs/SECRETS.md).
+- **Trusted collaborators** — opt-in multi-user mode with per-user Unix
+  identities and project grants: [docs/MULTIUSER.md](docs/MULTIUSER.md).
 
 ## Docs
 
@@ -548,14 +239,13 @@ is in `docs/SECRETS.md`.
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, tailnet-only, T3 Connect trade-offs, sudoers scope, terminal trust |
 | [docs/CLIENTS.md](docs/CLIENTS.md) | Clients: official T3 apps, native Apple shell, and Omarchy widget |
 | [clients/apple/README.md](clients/apple/README.md) | Native iOS/macOS client, DMG, signing, and build details |
-| [docs/MACOS.md](docs/MACOS.md) | Legacy Python companion, native publisher coexistence, and macOS operations |
+| [docs/MACOS.md](docs/MACOS.md) | macOS companion, native-app coexistence, and macOS operations |
 | [docs/SECRETS.md](docs/SECRETS.md) | Secrets + MCP wiring for agent CLIs |
-| [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md) | Notifications: Web Push to the PWA + ntfy — agents, failing units, and doctor page your phone |
+| [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md) | Web Push + ntfy: agents, failing units, and doctor page your phone |
 | [docs/PORTS.md](docs/PORTS.md) | Every port, documented or it doesn't exist |
 | [docs/RECOVERY.md](docs/RECOVERY.md) | Backup/restore procedures |
-| [docs/UNINSTALL.md](docs/UNINSTALL.md) | Unraising the box: what `grave uninstall` removes, keeps, and deliberately won't touch |
+| [docs/UNINSTALL.md](docs/UNINSTALL.md) | Unraising the box: what is removed, kept, and deliberately untouched |
 
 ## License
 
-MIT. The name is the vibe: quiet box in the corner, daemons in the dirt,
-shipping while you sleep. 🪦
+MIT. Daemons in the dirt, shipping while you sleep. 🪦
