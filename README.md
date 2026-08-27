@@ -110,11 +110,29 @@ the source companion below (which fails the native host closed if it owns
 the port) is covered in [the macOS guide](docs/MACOS.md).
 
 **macOS companion** is the closest a Mac comes to a raise: a user-scoped
-dashboard and network monitor from a source checkout — no sudo, and no T3,
+dashboard and network monitor — no sudo, and no T3,
 Docker, terminal, firewall, or system services. With Tailscale signed in it
 publishes `/grave` and `/net`, and from then on the Mac sits in the graveyard
 like any other grave — discovered by the native app and the Omarchy widget,
 its dashboard reachable from any tailnet browser.
+
+Once the planned `projectmushroom/homebrew-gravedecay` tap publishes this
+release template, install with:
+
+```sh
+brew install projectmushroom/gravedecay/gravedecay-companion
+gravedecay-mac install             # dashboard + network monitor; /grave and /net
+```
+
+For the opt-in T3 and web-terminal layer, install its formula option and pass
+the same opt-in to the companion:
+
+```sh
+brew install projectmushroom/gravedecay/gravedecay-companion --with-node --with-tmux --with-ttyd
+gravedecay-mac install --agents
+```
+
+Contributors can still install directly from a checkout:
 
 ```sh
 git clone https://github.com/projectmushroom/gravedecay

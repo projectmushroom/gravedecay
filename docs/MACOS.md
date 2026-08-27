@@ -15,8 +15,23 @@ Docker; an unavailable or unusable CLI simply shows `not managed on macOS`.
 Publish any container ports to `127.0.0.1` only, then expose them deliberately
 through Tailscale if needed.
 
-From a source checkout, run `macos/install.sh`. It uses no `sudo`, installs
-LaunchAgents and logs under `~/Library/Application Support/Gravedecay`, and
+Homebrew will be the normal install path when the planned
+`projectmushroom/homebrew-gravedecay` tap publishes the release template in
+this repository:
+
+```sh
+brew install projectmushroom/gravedecay/gravedecay-companion
+gravedecay-mac install
+```
+
+`gravedecay-mac` is deliberately only a fixed wrapper for the existing
+installer, status check, and uninstaller; it does not use `brew services`.
+The companion retains ownership of its user LaunchAgents because it already
+converges component choices, Serve mounts, identity gates, and unloads.
+
+Contributors may instead run `macos/install.sh` from a source checkout. Both
+paths use no `sudo`, install LaunchAgents and logs under
+`~/Library/Application Support/Gravedecay`, and
 normally publishes only `/grave` and `/net` through the already-installed
 Tailscale CLI. Outside the opt-in agents layer it never changes the `/` Serve
 mount, so an official T3 app or
@@ -58,11 +73,14 @@ into the core of what makes gravedecay valuable — T3 Code, persistent
 Linux:
 
 ```sh
-macos/install.sh --agents
+brew install projectmushroom/gravedecay/gravedecay-companion --with-node --with-tmux --with-ttyd
+gravedecay-mac install --agents
 ```
 
-Prerequisites (this mode only): `brew install tmux ttyd node`. A missing one
-is a preflight error, never a half-install; `t3` is npm-installed if absent.
+The three optional formula dependencies install `tmux`, `ttyd`, and `node`.
+A missing prerequisite is a preflight error, never a half-install; `t3` is
+npm-installed if absent. Source-checkout users install those prerequisites
+with `brew install tmux ttyd node` before `macos/install.sh --agents`.
 Still no `sudo`, ever: two more user LaunchAgents run T3 Code on
 `127.0.0.1:4711` (`io.gravedecay.t3`) and ttyd on `127.0.0.1:4713`
 (`io.gravedecay.term`), and Serve adds `/` and `/term` so the origin layout
@@ -134,10 +152,14 @@ hygiene/reachability when configured. The installed copy runs every 30
 minutes as `io.gravedecay.doctor`; with an ntfy topic configured a failing
 run pages you (`--page`, see [NOTIFICATIONS.md](NOTIFICATIONS.md)).
 
-`macos/uninstall.sh --root PATH` unloads and removes its LaunchAgents
+`gravedecay-mac uninstall` (or `macos/uninstall.sh --root PATH` from a source
+checkout) unloads and removes its LaunchAgents
 (including the updater, keep-awake and doctor agents) and Serve path mounts.
 It preserves the Application Support data by default; `--purge`
-explicitly removes it. Neither mode uninstalls Tailscale. Native-app DMG,
+explicitly removes it. For a Homebrew removal, run the companion command
+first, then `brew uninstall projectmushroom/gravedecay/gravedecay-companion`;
+use `gravedecay-mac uninstall --purge` before that only when you explicitly
+want to delete Application Support data. Neither mode uninstalls Tailscale. Native-app DMG,
 signing, and notarization details live in [clients/apple/README.md](../clients/apple/README.md).
 
 ## Staying awake while serving
@@ -155,6 +177,20 @@ lid-thermals caveat. `status.sh` fails when serving is enabled, sleep is not
 opted out, and the agent or its assertion is missing.
 
 ## Updating the companion
+
+After the tap is published, update the formula then re-run its command:
+
+```sh
+brew upgrade projectmushroom/gravedecay/gravedecay-companion
+gravedecay-mac install
+```
+
+The wrapper passes the formula's exact release tag to the installer. On the
+next run it stages that tag into the existing managed checkout before the
+normal converge, so an upgraded Cellar copy cannot be bypassed. Re-run with
+`--agents` when that mode is enabled. Formula releases are rendered from
+[`macos/homebrew/gravedecay-companion.rb.tmpl`](../macos/homebrew/gravedecay-companion.rb.tmpl)
+in the tap; this repository intentionally does not create or publish the tap.
 
 The first manual rerun from an older companion (including v0.17.0) bootstraps
 an installer-controlled checkout at `$GRAVE_ROOT/repos/gravedecay`, installs

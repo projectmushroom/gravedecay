@@ -743,6 +743,84 @@ class MacosContractTests(unittest.TestCase):
                 self.assertIn(tool, missing.stderr)
                 (fake_bin / tool).write_text("#!/bin/sh\nexit 0\n"); (fake_bin / tool).chmod(0o755)
 
+    def test_homebrew_companion_contract_adopts_the_formula_release(self):
+        formula = (ROOT / "macos/homebrew/gravedecay-companion.rb.tmpl").read_text()
+        wrapper = (ROOT / "macos/gravedecay-mac").read_text()
+        install = (ROOT / "macos/install.sh").read_text()
+        docs = (ROOT / "docs/MACOS.md").read_text()
+        readme = (ROOT / "README.md").read_text()
+        self.assertIn('url "https://github.com/projectmushroom/gravedecay/archive/refs/tags/v@VERSION@.tar.gz"', formula)
+        self.assertIn('sha256 "@SHA256@"', formula)
+        self.assertNotIn('option "with-agents"', formula)
+        for dependency in ("node", "tmux", "ttyd"):
+            self.assertIn(f'depends_on "{dependency}" => :optional', formula)
+        self.assertIn('depends_on "python"', formula)
+        self.assertIn('libexec.install "macos/gravedecay-mac", "macos/install.sh", "macos/status.sh", "macos/uninstall.sh"', formula)
+        self.assertIn('test do', formula)
+        self.assertIn('GRAVEDECAY_MAC_BREW_TAG: "v@VERSION@"', formula)
+        for command in ("install", "status", "uninstall"):
+            self.assertIn(f'{command})', wrapper)
+        self.assertIn('BREW_TAG=${GRAVEDECAY_MAC_BREW_TAG:-}', install)
+        self.assertIn('git -C "$BOOT" checkout -q "$BREW_TAG"', install)
+        self.assertIn('could not adopt Homebrew release $BREW_TAG', install)
+        self.assertIn('prior checkout restored but payload reconverge failed', install)
+        self.assertIn('brew upgrade projectmushroom/gravedecay/gravedecay-companion', docs)
+        self.assertIn('gravedecay-mac install --agents', docs)
+        self.assertIn('gravedecay-mac uninstall', docs)
+        self.assertIn('--with-node --with-tmux --with-ttyd', docs)
+        self.assertIn('Homebrew will be the normal install path when the planned', docs)
+        self.assertIn('brew install projectmushroom/gravedecay/gravedecay-companion', readme)
+
+    def test_homebrew_tag_must_be_exact_semver(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = pathlib.Path(tmp, "bin"); fake.mkdir()
+            (fake / "uname").write_text("#!/bin/sh\necho Darwin\n"); (fake / "uname").chmod(0o755)
+            (fake / "python3").symlink_to(sys.executable)
+            result = subprocess.run(["sh", str(ROOT / "macos/install.sh"), "--no-serve", "--dry-run"],
+                                    env={**os.environ, "HOME": tmp, "PATH": f"{fake}:/usr/bin:/bin",
+                                         "GRAVEDECAY_MAC_BREW_TAG": "v1.2.3/escape"}, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("invalid Homebrew release tag", result.stderr)
+
+    def test_homebrew_rerun_adopts_or_restores_the_managed_checkout(self):
+        for converge_fails in (False, True):
+          with self.subTest(converge_fails=converge_fails), tempfile.TemporaryDirectory() as tmp:
+            tmp_path = pathlib.Path(tmp); home = tmp_path / "home"; home.mkdir()
+            root = home / "Library/Application Support/Gravedecay"; source = root / "repos/gravedecay"
+            shutil.copytree(ROOT, source, ignore=shutil.ignore_patterns(".git", "node_modules", "__pycache__")); (source / ".git").mkdir(); (source / "OLD").write_text("")
+            stage = tmp_path / "release"; shutil.copytree(ROOT, stage, ignore=shutil.ignore_patterns(".git", "node_modules", "__pycache__")); (stage / ".git").mkdir(); (stage / "NEW").write_text("")
+            if converge_fails: (stage / "macos/install.sh").write_text("#!/bin/sh\nexit 1\n")
+            fake = tmp_path / "bin"; fake.mkdir()
+            git = fake / "git"; git.write_text("""#!/bin/sh
+if [ "$1" = -C ]; then
+  dir=$2; shift 2
+  case "$1" in
+    remote) echo https://github.com/projectmushroom/gravedecay.git;;
+    describe) [ -f "$dir/NEW" ] && echo v0.21.0 || echo v0.20.0;;
+  esac
+  exit 0
+fi
+if [ "$1" = clone ]; then
+  for arg; do dest=$arg; done
+  cp -R "$FAKE_STAGE" "$dest"
+fi
+exit 0
+"""); git.chmod(0o755)
+            for name, body in {"uname": "echo Darwin", "plutil": "exit 0", "curl": "exit 0", "tailscale": "exit 0", "launchctl": "exit 0"}.items():
+                p = fake / name; p.write_text("#!/bin/sh\n" + body + "\n"); p.chmod(0o755)
+            (fake / "python3").symlink_to(sys.executable)
+            result = subprocess.run(["sh", str(ROOT / "macos/install.sh"), "--no-serve", "--root", str(root)],
+                                    env={**os.environ, "HOME": str(home), "PATH": f"{fake}:/usr/bin:/bin", "FAKE_STAGE": str(stage), "GRAVEDECAY_MAC_BREW_TAG": "v0.21.0"}, capture_output=True, text=True)
+            if converge_fails:
+                self.assertNotEqual(result.returncode, 0)
+                self.assertTrue((source / "OLD").exists(), (result.stdout, result.stderr))
+                self.assertFalse((source / "NEW").exists())
+                self.assertIn("prior payload restored", result.stderr)
+            else:
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue((source / "NEW").exists())
+                self.assertFalse((source / "OLD").exists())
+
     def test_marked_servers_smoke_without_launchd_or_tailscale(self):
         """Real local processes, temporary state only: no launchctl/Serve calls."""
         with tempfile.TemporaryDirectory() as tmp:
