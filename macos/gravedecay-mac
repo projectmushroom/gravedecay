@@ -1,0 +1,10 @@
+#!/bin/sh
+# Homebrew's fixed command surface; source-checkout users may invoke it too.
+set -eu
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+case "${1:-}" in
+  install) shift; exec "$HERE/install.sh" "$@";;
+  status) shift; exec "$HERE/status.sh" "$@";;
+  uninstall) shift; exec "$HERE/uninstall.sh" "$@";;
+  *) echo "usage: gravedecay-mac {install|status|uninstall} [options]" >&2; exit 2;;
+esac

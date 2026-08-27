@@ -26,7 +26,8 @@ ROOT=$("$PYTHON" -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$ROOT
 HOME_CANON=$("$PYTHON" -c 'import os; print(os.path.realpath(os.environ["HOME"]))')
 case "$ROOT" in "$HOME_CANON"/*) ;; *) echo "--root must be an absolute descendant of $HOME" >&2; exit 2;; esac
 case "$ROOT" in *[\&\|\<\>]* ) echo "--root must not contain XML/sed-sensitive characters" >&2; exit 2;; esac
-SOURCE="$ROOT/repos/gravedecay"; UPDATER=${GRAVEDECAY_UPDATER:-0}
+SOURCE="$ROOT/repos/gravedecay"; UPDATER=${GRAVEDECAY_UPDATER:-0}; BREW_TAG=${GRAVEDECAY_MAC_BREW_TAG:-}; BREW_BACKUP=""
+[ -z "$BREW_TAG" ] || "$PYTHON" -c 'import re,sys; raise SystemExit(not bool(re.fullmatch(r"v\d+\.\d+\.\d+",sys.argv[1])))' "$BREW_TAG" || { echo "invalid Homebrew release tag" >&2; exit 2; }
 OLD_AGENTS=0
 if [ -f "$ROOT/config/components" ]; then
   OLD_DASH=$(sed -n 's/^dashboard=//p' "$ROOT/config/components"); OLD_NET=$(sed -n 's/^network=//p' "$ROOT/config/components"); OLD_SERVE=$(sed -n 's/^serve=//p' "$ROOT/config/components")
@@ -39,6 +40,16 @@ if [ -f "$ROOT/config/components" ]; then
   [ "$EXPLICIT_KEEPAWAKE" = 1 ] || [ -z "$OLD_KEEP" ] || KEEPAWAKE=$OLD_KEEP
 fi
 case "$WANT_DASH:$WANT_NET:$SERVE" in 1:1:[01]|1:0:[01]|0:1:[01]) ;; *) echo "invalid component metadata" >&2; exit 2;; esac
+source_install(){ clear_tag=${1:-0}; set -- --root "$ROOT"; [ "$WANT_DASH" = 1 ] && [ "$WANT_NET" = 0 ] && set -- "$@" --dashboard-only; [ "$WANT_NET" = 1 ] && [ "$WANT_DASH" = 0 ] && set -- "$@" --network-only; [ "$SERVE" = 0 ] && set -- "$@" --no-serve; [ "$KEEPAWAKE" = 0 ] && set -- "$@" --allow-sleep; [ "$WANT_AGENTS" = 0 ] || set -- "$@" --agents; if [ "$clear_tag" = 0 ]; then "$SOURCE/macos/install.sh" "$@"; else GRAVEDECAY_MAC_BREW_TAG= "$SOURCE/macos/install.sh" "$@"; fi; }
+if [ "$NO_BOOTSTRAP" = 0 ] && [ -n "$BREW_TAG" ] && [ -d "$SOURCE/.git" ] && [ "$DRY" = 0 ]; then
+  [ "$(git -C "$SOURCE" remote get-url origin 2>/dev/null || true)" = "$ORIGIN" ] && [ -z "$(git -C "$SOURCE" status --porcelain)" ] || { echo "managed source is untrusted or dirty" >&2; exit 1; }
+  [ "$(git -C "$SOURCE" describe --tags --exact-match HEAD 2>/dev/null || true)" = "$BREW_TAG" ] || {
+    mkdir -p "$ROOT/staging"; BOOT="$ROOT/staging/homebrew-$BREW_TAG-$$"; BACKUP="$ROOT/staging/previous-$$"
+    git clone --quiet "$ORIGIN" "$BOOT" && git -C "$BOOT" checkout -q "$BREW_TAG" || { rm -rf "$BOOT"; echo "could not stage Homebrew release $BREW_TAG" >&2; exit 1; }
+    mv "$SOURCE" "$BACKUP" && mv "$BOOT" "$SOURCE" || { [ ! -d "$BACKUP" ] || [ -d "$SOURCE" ] || mv "$BACKUP" "$SOURCE"; echo "could not adopt Homebrew release $BREW_TAG" >&2; exit 1; }
+    BREW_BACKUP=$BACKUP
+  }
+fi
 if [ "$NO_BOOTSTRAP" = 0 ] && [ ! -d "$SOURCE/.git" ] && [ "$DRY" = 0 ]; then
   mkdir -p "$ROOT/repos" "$ROOT/staging"; BOOT="$ROOT/staging/bootstrap-$$"
   CURRENT=$(CDPATH= cd -- "$HERE/.." && pwd)
@@ -48,7 +59,8 @@ if [ "$NO_BOOTSTRAP" = 0 ] && [ ! -d "$SOURCE/.git" ] && [ "$DRY" = 0 ]; then
     git clone --quiet "$CURRENT" "$BOOT" && git -C "$BOOT" remote set-url origin "$ORIGIN" || { echo "could not bootstrap managed source" >&2; exit 1; }
   else
     git clone --quiet "$ORIGIN" "$BOOT" || { echo "could not bootstrap managed source" >&2; exit 1; }
-    BOOT_TAG=$(git -C "$BOOT" tag -l 'v*' | "$PYTHON" -c 'import re,sys; x=[s.strip() for s in sys.stdin if re.fullmatch(r"v\d+\.\d+\.\d+",s.strip())]; print(max(x,key=lambda v:tuple(map(int,v[1:].split(".")))) if x else "")')
+    BOOT_TAG=$BREW_TAG
+    [ -n "$BOOT_TAG" ] || BOOT_TAG=$(git -C "$BOOT" tag -l 'v*' | "$PYTHON" -c 'import re,sys; x=[s.strip() for s in sys.stdin if re.fullmatch(r"v\d+\.\d+\.\d+",s.strip())]; print(max(x,key=lambda v:tuple(map(int,v[1:].split(".")))) if x else "")')
     [ -z "$BOOT_TAG" ] || git -C "$BOOT" checkout -q "$BOOT_TAG"
   fi
   mv "$BOOT" "$SOURCE"
@@ -58,7 +70,11 @@ fi
 [ "$NO_BOOTSTRAP" = 1 ] || [ "$DRY" = 1 ] || [ ! -d "$SOURCE/.git" ] || {
   CURRENT=$(CDPATH= cd -- "$HERE/.." && pwd); [ "$CURRENT" = "$SOURCE" ] || {
     [ "$(git -C "$SOURCE" remote get-url origin 2>/dev/null || true)" = "$ORIGIN" ] && [ -z "$(git -C "$SOURCE" status --porcelain)" ] || { echo "managed source is untrusted or dirty" >&2; exit 1; }
-    set -- --root "$ROOT"; [ "$WANT_DASH" = 1 ] && [ "$WANT_NET" = 0 ] && set -- "$@" --dashboard-only; [ "$WANT_NET" = 1 ] && [ "$WANT_DASH" = 0 ] && set -- "$@" --network-only; [ "$SERVE" = 0 ] && set -- "$@" --no-serve; [ "$KEEPAWAKE" = 0 ] && set -- "$@" --allow-sleep; [ "$WANT_AGENTS" = 0 ] || set -- "$@" --agents; exec "$SOURCE/macos/install.sh" "$@"
+    if [ -n "$BREW_BACKUP" ]; then
+      source_install || { rc=$?; FAILED="$ROOT/staging/failed-$$"; mv "$SOURCE" "$FAILED" && mv "$BREW_BACKUP" "$SOURCE" || { [ -d "$SOURCE" ] || [ ! -d "$BREW_BACKUP" ] || mv "$BREW_BACKUP" "$SOURCE"; echo "Homebrew release $BREW_TAG failed and could not be restored" >&2; exit "$rc"; }; if source_install 1; then note="prior payload restored"; else note="prior checkout restored but payload reconverge failed"; fi; rm -rf "$FAILED"; echo "Homebrew release $BREW_TAG failed; $note" >&2; exit "$rc"; }
+      rm -rf "$BREW_BACKUP"; exit 0
+    fi
+    source_install; exit $?
   }
 }
 [ "$NO_BOOTSTRAP" = 1 ] || [ "$DRY" = 1 ] || [ "$(git -C "$SOURCE" remote get-url origin 2>/dev/null || true)" = "$ORIGIN" ] || { echo "managed source origin is not trusted" >&2; exit 1; }
