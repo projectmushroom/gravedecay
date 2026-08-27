@@ -157,7 +157,7 @@ APPS=""; [ "$WANT_NET" = 0 ] || APPS="📡 Network=/net/"
 # in front of the observability tiles, matching the Linux origin layout.
 [ "$WANT_AGENTS" = 0 ] || APPS="⌨️ T3 Code=/;🖥️ Terminal=/term/?arg=shell;🤖 Claude=/term/?arg=claude;🧠 Codex=/term/?arg=codex${APPS:+;$APPS}"
 render(){ template=$1; target=$2; if [ "$DRY" = 1 ]; then echo "dry-run: render $template -> $target"; else sed "s|@PYTHON@|$PYTHON|g;s|@ROOT@|$ROOT|g;s|@HOME@|$HOME_CANON|g;s|@APPS@|$APPS|g;s|@ALLOWED_USERS@|$ALLOWED_USERS|g;s|@AGENTS@|$WANT_AGENTS|g;s|@T3@|$T3_BIN|g;s|@TTYD@|$TTYD_BIN|g;s|@JAIL@|$JAIL|g;s|@AGENT_PATH@|$AGENT_PATH|g" "$template" > "$target"; plutil -lint "$target" >/dev/null; fi; }
-unload(){ label=$1; plist="$AGENTS/$label.plist"; [ -e "$plist" ] && run launchctl bootout "gui/$UID_NOW" "$plist" || true; run rm -f "$plist"; }
+unload(){ label=$1; plist="$AGENTS/$label.plist"; [ -e "$plist" ] && run launchctl bootout "gui/$UID_NOW" "$plist" 2>/dev/null || true; run rm -f "$plist"; }
 serve_off(){ path=$1; [ -z "$TAILSCALE" ] || run "$TAILSCALE" serve --https=443 --set-path="$path" off; }
 [ "$DRY" = 1 ] || { run mkdir -p "$ROOT/scripts" "$ROOT/web/net" "$ROOT/logs" "$ROOT/config" "$ROOT/config/secrets" "$ROOT/repos" "$ROOT/staging" "$AGENTS"; run chmod 700 "$ROOT/config/secrets"; : > "$ROOT/.gravedecay-macos"; }
 if [ "$DRY" = 0 ]; then
@@ -182,13 +182,13 @@ if [ "$WANT_DASH" = 1 ]; then
   run cp "$HERE/../dashboard/static/"* "$ROOT/scripts/dashboard-static/"
   run cp "$HERE/../assets/gravedecay.png" "$ROOT/config/gravedecay.png"
   render "$HERE/LaunchAgents/io.gravedecay.dashboard.plist.tmpl" "$AGENTS/io.gravedecay.dashboard.plist"
-  run launchctl bootout "gui/$UID_NOW" "$AGENTS/io.gravedecay.dashboard.plist" || true
+  run launchctl bootout "gui/$UID_NOW" "$AGENTS/io.gravedecay.dashboard.plist" 2>/dev/null || true
   run launchctl bootstrap "gui/$UID_NOW" "$AGENTS/io.gravedecay.dashboard.plist"
 else unload io.gravedecay.dashboard; serve_off /grave; fi
 if [ "$WANT_NET" = 1 ]; then
   run cp "$HERE/../dashboard/gravenet.py" "$ROOT/scripts/gravenet.py"; run cp "$HERE/../web/net/index.html" "$ROOT/web/net/index.html"
   render "$HERE/LaunchAgents/io.gravedecay.network.plist.tmpl" "$AGENTS/io.gravedecay.network.plist"
-  run launchctl bootout "gui/$UID_NOW" "$AGENTS/io.gravedecay.network.plist" || true
+  run launchctl bootout "gui/$UID_NOW" "$AGENTS/io.gravedecay.network.plist" 2>/dev/null || true
   run launchctl bootstrap "gui/$UID_NOW" "$AGENTS/io.gravedecay.network.plist"
 else unload io.gravedecay.network; serve_off /net; fi
 if [ "$WANT_AGENTS" = 1 ]; then
@@ -200,7 +200,7 @@ if [ "$WANT_AGENTS" = 1 ]; then
   else "$PYTHON" "$HERE/../docker/portable/build-term.py" "$HERE/../web/term" "$ROOT/web/term/index.html"; fi
   for label in io.gravedecay.t3 io.gravedecay.term; do
     render "$HERE/LaunchAgents/$label.plist.tmpl" "$AGENTS/$label.plist"
-    run launchctl bootout "gui/$UID_NOW" "$AGENTS/$label.plist" || true
+    run launchctl bootout "gui/$UID_NOW" "$AGENTS/$label.plist" 2>/dev/null || true
     run launchctl bootstrap "gui/$UID_NOW" "$AGENTS/$label.plist"
   done
 elif [ "$OLD_AGENTS" = 1 ]; then
@@ -217,20 +217,20 @@ elif [ "$OLD_AGENTS" = 1 ]; then
 fi
 if [ "$UPDATER" != 1 ]; then
   render "$HERE/LaunchAgents/io.gravedecay.updater.plist.tmpl" "$AGENTS/io.gravedecay.updater.plist"
-  run launchctl bootout "gui/$UID_NOW" "$AGENTS/io.gravedecay.updater.plist" || true
+  run launchctl bootout "gui/$UID_NOW" "$AGENTS/io.gravedecay.updater.plist" 2>/dev/null || true
   run launchctl bootstrap "gui/$UID_NOW" "$AGENTS/io.gravedecay.updater.plist"
 fi
 # Serving Macs must not idle-sleep (the tailnet paths just go dark) — hold a
 # caffeinate assertion for as long as launchd runs. --allow-sleep opts out.
 if [ "$SERVE" = 1 ] && [ "$KEEPAWAKE" = 1 ]; then
   render "$HERE/LaunchAgents/io.gravedecay.keepawake.plist.tmpl" "$AGENTS/io.gravedecay.keepawake.plist"
-  run launchctl bootout "gui/$UID_NOW" "$AGENTS/io.gravedecay.keepawake.plist" || true
+  run launchctl bootout "gui/$UID_NOW" "$AGENTS/io.gravedecay.keepawake.plist" 2>/dev/null || true
   run launchctl bootstrap "gui/$UID_NOW" "$AGENTS/io.gravedecay.keepawake.plist"
 else unload io.gravedecay.keepawake; fi
 # Periodic doctor-lite; a failing contract pages via `grave notify --event
 # doctor`, a silent no-op until an ntfy topic is configured.
 render "$HERE/LaunchAgents/io.gravedecay.doctor.plist.tmpl" "$AGENTS/io.gravedecay.doctor.plist"
-run launchctl bootout "gui/$UID_NOW" "$AGENTS/io.gravedecay.doctor.plist" || true
+run launchctl bootout "gui/$UID_NOW" "$AGENTS/io.gravedecay.doctor.plist" 2>/dev/null || true
 run launchctl bootstrap "gui/$UID_NOW" "$AGENTS/io.gravedecay.doctor.plist"
 # Record the converged component set BEFORE the health gates: if a probe
 # below aborts, the metadata still says what is actually loaded, so doctor
@@ -239,7 +239,7 @@ run launchctl bootstrap "gui/$UID_NOW" "$AGENTS/io.gravedecay.doctor.plist"
 [ "$DRY" = 1 ] || printf 'dashboard=%s\nnetwork=%s\nserve=%s\nkeepawake=%s\nagents=%s\n' "$WANT_DASH" "$WANT_NET" "$SERVE" "$KEEPAWAKE" "$WANT_AGENTS" > "$ROOT/config/components"
 # --max-time is not optional (see raise.sh wait_http): a curl that connects
 # while the service is mid-start can hang on a never-arriving response.
-health(){ port=$1; path=${2:-/healthz}; i=0; while [ "$i" -lt 20 ]; do curl -fsS --max-time 5 "http://127.0.0.1:$port$path" >/dev/null && return 0; i=$((i+1)); sleep 1; done; return 1; }
+health(){ port=$1; path=${2:-/healthz}; i=0; while [ "$i" -lt 20 ]; do curl -fs --max-time 5 "http://127.0.0.1:$port$path" >/dev/null 2>&1 && return 0; i=$((i+1)); sleep 1; done; echo "127.0.0.1:$port$path not answering after 20s" >&2; return 1; }
 if [ "$DRY" = 0 ]; then [ "$WANT_DASH" = 0 ] || health 4712; [ "$WANT_NET" = 0 ] || health 4714; fi
 # t3/ttyd have no /healthz; an answering root page is their liveness signal.
 # Non-fatal, like the Linux wait_http: a cold npm-installed t3 can outlast
