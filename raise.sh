@@ -527,7 +527,7 @@ if [[ -z "$SUDOERS_FILE" ]]; then
   fi
 fi
 sudoers_content="# gravedecay: let $RUN_USER (and gravedecay action buttons) drive the platform
-$RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker, $GRAVE_BIN, /usr/bin/journalctl, /usr/bin/ufw, /usr/sbin/ufw, /usr/libexec/gravedecay/firewall-harden, /usr/libexec/gravedecay/firewall-status, /usr/bin/snapper, /usr/sbin/sshd -T, /usr/bin/sshd -T, /usr/bin/ssh-keygen -A, /usr/bin/tee /etc/ssh/sshd_config.d/50-gravedecay.conf, /usr/bin/tee /etc/systemd/system/*, /usr/bin/tee /sys/fs/cgroup/grave-torpor/*, /usr/bin/mkdir -p /sys/fs/cgroup/grave-torpor, /usr/bin/npm update -g *"
+$RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker, $GRAVE_BIN, /usr/bin/journalctl, /usr/bin/ufw, /usr/sbin/ufw, /usr/libexec/gravedecay/firewall-harden, /usr/libexec/gravedecay/firewall-status, /usr/bin/snapper, /usr/sbin/sshd -T, /usr/bin/sshd -T, /usr/sbin/sshd -t, /usr/bin/sshd -t, /usr/bin/ssh-keygen -A, /usr/bin/tee /etc/ssh/sshd_config.d/50-gravedecay.conf, /usr/bin/tee /etc/systemd/system/*, /usr/bin/tee /sys/fs/cgroup/grave-torpor/*, /usr/bin/mkdir -p /sys/fs/cgroup/grave-torpor, /usr/bin/npm update -g *"
 # /etc/sudoers.d entries are 440 — unreadable to us — so the unchanged-skip
 # (#89: headless upgrades must not need out-of-scope sudo) compares against a
 # user-side stamp of what the last successful install wrote instead.

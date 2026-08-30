@@ -96,6 +96,8 @@ class ProvisioningSafetyTests(unittest.TestCase):
         self.assertIn("PasswordAuthentication no", RAISE)
         self.assertIn("KbdInteractiveAuthentication no", RAISE)
         self.assertIn("sudo ssh-keygen -A", RAISE)
+        self.assertIn("/usr/sbin/sshd -t", RAISE)
+        self.assertIn("/usr/bin/sshd -t", RAISE)
         self.assertIn('enable_restart "$SSHD_UNIT"', RAISE)
         self.assertIn("sudo systemctl enable --now tailscaled", RAISE)
 
