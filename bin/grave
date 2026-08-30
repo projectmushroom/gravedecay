@@ -180,11 +180,19 @@ t3_connect_restart() { # apply a link-state change to the running service
   if systemctl is-active --quiet t3code; then
     need_root_helper
     sudo -n systemctl restart t3code
-    if curl -sf --retry 10 --retry-delay 1 -o /dev/null "http://127.0.0.1:$T3_PORT/"; then
-      ok "t3code restarted — Connect link state applies from this start"
-    else
-      bad "t3code did not answer after restart"; exit 1
-    fi
+    # A new full link performs relay reconciliation before T3 is ready and can
+    # take 10+ seconds. curl's --retry does not retry connection-refused unless
+    # explicitly requested, so the old single call failed immediately while
+    # the healthy service was still starting.
+    local i
+    for i in $(seq 1 30); do
+      if curl -sf --max-time 2 -o /dev/null "http://127.0.0.1:$T3_PORT/"; then
+        ok "t3code restarted — Connect link state applies from this start"
+        return 0
+      fi
+      sleep 1
+    done
+    bad "t3code did not answer after restart"; exit 1
   else
     say "  t3code is stopped (gaming mode?) — the change applies on its next start"
   fi

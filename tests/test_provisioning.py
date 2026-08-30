@@ -81,7 +81,23 @@ class ProvisioningSafetyTests(unittest.TestCase):
         # the #85 smoke harness — every Arch re-raise ran sudo pacman), and
         # apt-get update is non-fatal like the install below it already was
         self.assertIn('if pacman -T "${PACMAN_PKGS[@]}"', RAISE)
+        self.assertIn("openssh tailscale", RAISE)
         self.assertNotIn("sudo apt-get update -qq\n", RAISE)
+
+    def test_package_host_t3_install_allows_native_dependency_scripts(self):
+        # npm 11+ blocks dependency lifecycle scripts by default. T3 starts but
+        # immediately crashes without node-pty's native pty.node artifact.
+        self.assertIn(
+            "npm install -g --allow-scripts=msgpackr-extract,node-pty t3",
+            RAISE,
+        )
+
+    def test_raise_configures_key_only_ssh_and_starts_packaged_tailscale(self):
+        self.assertIn("PasswordAuthentication no", RAISE)
+        self.assertIn("KbdInteractiveAuthentication no", RAISE)
+        self.assertIn("sudo ssh-keygen -A", RAISE)
+        self.assertIn('enable_restart "$SSHD_UNIT"', RAISE)
+        self.assertIn("sudo systemctl enable --now tailscaled", RAISE)
 
     def test_profile_conf_set_skips_when_value_already_set(self):
         # Regression #89: profiles run on every raise; conf_set must be a
