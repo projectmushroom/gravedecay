@@ -94,8 +94,8 @@ agent sessions and frees RAM/GPU until you're done.
 
 ## Quickstart (Linux appliance)
 
-Requirements: a systemd distro (Arch-family—including Arch, CachyOS, Omarchy,
-and EndeavourOS—first-class; Debian/Fedora best-effort), ~8 GB RAM, a free
+Requirements: a systemd distro (Arch-family—including Arch, CachyOS, and
+Omarchy—first-class; Debian/Fedora best-effort), ~8 GB RAM, a free
 [Tailscale](https://tailscale.com) account.
 
 **The agent way (recommended).** SSH in, install your coding agent, and say:
