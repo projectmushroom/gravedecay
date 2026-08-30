@@ -7,7 +7,7 @@ running `./raise.sh` and fixing what breaks over doing steps by hand.
 ## 0. Recon (read-only)
 
 - `cat /etc/os-release` — distro family decides the package manager.
-  Arch-family (Arch, CachyOS, EndeavourOS) is first-class; Debian/Ubuntu and
+  Arch-family (Arch, CachyOS, Omarchy, EndeavourOS) is first-class; Debian/Ubuntu and
   Fedora are best-effort. Immutable OSes (SteamOS in read-only mode,
   Silverblue) need layering/overlay — stop and report options if you find one.
 - `findmnt -no FSTYPE /` — if btrfs, subvolume + snapper setup is worth doing
