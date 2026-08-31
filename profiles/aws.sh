@@ -28,9 +28,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 profile_apply() {
-  if [[ "${MASK_SLEEP:-1}" == 1 ]]; then
-    sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
-    conf_set CHECK_SLEEP_MASKED 1
-  fi
+  sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
+  conf_set CHECK_SLEEP_MASKED 1
   conf_set CHECK_FIREWALL 1
 }

@@ -31,9 +31,6 @@ public enum NativeParsers {
               values.count == 2, let user = Double(values[0]), let system = Double(values[1]) else { return nil }
         return CPUActivity(user: user, system: system, total: min(100, user + system))
     }
-    public static func cpuUsage(_ text: String) -> String? {
-        cpuActivity(text).map { String(format: "%.1f%% user, %.1f%% sys", $0.user, $0.system) }
-    }
     public static func memoryActivity(pressure: String, vmStat: String) -> MemoryActivity {
         let free = captures(#"System-wide memory free percentage:\s*([0-9]+(?:\.[0-9]+)?)%"#, in: pressure)?.first.flatMap(Double.init)
         let pageSize = captures(#"page size of\s+([0-9]+) bytes"#, in: vmStat)?.first.flatMap(Int64.init) ?? 4096

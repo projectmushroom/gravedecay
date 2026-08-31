@@ -24,8 +24,6 @@ declare -p GAME_SIGNALS >/dev/null 2>&1 \
   || GAME_SIGNALS=(gamescope steam-cgroup gamemode process)
 mkdir -p "$GRAVE_ROOT/config" "$GRAVE_ROOT/logs" 2>/dev/null || true
 
-[[ -x /home/linuxbrew/.linuxbrew/bin/brew ]] && eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv bash)" 2>/dev/null || true
-export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$LOG"; }

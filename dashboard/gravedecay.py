@@ -76,7 +76,7 @@ T3_BASE_DIR = os.environ.get("GRAVEDECAY_T3_BASE_DIR", f"{GRAVE_ROOT}/agents/t3c
 # Mount prefix when path-routed behind `tailscale serve --set-path` on the same
 # origin as T3 (single entry point). Bare paths keep working for localhost.
 BASE = os.environ.get("GRAVEDECAY_BASE", "/grave").rstrip("/")
-ICON_PATH = os.environ.get("GRAVEDECAY_ICON", os.path.join(GRAVE_ROOT, "config", "gravedecay.png"))
+ICON_PATH = os.path.join(GRAVE_ROOT, "config", "gravedecay.png")
 HOST = socket.gethostname()
 with open(__file__, "rb") as _source:
     BUILD_ID = hashlib.sha256(_source.read()).hexdigest()
@@ -191,12 +191,7 @@ def public_scheme(headers):
     return "https" if headers.get("Tailscale-User-Login") else "http"
 
 
-def load_settings():
-    try:
-        with open(SETTINGS_PATH) as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        data = {}
+def _normalize(data):
     s = dict(DEFAULT_SETTINGS)
     for k, default in DEFAULT_SETTINGS.items():
         if k in data and isinstance(data[k], type(default)):
@@ -208,15 +203,19 @@ def load_settings():
     return s
 
 
+def load_settings():
+    try:
+        with open(SETTINGS_PATH) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        data = {}
+    return _normalize(data)
+
+
 def save_settings(data):
     merged = load_settings()
-    for k, default in DEFAULT_SETTINGS.items():
-        if k in data and isinstance(data[k], type(default)):
-            merged[k] = data[k]
-    merged["poll_ms"] = max(2000, min(60000, int(merged["poll_ms"])))
-    merged["custom_apps"] = _sanitize_custom_apps(merged["custom_apps"])
-    if merged["t3_tile"] not in ("pwa", "app"):
-        merged["t3_tile"] = "pwa"
+    merged.update((k, v) for k, v in data.items() if k in DEFAULT_SETTINGS and isinstance(v, type(DEFAULT_SETTINGS[k])))
+    merged = _normalize(merged)
     tmp = SETTINGS_PATH + ".tmp"
     with open(tmp, "w") as f:
         json.dump(merged, f, indent=2)
@@ -230,14 +229,14 @@ def settings_response(merged):
             "notify": None if PORTABLE else notify_state()}
 
 
-def macos_repo_root(value=None):
+def macos_repo_root(value):
     """Canonical Mac project root, or a clear validation error.
 
     The root is supplied by an owner in Settings, so never let it become an
     implicit relative path or a shell fragment.  ``realpath`` also means a
     symlinked root is checked against the directory it actually names.
     """
-    root = MACOS_REPO_ROOT_DEFAULT if value is None else str(value).strip()
+    root = str(value).strip()
     if not os.path.isabs(root):
         return None, "Repository root must be an absolute path"
     root = os.path.realpath(root)
@@ -329,17 +328,7 @@ def icon_png(size):
             with open(ICON_PATH, "rb") as f:
                 return f.read()
         except OSError:
-            pass
-        from struct import pack
-        import zlib
-        row = b"\x00" + bytes.fromhex("000000") * size
-        idat = zlib.compress(row * size)
-        def chunk(tag, data):
-            c = pack(">I", len(data)) + tag + data
-            return c + pack(">I", zlib.crc32(tag + data))
-        return (b"\x89PNG\r\n\x1a\n"
-                + chunk(b"IHDR", pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
-                + chunk(b"IDAT", idat) + chunk(b"IEND", b""))
+            return b""
     buf = io.BytesIO()
     img.save(buf, "PNG")
     return buf.getvalue()
@@ -359,58 +348,6 @@ MANIFEST = json.dumps({
               {"src": "icon-512.png", "sizes": "512x512", "type": "image/png"}],
 })
 
-# Network-first navigation only.  The dashboard is a remote control, so stale
-# API/system data must never be cached or presented as live.  The tiny offline
-# document merely keeps an installed Safari web app useful enough to explain
-# that the box/Tailscale is unreachable and retry without dropping to a blank
-# WebKit error page.  The worker is allowed to cover the entire origin because
-# the manifest intentionally does too; non-navigation requests pass through.
-SERVICE_WORKER = r"""const CACHE='gravedecay-shell-@OFFLINE@';
-const OFFLINE=new URL('offline.html',self.location.href).href;
-self.addEventListener('install',event=>{
-  event.waitUntil(caches.open(CACHE).then(cache=>cache.add(new Request(OFFLINE,{cache:'reload'}))).then(()=>self.skipWaiting()));
-});
-self.addEventListener('activate',event=>{
-  event.waitUntil(caches.keys().then(keys=>Promise.all(
-    keys.filter(key=>key!==CACHE).map(key=>caches.delete(key)))).then(()=>self.clients.claim()));
-});
-self.addEventListener('fetch',event=>{
-  if(event.request.mode!=='navigate')return;
-  event.respondWith(fetch(event.request).catch(()=>caches.match(OFFLINE)));
-});
-self.addEventListener('push',event=>{
-  let d={};
-  try{d=event.data?event.data.json():{};}
-  catch(e){d={body:event.data&&event.data.text()};}
-  event.waitUntil(self.registration.showNotification(d.title||'gravedecay',{
-    body:d.body||'',icon:'icon-192.png',badge:'icon-192.png',
-    tag:d.tag||'gravedecay',data:{url:d.url||'./'}}));
-});
-self.addEventListener('notificationclick',event=>{
-  event.notification.close();
-  const url=new URL((event.notification.data&&event.notification.data.url)||'./',self.location.href).href;
-  event.waitUntil(clients.matchAll({type:'window',includeUncontrolled:true}).then(list=>{
-    for(const c of list){if(c.url===url&&'focus'in c)return c.focus();}
-    return clients.openWindow(url);
-  }));
-});
-"""
-
-OFFLINE_PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#070907"><title>gravedecay · offline</title>
-<style>*{box-sizing:border-box}body{margin:0;min-height:100dvh;display:grid;place-items:center;
-padding:max(24px,env(safe-area-inset-top)) max(18px,env(safe-area-inset-right))
-max(24px,env(safe-area-inset-bottom)) max(18px,env(safe-area-inset-left));background:#070907;
-color:#a8e6a3;font:15px/1.6 ui-monospace,Menlo,monospace}.box{width:min(34rem,100%);
-border:1px solid #2e4a2e;padding:22px}h1{margin:0 0 10px;color:#d6ffd0;font-size:20px}
-p{margin:8px 0;color:#557a55}button{margin-top:12px;min-height:44px;padding:8px 16px;
-border:1px solid #2e4a2e;background:transparent;color:#d6ffd0;font:700 14px ui-monospace,Menlo,monospace}
-</style></head><body><main class="box"><h1>🪦 gravedecay is unreachable</h1>
-<p>The dashboard needs a live path to the box. Check that Tailscale is connected and the machine is awake.</p>
-<button onclick="location.reload()">↻ retry connection</button></main></body></html>"""
-
-
 def static_asset_path(name):
     """Resolve a PWA shell file from the source tree or the installed copy."""
     here = os.path.dirname(os.path.abspath(__file__))
@@ -422,9 +359,8 @@ def static_asset_path(name):
     return None
 
 
-def static_asset(name, fallback):
-    """Read source-tree or installed dashboard assets, with an embedded
-    fallback so an interrupted/older upgrade never makes the UI unbootable."""
+def static_asset(name, fallback=""):
+    """Read a source-tree or installed dashboard asset."""
     path = static_asset_path(name)
     if path:
         with open(path, encoding="utf-8") as f:
@@ -441,11 +377,8 @@ def static_asset_sha(name):
     path = static_asset_path(name)
     if not path:
         return None
-    digest = hashlib.sha256()
     with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+        return hashlib.sha256(f.read()).hexdigest()
 
 
 # Tiny last-resort page if raise copied the Python without index.html.
@@ -476,9 +409,9 @@ def load_service_worker():
     pre-caches. sw.js is otherwise byte-stable, and browsers only re-install
     a worker whose bytes changed — without the stamp an upgrade that touched
     offline.html would leave the old copy in CacheStorage forever."""
-    offline = static_asset("offline.html", OFFLINE_PAGE)
+    offline = static_asset("offline.html")
     stamp = hashlib.sha256(offline.encode()).hexdigest()[:12]
-    return static_asset("sw.js", SERVICE_WORKER).replace("@OFFLINE@", stamp), stamp
+    return static_asset("sw.js").replace("@OFFLINE@", stamp), stamp
 
 
 SW, SW_ID = load_service_worker()
@@ -499,9 +432,9 @@ def unit_state(unit):
 
 
 def launchagent_state(label):
-    rc, out, _ = sh(["launchctl", "print", f"gui/{os.getuid()}/{label}"], timeout=3)
-    return {"unit": label, "active": "active" if rc == 0 else "inactive",
-            "sub": "launchd" if rc == 0 else "not loaded"}
+    loaded = sh(["launchctl", "print", f"gui/{os.getuid()}/{label}"], timeout=3)[0] == 0
+    return {"unit": label, "active": "active" if loaded else "inactive",
+            "sub": "launchd" if loaded else "not loaded"}
 
 
 def collect_services():
@@ -515,10 +448,10 @@ def collect_docker():
     def fetch():
         cmd = ["docker", "ps", "-a", "--format",
                "{{.Names}}\t{{.State}}\t{{.Status}}\t{{.Label \"com.docker.compose.project\"}}"]
-        rc, out, err = sh(cmd, timeout=3) if MACOS else sh(cmd)
+        rc, out, err = sh(cmd, timeout=3 if MACOS else 10)
         if rc != 0:
-            error = "not managed on macOS" if MACOS else "docker unavailable (gaming mode?)"
-            return {"error": error, "containers": []}
+            return {"error": "not managed on macOS" if MACOS else "docker unavailable (gaming mode?)",
+                    "containers": []}
         rows = []
         for line in out.splitlines():
             f = line.split("\t")
@@ -543,6 +476,15 @@ def collect_tmux():
     return rows
 
 
+def _git_summary(path):
+    _, branch, _ = sh(["git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD"])
+    _, porcelain, _ = sh(["git", "-C", path, "status", "--porcelain"])
+    _, last, _ = sh(["git", "-C", path, "log", "-1", "--format=%cr\t%s"])
+    when, _, subject = last.strip().partition("\t")
+    return {"branch": branch.strip(), "dirty": len(porcelain.splitlines()),
+            "last_when": when, "last_subject": subject[:80]}
+
+
 def collect_repos():
     # /api/state polls as fast as every 2 s and this forks 3 git processes PER
     # repo; without a TTL cache a few read-only viewers (or a many-repo box)
@@ -558,13 +500,7 @@ def collect_repos():
             path = f"{base}/{name}"
             if not os.path.isdir(f"{path}/.git"):
                 continue
-            _, branch, _ = sh(["git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD"])
-            _, porcelain, _ = sh(["git", "-C", path, "status", "--porcelain"])
-            _, last, _ = sh(["git", "-C", path, "log", "-1", "--format=%cr\t%s"])
-            when, _, subject = last.strip().partition("\t")
-            repos.append({"name": name, "branch": branch.strip(),
-                          "dirty": len(porcelain.splitlines()),
-                          "last_when": when, "last_subject": subject[:60]})
+            repos.append({"name": name, **_git_summary(path)})
         return repos
     return cached("repos", 15, fetch)
 
@@ -627,16 +563,11 @@ def collect_macos_repo_inventory():
                 if rc != 0 or inside.strip() != "true":
                     dirs[:] = []
                     continue
-                _, branch, _ = sh(["git", "-C", directory, "rev-parse", "--abbrev-ref", "HEAD"])
-                _, porcelain, _ = sh(["git", "-C", directory, "status", "--porcelain"])
-                _, last, _ = sh(["git", "-C", directory, "log", "-1", "--format=%cr\t%s"])
                 _, remote, _ = sh(["git", "-C", directory, "remote", "get-url", "origin"])
-                when, _, subject = last.strip().partition("\t")
+                summary = _git_summary(directory)
+                summary["branch"] = summary["branch"] or "detached"
                 repos.append({"name": relative if relative != "." else os.path.basename(root),
-                              "branch": branch.strip() or "detached",
-                              "dirty": len(porcelain.splitlines()),
-                              "last_when": when, "last_subject": subject[:80],
-                              "github_repo": github_remote(remote)})
+                              **summary, "github_repo": github_remote(remote)})
                 dirs[:] = []  # a nested repository is represented once
                 if len(repos) >= MACOS_REPO_SCAN_MAX_REPOS:
                     break
@@ -717,18 +648,11 @@ def collect_macos_work(inventory):
                                         "title": str(row.get("title", ""))[:80],
                                         "url": row.get("url") or row.get("html_url", "")})
             rc, out, _ = results.get((label, "ci"), (1, "", ""))
-            if rc == 0:
-                try:
-                    runs = json.loads(out)
-                except ValueError:
-                    runs = []
-                if runs:
-                    run = runs[0]
-                    ci_rows.append({"repo": label, "workflow": run.get("workflowName", ""),
-                                    "branch": run.get("headBranch", ""), "status": run.get("status", ""),
-                                    "conclusion": run.get("conclusion") or "", "url": run.get("url", "")})
-            else:
+            row = _ci_row(label, rc, out)
+            if rc != 0:
                 errors.append(label)
+            elif row:
+                ci_rows.append(row)
             if group["prs"] or group["issues"]:
                 groups.append(group)
         warnings = []
@@ -740,14 +664,6 @@ def collect_macos_work(inventory):
         return {"github": {"login": login, "repos": groups, "error": None, "warning": warning},
                 "ci": {"rows": ci_rows, "error": None, "warning": warning}}
     return cached(cache_key, 120, fetch)
-
-
-def collect_macos_github(inventory):
-    return collect_macos_work(inventory)["github"]
-
-
-def collect_macos_ci(inventory):
-    return collect_macos_work(inventory)["ci"]
 
 
 def collect_journal():
@@ -1146,6 +1062,20 @@ def collect_github():
     return cached("github", 120, fetch)
 
 
+def _ci_row(name, rc, out):
+    """One CI table row from `gh run list --json` output, or None."""
+    try:
+        runs = json.loads(out) if rc == 0 else []
+    except ValueError:
+        runs = []
+    if not runs:
+        return None
+    r = runs[0]
+    return {"repo": name, "workflow": r.get("workflowName", ""),
+            "branch": r.get("headBranch", ""), "status": r.get("status", ""),
+            "conclusion": r.get("conclusion") or "", "url": r.get("url", "")}
+
+
 def collect_ci():
     """Latest workflow run per repo under $GRAVE_ROOT/repos with a GitHub remote."""
     def fetch():
@@ -1160,21 +1090,15 @@ def collect_ci():
             if not os.path.isdir(f"{path}/.git"):
                 continue
             rc, out, _ = sh(["git", "-C", path, "remote", "get-url", "origin"])
-            m = re.search(r"github\.com[:/]([^/\s]+/[^/.\s]+)", out)
-            if rc != 0 or not m:
+            slug = github_remote(out) if rc == 0 else None
+            if not slug:
                 continue
-            rc, out, _ = sh(["gh", "run", "list", "-R", m.group(1), "-L", "1",
+            rc, out, _ = sh(["gh", "run", "list", "-R", slug, "-L", "1",
                              "--json", "workflowName,conclusion,status,url,headBranch"],
                             timeout=15)
-            try:
-                runs = json.loads(out) if rc == 0 else []
-            except ValueError:
-                runs = []
-            if runs:
-                r = runs[0]
-                rows.append({"repo": name, "workflow": r.get("workflowName", ""),
-                             "branch": r.get("headBranch", ""), "status": r.get("status", ""),
-                             "conclusion": r.get("conclusion") or "", "url": r.get("url", "")})
+            row = _ci_row(name, rc, out)
+            if row:
+                rows.append(row)
         return {"rows": rows}
     return cached("ci", 180, fetch)
 
@@ -1183,14 +1107,7 @@ LINEAR_ENV = os.path.join(GRAVE_ROOT, "config", "secrets", "linear.env")
 
 
 def linear_key():
-    try:
-        with open(LINEAR_ENV) as f:
-            for line in f:
-                if line.startswith("LINEAR_API_KEY="):
-                    return line.split("=", 1)[1].strip()
-    except OSError:
-        pass
-    return None
+    return _read_env_file(LINEAR_ENV).get("LINEAR_API_KEY") or None
 
 
 def collect_linear():
@@ -1795,20 +1712,21 @@ def boot_mode():
     return "developer" if rc == 0 else "gaming"
 
 
+def _switch_state(unit, flag):
+    """An opt-in service: unit installed? flag file on? unit running?"""
+    return {"installed": sh(["systemctl", "cat", f"{unit}.service"])[0] == 0,
+            "on": os.path.exists(os.path.join(GRAVE_ROOT, "config", flag)),
+            "running": sh(["systemctl", "is-active", "--quiet", unit])[0] == 0}
+
+
 def gamewatch_state():
-    """Game-mode auto-throttle: installed? on? watcher running? (Steam Machine)."""
-    installed = sh(["systemctl", "cat", "gravedecay-gamewatch.service"])[0] == 0
-    on = os.path.exists(os.path.join(GRAVE_ROOT, "config", "gamewatch.on"))
-    running = sh(["systemctl", "is-active", "--quiet", "gravedecay-gamewatch"])[0] == 0
-    return {"installed": installed, "on": on, "running": running}
+    """Game-mode auto-throttle (Steam Machine)."""
+    return _switch_state("gravedecay-gamewatch", "gamewatch.on")
 
 
 def keepalive_state():
-    """"Always alive" tailnet keepalive: installed? on? loop running?"""
-    installed = sh(["systemctl", "cat", "gravedecay-keepalive.service"])[0] == 0
-    on = os.path.exists(os.path.join(GRAVE_ROOT, "config", "keepalive.on"))
-    running = sh(["systemctl", "is-active", "--quiet", "gravedecay-keepalive"])[0] == 0
-    return {"installed": installed, "on": on, "running": running}
+    """"Always alive" tailnet keepalive."""
+    return _switch_state("gravedecay-keepalive", "keepalive.on")
 
 
 def t3_connect_state():
@@ -1932,75 +1850,60 @@ def t3_activity():
     return cached("t3-activity", 3, fetch)
 
 
+_BLANK = {
+    "boot_mode": None, "gamewatch": None, "keepalive": None, "notify": None,
+    "github": {"login": None, "prs": [], "error": "restricted"},
+    "linear": {"configured": False, "issues": [], "error": None},
+    "ci": {"rows": []}, "usage": None, "services": [],
+    "docker": {"error": None, "containers": []}, "tmux": [], "torpor": 0,
+    "repos": [], "journal": [], "backups": {"count": 0, "latest": None},
+    "inbox": [], "agent_history": [],
+}
+
+
 def state(headers):
+    viewer = headers.get("Tailscale-User-Login")
+    owner = viewer is None or viewer in ALLOWED_USERS
     if MACOS:
         # No T3, terminal, Docker management, privileged controls, or Linux
-        # data on Mac.
-        # Unlike machine vitals, project names, commit subjects and integration
-        # data are owner-private.  Localhost is trusted; a Serve viewer must
-        # exactly match the installer-configured local Tailscale login.
-        viewer = headers.get("Tailscale-User-Login")
-        owner = viewer is None or viewer in ALLOWED_USERS
+        # data on Mac. Machine vitals are public; project names, commit
+        # subjects, integration data and the configured repo root are
+        # owner-private (localhost, or an exact ALLOWED_USERS login).
         settings = load_settings()
+        common = {**_BLANK, "host": HOST, "platform": "macos", "macos_agents": MACOS_AGENTS,
+                  "mode": "developer", "apps": list(APPS), "settings": settings,
+                  "services": collect_services(), "docker": collect_docker(),
+                  "system": collect_system()}
         if not owner:
-            # A configured path is part of the local project topology too.
-            # Do not hand it to a tailnet observer merely because preferences
-            # are otherwise harmless to render.
-            settings = dict(settings)
             settings["repo_root"] = ""
-        private = {"github": {"login": None, "prs": [], "issues": [], "error": "restricted"},
-                   "linear": {"configured": False, "issues": [], "error": "restricted"},
-                   "ci": {"rows": [], "error": "restricted"}, "repos": [],
-                   "repo_scan": {"root": None, "error": "restricted"}}
-        if owner:
-            inventory = collect_macos_repo_inventory()
-            work = collect_macos_work(inventory)
-            private = {"github": work["github"], "linear": collect_linear(), "ci": work["ci"],
-                       "repos": inventory["repos"],
-                       "repo_scan": {"root": inventory["root"], "error": inventory.get("error"),
-                                     "warning": inventory.get("warning"),
-                                     "truncated": inventory.get("truncated", False)}}
-        return {"host": HOST, "now": time.strftime("%H:%M:%S"),
-                "viewer": viewer or "local", "platform": "macos",
-                "macos_agents": MACOS_AGENTS,
-                "mode": "developer", "boot_mode": None, "gamewatch": None,
-                "keepalive": None, "apps": list(APPS), "settings": settings,
-                "github": private["github"], "linear": private["linear"], "ci": private["ci"],
-                "usage": None, "notify": None, "services": collect_services(),
-                "docker": collect_docker(),
-                # Session names are owner-private like the rest of the work
-                # plane; killing them is POST-gated separately.
-                "tmux": collect_tmux() if MACOS_AGENTS and owner else [],
-                "torpor": 0, "repos": private["repos"], "repo_scan": private["repo_scan"], "journal": [], "system": collect_system(),
-                "backups": {"count": 0, "latest": None}, "inbox": [], "agent_history": []}
+            return {**common, "linear": {"configured": False, "issues": [], "error": "restricted"},
+                    "ci": {"rows": [], "error": "restricted"},
+                    "repo_scan": {"root": None, "error": "restricted"}}
+        inventory = collect_macos_repo_inventory()
+        work = collect_macos_work(inventory)
+        return {**common, "github": work["github"], "linear": collect_linear(), "ci": work["ci"],
+                "repos": inventory["repos"],
+                "repo_scan": {"root": inventory["root"], "error": inventory.get("error"),
+                              "warning": inventory.get("warning"),
+                              "truncated": inventory.get("truncated", False)},
+                # Session names are owner-private; killing them is POST-gated separately.
+                "tmux": collect_tmux() if MACOS_AGENTS else []}
     if PORTABLE:
         # Deliberately work-plane only: do not read systemd, the host Docker
         # daemon, journald, cgroups, or host hardware from a container.
-        viewer = headers.get("Tailscale-User-Login")
-        restricted = viewer is not None and viewer not in ALLOWED_USERS
-        private = {"github": {"login": None, "prs": [], "error": "restricted"},
-                   "linear": {"configured": False, "issues": [], "error": "restricted"},
-                   "ci": {"rows": [], "error": "restricted"}, "usage": None,
-                   "repos": [], "inbox": [], "agent_history": []}
-        if not restricted:
-            gh = collect_github()
-            private = {"github": gh, "linear": collect_linear(), "ci": collect_ci(),
-                       "usage": collect_agent_usage(), "repos": collect_repos(),
-                       "inbox": collect_inbox(), "agent_history": collect_agent_history()}
-        return {"host": HOST, "now": time.strftime("%H:%M:%S"),
-                "viewer": viewer or "local", "platform": "container", "mode": "developer",
-                "boot_mode": None, "gamewatch": None, "keepalive": None,
-                "apps": list(APPS), "settings": load_settings(), "notify": None,
-                "github": private["github"], "linear": private["linear"], "ci": private["ci"],
-                "usage": private["usage"], "services": [],
-                "docker": {"error": "not managed by portable workspace", "containers": []},
-                "tmux": collect_tmux(), "torpor": 0, "repos": private["repos"], "journal": [],
-                "system": {"uptime_s": 0, "temps": {"cpu": None, "gpu": None,
-                           "gpu_mhz": None, "gpu_state": None, "fans": []},
-                           "cpu": {"pct": None, "cores": []}, "load": [0, 0, 0], "ncpu": 0,
-                           "mem": {"pct": 0, "used_kb": 0, "total_kb": 0}, "disks": []},
-                "backups": {"count": 0, "latest": None}, "inbox": private["inbox"],
-                "agent_history": private["agent_history"]}
+        common = {**_BLANK, "host": HOST, "platform": "container", "mode": "developer",
+                  "apps": list(APPS), "settings": load_settings(), "tmux": collect_tmux(),
+                  "docker": {"error": "not managed by portable workspace", "containers": []},
+                  "system": {"uptime_s": 0, "temps": {"cpu": None, "gpu": None,
+                             "gpu_mhz": None, "gpu_state": None, "fans": []},
+                             "cpu": {"pct": None, "cores": []}, "load": [0, 0, 0], "ncpu": 0,
+                             "mem": {"pct": 0, "used_kb": 0, "total_kb": 0}, "disks": []}}
+        if not owner:
+            return {**common, "linear": {"configured": False, "issues": [], "error": "restricted"},
+                    "ci": {"rows": [], "error": "restricted"}}
+        return {**common, "github": collect_github(), "linear": collect_linear(), "ci": collect_ci(),
+                "usage": collect_agent_usage(), "repos": collect_repos(),
+                "inbox": collect_inbox(), "agent_history": collect_agent_history()}
     t3 = unit_state("t3code")
     mode = "developer" if t3["active"] == "active" else "gaming"
     tmux = collect_tmux()
@@ -2009,79 +1912,35 @@ def state(headers):
             frozen = f.read().strip() == "1"
     except OSError:
         frozen = False
+    common = {**_BLANK, "host": HOST, "mode": mode, "apps": list(APPS), "settings": load_settings(),
+              "boot_mode": boot_mode(), "gamewatch": gamewatch_state(),
+              "keepalive": keepalive_state(), "tmux": tmux,
+              "torpor": len(tmux) if frozen else 0, "system": collect_system()}
     if mode == "gaming":
         # Minimal footprint while gaming: no remote API calls, no git walks —
         # just vitals. The client also slows its poll to 30 s.
-        return {
-            "host": HOST, "now": time.strftime("%H:%M:%S"),
-            "viewer": headers.get("Tailscale-User-Login", "local"),
-            "mode": mode, "apps": list(APPS), "settings": load_settings(),
-            "boot_mode": boot_mode(), "gamewatch": gamewatch_state(),
-            "keepalive": keepalive_state(), "notify": notify_state(),
-            "tmux": tmux, "torpor": len(tmux) if frozen else 0,
-            "system": collect_system(),
-            "github": {"login": None, "prs": [], "error": "paused in game mode"},
-            "linear": {"configured": False, "issues": [], "error": None},
-            "ci": {"rows": []}, "usage": None, "services": [], "repos": [],
-            "docker": {"error": "docker stopped (gaming)", "containers": []},
-            "journal": [], "backups": {"count": 0, "latest": None},
-            "inbox": collect_inbox(), "agent_history": collect_agent_history(),
-        }
-    viewer = headers.get("Tailscale-User-Login")
-    if viewer is not None and viewer not in ALLOWED_USERS:
-        # Read-only tailnet viewer (not in ALLOWED_USERS): serve operational
-        # vitals but withhold owner-private data — open PR titles, the Linear
-        # backlog, agent spend, repo names/commit subjects, CI detail, and journal
-        # error lines are not "status". The file manager and actions are already
-        # gated by _forbidden; this closes the same gap on /api/state (and / boot).
-        return {
-            "host": HOST, "now": time.strftime("%H:%M:%S"), "viewer": viewer,
-            "mode": mode, "boot_mode": boot_mode(), "gamewatch": gamewatch_state(),
-            "keepalive": keepalive_state(),
-            "apps": list(APPS), "settings": load_settings(),
-            "github": {"login": None, "prs": [], "error": "restricted"},
-            "linear": {"configured": False, "issues": [], "error": None},
-            "ci": {"rows": []}, "usage": None,
-            "services": collect_services(), "docker": collect_docker(),
-            "tmux": tmux, "torpor": len(tmux) if frozen else 0,
-            "repos": [], "journal": [], "system": collect_system(),
-            "backups": collect_backups(),
-            # Delivered pages and session transcripts are owner-private, same
-            # reasoning as the journal/repos withholding above.
-            "inbox": [], "agent_history": [],
-        }
+        return {**common, "notify": notify_state(),
+                "github": {"login": None, "prs": [], "error": "paused in game mode"},
+                "docker": {"error": "docker stopped (gaming)", "containers": []},
+                "inbox": collect_inbox(), "agent_history": collect_agent_history()}
+    if not owner:
+        # Read-only tailnet viewer: operational vitals only. PR titles, the
+        # Linear backlog, agent spend, repo names, CI detail, journal lines,
+        # delivered pages and transcripts are owner-private, like the file
+        # manager and actions (_forbidden).
+        return {**common, "services": collect_services(), "docker": collect_docker(),
+                "backups": collect_backups()}
     gh = collect_github()
     apps = list(APPS)
     if gh["login"]:
         apps.append({"name": "🐙 GitHub",
                      "url": f"https://github.com/{gh['login']}?tab=repositories"})
-    return {
-        "host": HOST,
-        "now": time.strftime("%H:%M:%S"),
-        "viewer": headers.get("Tailscale-User-Login", "local"),
-        "mode": mode,
-        "boot_mode": boot_mode(),
-        "gamewatch": gamewatch_state(),
-        "keepalive": keepalive_state(),
-        "apps": apps,
-        "github": gh,
-        "ci": collect_ci(),
-        "linear": collect_linear(),
-        "usage": collect_agent_usage(),
-        "settings": load_settings(),
-        "notify": notify_state(),
-        "t3_connect": t3_connect_state(),
-        "services": collect_services(),
-        "docker": collect_docker(),
-        "tmux": tmux,
-        "torpor": 0,
-        "repos": collect_repos(),
-        "journal": collect_journal(),
-        "system": collect_system(),
-        "backups": collect_backups(),
-        "inbox": collect_inbox(),
-        "agent_history": collect_agent_history(),
-    }
+    return {**common, "apps": apps, "github": gh, "ci": collect_ci(), "linear": collect_linear(),
+            "usage": collect_agent_usage(), "notify": notify_state(),
+            "t3_connect": t3_connect_state(), "services": collect_services(),
+            "docker": collect_docker(), "torpor": 0, "repos": collect_repos(),
+            "journal": collect_journal(), "backups": collect_backups(),
+            "inbox": collect_inbox(), "agent_history": collect_agent_history()}
 
 
 # ---------- file manager ----------
@@ -2350,10 +2209,9 @@ class Handler(BaseHTTPRequestHandler):
     def _stream_action(self):
         """SSE boot console: runs a grave action and streams its output live
         (data: <json line> events, then event: done with the exit code)."""
-        viewer = self.headers.get("Tailscale-User-Login")
-        if viewer is not None and viewer not in ALLOWED_USERS:
-            self._send(403, json.dumps({"ok": False, "output": f"forbidden for {viewer}"}))
+        if self._forbidden():
             return
+        viewer = self.headers.get("Tailscale-User-Login")
         if self._cross_site():   # actions run on a GET, so <img src=…?action=reboot> is CSRF
             return
         qs = self.path.split("?", 1)[1] if "?" in self.path else ""
@@ -2478,9 +2336,8 @@ class Handler(BaseHTTPRequestHandler):
             # same charsets `grave agents new` enforces and pipe-pane writes).
             if self._forbidden():
                 return
-            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-            name = q.get("name", [""])[0]
-            fname = q.get("file", [""])[0]
+            name = self._query("name")
+            fname = self._query("file")
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,50}", name) \
                or not re.fullmatch(r"session-\d{8}\.log", fname):
                 self._send(400, json.dumps({"ok": False, "output": "bad session or file name"}))
@@ -2529,7 +2386,7 @@ class Handler(BaseHTTPRequestHandler):
                        "text/javascript; charset=utf-8", "no-cache",
                        {"Service-Worker-Allowed": "/"})
         elif p == "/offline.html":
-            self._send(200, static_asset("offline.html", OFFLINE_PAGE),
+            self._send(200, static_asset("offline.html"),
                        "text/html; charset=utf-8", "public, max-age=86400")
         elif p in ("/apple-touch-icon.png", "/icon-180.png"):
             self._send(200, icon_png(180), "image/png", "public, max-age=86400")
@@ -2549,13 +2406,7 @@ class Handler(BaseHTTPRequestHandler):
         if MACOS and p not in MACOS_POSTS:
             self._send(404, '{"error":"unavailable in macOS companion"}')
             return
-        viewer = self.headers.get("Tailscale-User-Login")
-        if viewer is not None and viewer not in ALLOWED_USERS:
-            self._send(403, json.dumps({
-                "ok": False,
-                "output": f"forbidden for {viewer} — add to GRAVEDECAY_ALLOWED_USERS"}))
-            return
-        if self._cross_site():
+        if self._forbidden() or self._cross_site():
             return
         # Upload is a raw-body PUT-style POST — handle it BEFORE the JSON parse
         # below would try to json.loads() a multi-gigabyte file body.

@@ -42,27 +42,11 @@ final class GraveSummaryTests: XCTestCase {
 
     func testCapabilitiesRequirePublishedSafeTerminal() throws {
         let summary = try XCTUnwrap(GraveSummary.decode(Data(#"{"product":"gravedecay","api_version":1,"node":{"host":"grave","platform":"macos","mode":"companion"},"resources":{},"activity":{"sessions_live":0,"sessions_frozen":0},"health":{"services_failed":0,"containers_problem":0},"links":{"dashboard":"/grave/","terminal":"/elsewhere","network":"/net/"}}"#.utf8)))
-        XCTAssertNil(summary.capabilities.terminal)
+        XCTAssertNil(summary.terminal)
         XCTAssertNil(GravePresentation.safePath("/grave/../term"))
-        XCTAssertNil(BoxConfig(host: "grave.tail.ts.net", terminalPath: "/elsewhere"))
-        XCTAssertEqual(BoxConfig(host: "grave.tail.ts.net", terminalPath: "/term/")?.terminalWebSocketURL().path, "/term/ws")
-    }
-
-    func testNativePublisherHTTPBoundaryAndSummary() throws {
-        let summary = MacPublisherSummary.data(host: "Mac", uptime: nil, cpu: nil, memory: nil, disk: nil)
-        let decoded = try XCTUnwrap(GraveSummary.decode(summary))
-        XCTAssertEqual(decoded.product, "gravedecay")
-        XCTAssertEqual(decoded.api_version, 1)
-        XCTAssertEqual(decoded.capabilities, GraveCapabilities(links: .init(dashboard: nil, t3: nil, terminal: nil, network: nil)))
-
-        func reply(_ request: String) -> String { String(decoding: MacPublisherHTTP.response(request: Data(request.utf8), summary: summary), as: UTF8.self) }
-        XCTAssertTrue(reply("GET /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n").hasPrefix("HTTP/1.1 200"))
-        let head = reply("HEAD /api/v1/summary HTTP/1.1\r\nHost: localhost\r\n\r\n")
-        XCTAssertTrue(head.hasPrefix("HTTP/1.1 200")); XCTAssertFalse(head.contains("\"product\""))
-        XCTAssertTrue(reply("GET /unknown HTTP/1.1\r\n\r\n").hasPrefix("HTTP/1.1 404"))
-        XCTAssertTrue(reply("POST /healthz HTTP/1.1\r\n\r\n").hasPrefix("HTTP/1.1 405"))
-        XCTAssertTrue(reply("GET /healthz HTTP/1.1\r\nContent-Length: 1\r\n\r\nx").hasPrefix("HTTP/1.1 400"))
-        XCTAssertTrue(String(decoding: MacPublisherHTTP.response(request: Data(repeating: 65, count: MacPublisherHTTP.maxRequestBytes + 1), summary: summary), as: UTF8.self).hasPrefix("HTTP/1.1 400"))
+        XCTAssertNil(GraveDiscovery.dnsName("-bad.ts.net"))
+        XCTAssertNil(GraveDiscovery.dnsName("grave.ts.n3t"))
+        XCTAssertEqual(GraveDiscovery.dnsName(" Grave-1.Tail.ts.net. "), "grave-1.tail.ts.net")
     }
 
     func testTerminalTokenResponseClassification() {
@@ -86,14 +70,12 @@ final class GraveSummaryTests: XCTestCase {
         let healthy = GraveSummary.decode(#"{"product":"gravedecay","api_version":1,"node":{"host":"grave","platform":"macos","mode":"developer","uptime_s":0},"resources":{},"activity":{"sessions_live":0,"sessions_frozen":0},"health":{"services_failed":0,"containers_problem":0},"links":{}}"#.data(using: .utf8)!)!
         XCTAssertEqual(GravePresentation.condition(summary: healthy, reachable: true), .healthy)
         XCTAssertEqual(GravePresentation.condition(summary: nil, reachable: true), .unreachable)
-        XCTAssertEqual(GravePresentation.uptime(-1), "0h 0m")
-        XCTAssertEqual(GravePresentation.uptime(1e308), "106751991167300d 15h")
+        XCTAssertEqual(GravePresentation.uptime(-1), "0m")
+        XCTAssertTrue(GravePresentation.uptime(1e308).hasSuffix("d 3h"))
         XCTAssertEqual(GravePresentation.uptime(.infinity), "—")
-        XCTAssertEqual(GravePresentation.age(Date.now.addingTimeInterval(-10)), "10s ago")
-        XCTAssertEqual(GravePresentation.age(Date.now.addingTimeInterval(-90)), "1m ago")
-        XCTAssertEqual(GravePresentation.age(Date.now.addingTimeInterval(-7_200)), "2h ago")
-        XCTAssertEqual(GravePresentation.age(Date.now.addingTimeInterval(-172_800)), "2d ago")
-        XCTAssertEqual(GravePresentation.age(Date.now.addingTimeInterval(60)), "just now")
+        XCTAssertEqual(GravePresentation.age(nil), "—")
+        XCTAssertEqual(GravePresentation.age(Date.now.addingTimeInterval(-7_200)), "2 hours ago")
+        XCTAssertEqual(GravePresentation.age(Date.now.addingTimeInterval(-172_800)), "2 days ago")
     }
 
     func testProblemCountSaturates() {

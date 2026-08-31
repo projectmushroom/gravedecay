@@ -25,8 +25,8 @@ case "$keep" in 0|1) ;; *) echo "invalid component metadata" >&2; exit 2;; esac
 # Pre-agents installs have no agents= line: observability-only.
 [ -n "$agentsmode" ] || agentsmode=0
 case "$agentsmode" in 0|1) ;; *) echo "invalid component metadata" >&2; exit 2;; esac
-check(){ label=$1 port=$2 enabled=$3 path=${4:-/healthz}; [ "$enabled" = 1 ] || return 0
-  if launchctl print "gui/$uid/$label" >/dev/null 2>&1; then echo "$label: loaded"; else echo "$label: not loaded"; rc=1; fi
+loaded(){ if launchctl print "gui/$uid/$1" >/dev/null 2>&1; then echo "$1: loaded"; else echo "$1: not loaded"; rc=1; fi; }
+check(){ label=$1 port=$2 enabled=$3 path=${4:-/healthz}; [ "$enabled" = 1 ] || return 0; loaded "$label"
   if curl -fsS --max-time 5 "http://127.0.0.1:$port$path" >/dev/null 2>&1; then echo ":$port health: ok"; else echo ":$port health: failed"; rc=1; fi; }
 check io.gravedecay.dashboard 4712 "$dash"; check io.gravedecay.network 4714 "$net"
 # t3/ttyd have no /healthz; their answering root page is the liveness signal.
@@ -38,9 +38,7 @@ v=json.load(open(sys.argv[1])); print("version: %s (checkout: %s, channel: %s)" 
 PY
   "$ROOT/scripts/grave" update-status 2>/dev/null || true
 fi
-for label in io.gravedecay.updater io.gravedecay.doctor; do
-  if launchctl print "gui/$uid/$label" >/dev/null 2>&1; then echo "$label: loaded"; else echo "$label: not loaded"; rc=1; fi
-done
+loaded io.gravedecay.updater; loaded io.gravedecay.doctor
 ts=$(command -v tailscale 2>/dev/null || true); [ -n "$ts" ] || [ ! -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ] || ts=/Applications/Tailscale.app/Contents/MacOS/Tailscale
 if [ "$serve" = 0 ]; then
   echo "Serve: disabled (localhost-only)"

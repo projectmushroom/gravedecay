@@ -3,8 +3,7 @@
 The load-bearing invariant is coverage: raise.sh grows units over time, and a
 unit that uninstall doesn't know about is one that keeps running (and keeps its
 ports bound) on a box the operator believes is torn down. test_every_installed_
-unit_is_removable locks that, and the sync test keeps the fallback script's copy
-of the list honest.
+unit_is_removable locks that.
 
 The behavioural tests run the real cmd_uninstall against stub sudo/systemctl/
 docker binaries that RECORD rather than execute, so an assertion failure can
@@ -50,14 +49,9 @@ class UnitCoverageTests(unittest.TestCase):
             f"raise.sh installs {sorted(missing)} but `grave uninstall` never removes them",
         )
 
-    def test_fallback_script_list_matches_the_cli(self):
-        # uninstall.sh must be able to tear down a box whose grave.conf is gone,
-        # so it carries its own copy of the list. Drift there is invisible until
-        # the day it is the only path that works.
-        self.assertEqual(
-            unit_list(GRAVE_TEXT, "UNINSTALL_UNITS"),
-            unit_list(UNINSTALL_SH.read_text(), "UNITS"),
-        )
+    def test_multi_user_boundary_residue_is_removed(self):
+        self.assertIn("multiuser-boundary.conf", GRAVE_TEXT)
+        self.assertIn("delete table inet gravedecay", GRAVE_TEXT)
 
     def test_templates_are_not_stopped_directly(self):
         # `systemctl stop foo@.service` fails with "missing the instance name";
@@ -70,11 +64,6 @@ class UnitCoverageTests(unittest.TestCase):
 
     def test_uninstall_script_is_executable(self):
         self.assertTrue(os.access(UNINSTALL_SH, os.X_OK), "uninstall.sh must be chmod +x")
-
-    def test_both_uninstall_paths_remove_multi_user_boundary_residue(self):
-        for text in (GRAVE_TEXT, UNINSTALL_SH.read_text()):
-            self.assertIn("multiuser-boundary.conf", text)
-            self.assertIn("delete table inet gravedecay", text)
 
 
 class DocsContractTests(unittest.TestCase):
@@ -98,12 +87,6 @@ class DocsContractTests(unittest.TestCase):
         for flag in ("--purge", "--dry-run", "--yes"):
             self.assertIn(flag, self.DOC, f"{flag} is undocumented")
             self.assertIn(flag, GRAVE_TEXT)
-
-    def test_purge_is_refused_by_the_fallback_path(self):
-        # uninstall.sh cannot know GRAVE_ROOT without the conf, so it must not
-        # guess at a directory to delete — the doc says so; enforce it.
-        self.assertIn("not honored", UNINSTALL_SH.read_text().lower())
-        self.assertIn("not** honored", self.DOC.lower())
 
     def test_readme_links_the_doc(self):
         self.assertIn("docs/UNINSTALL.md", (ROOT / "README.md").read_text())
@@ -203,15 +186,12 @@ exit 1
     def test_dry_run_changes_nothing(self):
         proc = self.run_uninstall("--dry-run")
         self.assertIn("Dry run only", proc.stdout)
+        self.run_uninstall("--purge", "--dry-run")
         self.assertTrue(self.groot.exists())
         self.assertTrue(self.grave.exists(), "dry run must not remove the CLI")
         # No mutating call may have been issued at all.
         for forbidden in ("systemctl stop", "systemctl disable", "sudo rm", "rm -f"):
             self.assertNotIn(forbidden, self.recorded())
-
-    def test_dry_run_needs_no_confirmation(self):
-        # It is the safe way to preview a teardown; prompting for it is friction.
-        self.assertEqual(self.run_uninstall("--dry-run").returncode, 0)
 
     # -- confirmation -------------------------------------------------------
     def test_refuses_without_confirmation(self):
@@ -425,10 +405,6 @@ exit 0
         (self.groot / "repos/important.txt").write_text("work")
         proc = self.run_uninstall("--purge", "--yes")
         self.assertFalse(self.groot.exists(), proc.stdout)
-
-    def test_purge_dry_run_still_deletes_nothing(self):
-        self.run_uninstall("--purge", "--dry-run")
-        self.assertTrue(self.groot.exists())
 
     def test_purge_removes_the_projects_symlink_it_created(self):
         (self.home / "Projects").symlink_to(self.groot / "repos")

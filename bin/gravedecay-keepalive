@@ -23,8 +23,6 @@ LOG="$GRAVE_ROOT/logs/keepalive.log"
 INTERVAL="${KEEPALIVE_SECONDS:-2}"   # must stay under the client's reconnect gap
 mkdir -p "$GRAVE_ROOT/config" "$GRAVE_ROOT/logs" 2>/dev/null || true
 
-[[ -x /home/linuxbrew/.linuxbrew/bin/brew ]] && eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv bash)" 2>/dev/null || true
-export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$LOG"; }
 
 # Online peer tailnet IPs, one per line — dependency-free (no jq/python): the

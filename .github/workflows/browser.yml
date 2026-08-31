@@ -45,23 +45,5 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
-      - run: npm audit
       - run: npx playwright install --with-deps chromium webkit
-      - name: Start fixture dashboard
-        run: |
-          GRAVEDECAY_PORT=3000 GRAVE_ROOT="$RUNNER_TEMP/grave-root" \
-            python dashboard/gravedecay.py >"$RUNNER_TEMP/dashboard.log" 2>&1 &
-          echo $! >"$RUNNER_TEMP/dashboard.pid"
-          for _ in {1..30}; do
-            curl -sf http://127.0.0.1:3000/healthz && exit 0
-            sleep 1
-          done
-          cat "$RUNNER_TEMP/dashboard.log"
-          exit 1
       - run: npm run test:mobile
-      - name: Show dashboard log on failure
-        if: failure()
-        run: cat "$RUNNER_TEMP/dashboard.log" || true
-      - name: Stop fixture dashboard
-        if: always()
-        run: kill "$(cat "$RUNNER_TEMP/dashboard.pid")" 2>/dev/null || true

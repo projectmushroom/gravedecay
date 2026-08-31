@@ -31,8 +31,7 @@ DOCKER_ROOTLESS_SHA256=519165a123f9924c530c64bdba3019124555eb311a671e149e2d1c1f7
 fetch_verified() { # fetch_verified <url> <sha256> — prints a temp file holding the verified script
   local url="$1" want="$2" tmp; tmp=$(mktemp)
   curl -fsSL "$url" -o "$tmp" || { echo "download failed: $url" >&2; rm -f "$tmp"; exit 1; }
-  local got; got=$(sha256sum "$tmp" | awk '{print $1}')
-  [[ "$got" == "$want" ]] || { echo "checksum mismatch for $url (got $got want $want) — refusing to run" >&2; rm -f "$tmp"; exit 1; }
+  echo "$want  $tmp" | sha256sum -c --quiet >/dev/null 2>&1 || { echo "checksum mismatch for $url — refusing to run" >&2; rm -f "$tmp"; exit 1; }
   printf '%s' "$tmp"
 }
 
@@ -112,14 +111,7 @@ LINUXH_INC="$(brew --prefix linux-headers)/include"
 GCC_BIN="$(ls "$BREW_PREFIX"/bin/gcc-[0-9]* 2>/dev/null | sort -V | tail -1)"
 GXX_BIN="$(ls "$BREW_PREFIX"/bin/g++-[0-9]* 2>/dev/null | sort -V | tail -1)"
 W="$HOME/.local/toolchain-wrappers"; mkdir -p "$W"
-cat > "$W/cc"  <<EOF
-#!/bin/sh
-exec $GCC_BIN -idirafter $GLIBC_INC -idirafter $LINUXH_INC "\$@"
-EOF
-cat > "$W/c++" <<EOF
-#!/bin/sh
-exec $GXX_BIN -idirafter $GLIBC_INC -idirafter $LINUXH_INC "\$@"
-EOF
+for w in "cc:$GCC_BIN" "c++:$GXX_BIN"; do printf '#!/bin/sh\nexec %s -idirafter %s -idirafter %s "$@"\n' "${w#*:}" "$GLIBC_INC" "$LINUXH_INC" > "$W/${w%%:*}"; done
 chmod +x "$W/cc" "$W/c++"; ln -sf "$W/cc" "$W/gcc"; ln -sf "$W/c++" "$W/g++"
 ok "wrappers at $W ($GCC_BIN)"
 

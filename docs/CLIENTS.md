@@ -22,15 +22,12 @@ over the same origins and never require new listening ports on the box.
 
 - **iOS / macOS** — `clients/apple/`. iOS uses webview panes for T3 and the
   dashboard. macOS 15+ is a standalone native SwiftUI Dock/menu-bar app:
-  first run offers remote-first **Connect to Graves** or **Share This Mac**;
   Graveyard selects validated remote graves, with native This Mac, Work,
   Network, Terminal, and Settings surfaces. It opens only T3 in the default
   browser. Tailscale discovery is read-only; Graveyard, Settings, and the menu
-  bar can open Tailscale for you to sign in. **Start Local Host** is off by
-  default, binds only loopback while the app runs, and shows an explicit manual
-  Serve command. Both platforms use native SwiftTerm and can use an embedded
-  Tailscale node. Build and distribution details live in
-  `clients/apple/README.md`.
+  bar can open Tailscale for you to sign in. Both platforms use native
+  SwiftTerm and reach the box through the Tailscale app. Build and
+  distribution details live in `clients/apple/README.md`.
 
 - **T3 activity in the dashboard** is opt-in. Create the owner-only
   `$GRAVE_ROOT/config/secrets/t3-activity.env` (mode 600), then restart the
@@ -55,22 +52,13 @@ over the same origins and never require new listening ports on the box.
   development. It never stores tailnet inventory, credentials, or remote
   content, and it cannot control an appliance.
 
-- **macOS menu bar** — `clients/macos-menubar/` is a macOS 15+ SwiftUI
-  `MenuBarExtra` fleet widget. Every roughly 45 seconds (and when opened), it
-  reads local `tailscale status --json` and independently probes online Self
-  and peers at `/grave/api/v1/summary`. It holds only reachable validated v1
-  summaries in memory; it stores no tailnet inventory, credentials, or
-  history, opens no listener, and has no controls. Each displayed box exposes
-  only summary-contract vitals and an optional same-host dashboard link.
-
 House rules that apply to any future client:
 
 - Talk to the box only through its tailnet HTTPS origin — never add or
   expect a non-loopback listener.
-- Auth material (Tailscale auth keys, pairing tokens) is entered by the
-  human at enrollment and never persisted by the client; long-lived state
-  is limited to what the platform keychain/state dir provides (the tsnet
-  node identity, webview cookies).
+- Auth material (pairing tokens) is entered by the human at enrollment and
+  never persisted by the client; long-lived state is limited to what the
+  platform keychain/state dir provides (webview cookies).
 - A client change that needs a server-side counterpart follows the normal
   rule: update the matching doc and add a `grave doctor` check in the same
   commit.

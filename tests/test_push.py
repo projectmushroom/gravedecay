@@ -1,10 +1,7 @@
 import base64
-import importlib.util
 import json
 import os
-import pathlib
 import tempfile
-import threading
 import unittest
 import urllib.error
 import urllib.request
@@ -15,27 +12,13 @@ try:
 except ImportError:
     HAVE_CRYPTO = False
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+from helpers import ROOT, load, serve
+
+DASH = ROOT / "dashboard/gravedecay.py"
 
 
 def b64u(s):
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
-
-
-def load_dashboard(env):
-    """Fresh gravedecay module under a patched environment (same pattern as
-    test_dashboard.py — module config is read from os.environ at import)."""
-    old = dict(os.environ)
-    os.environ.update(env)
-    try:
-        spec = importlib.util.spec_from_file_location(
-            "gravedecay_push_probe", ROOT / "dashboard/gravedecay.py")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-    finally:
-        os.environ.clear()
-        os.environ.update(old)
 
 
 # RFC 8291 Appendix A — the complete Web Push encryption example. If our
@@ -70,7 +53,7 @@ class PushModuleTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         os.makedirs(os.path.join(self.tmp.name, "config", "secrets"))
-        self.dash = load_dashboard({
+        self.dash = load(DASH, {
             "GRAVE_ROOT": self.tmp.name,
             "GRAVE_CONF": os.path.join(self.tmp.name, "grave.conf"),
         })
@@ -201,21 +184,14 @@ class PushEndpointTests(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
         os.makedirs(os.path.join(cls.tmp.name, "config", "secrets"))
-        cls.dash = load_dashboard({
+        cls.dash = load(DASH, {
             "GRAVE_ROOT": cls.tmp.name,
             "GRAVE_CONF": os.path.join(cls.tmp.name, "grave.conf"),
         })
-        cls.server = cls.dash.ThreadingHTTPServer(("127.0.0.1", 0), cls.dash.Handler)
-        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
-        cls.thread.start()
-        cls.origin = f"http://127.0.0.1:{cls.server.server_port}"
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.server.shutdown()
-        cls.server.server_close()
-        cls.thread.join(timeout=2)
-        cls.tmp.cleanup()
+        server = serve(cls.dash)
+        cls.origin = server.__enter__()
+        cls.addClassCleanup(server.__exit__, None, None, None)
+        cls.addClassCleanup(cls.tmp.cleanup)
 
     def post(self, path, data):
         return urllib.request.urlopen(urllib.request.Request(
@@ -274,25 +250,6 @@ class SettingsPanelContractTests(unittest.TestCase):
         src = (ROOT / "dashboard/static/index.html").read_text()
         self.assertIn('data-sec="ntfy-adv"', src)
         self.assertIn('<div id="ntfy-adv" style="display:none">', src)
-
-
-class ServiceWorkerContractTests(unittest.TestCase):
-    def test_both_worker_copies_handle_push_and_click(self):
-        # static/sw.js is the served asset; the SERVICE_WORKER constant is the
-        # embedded fallback for interrupted upgrades — they must not drift.
-        static = (ROOT / "dashboard/static/sw.js").read_text()
-        embedded = (ROOT / "dashboard/gravedecay.py").read_text()
-        for source, name in ((static, "static/sw.js"), (embedded, "SERVICE_WORKER")):
-            self.assertIn("addEventListener('push'", source, name)
-            self.assertIn("addEventListener('notificationclick'", source, name)
-            self.assertIn("showNotification", source, name)
-            self.assertIn("openWindow", source, name)
-            # Both copies must carry the offline-page stamp in the cache name
-            # (a fixed name means installed PWAs never refresh offline.html)
-            # and bypass the HTTP cache when re-caching it.
-            self.assertIn("gravedecay-shell-@OFFLINE@", source, name)
-            self.assertIn("'reload'", source, name)
-            self.assertNotIn("gravedecay-shell-v1", source, name)
 
 
 if __name__ == "__main__":

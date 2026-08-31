@@ -23,9 +23,8 @@ final class BoxConfigTests: XCTestCase {
 
     func testURLLayoutMatchesTailscaleServe() throws {
         let box = try XCTUnwrap(BoxConfig(input: "box.ts.net"))
-        XCTAssertEqual(box.t3URL.absoluteString, "https://box.ts.net/")
+        XCTAssertEqual(box.baseURL.absoluteString, "https://box.ts.net/")
         XCTAssertEqual(box.dashboardURL.absoluteString, "https://box.ts.net/grave/")
-        XCTAssertEqual(box.terminalURL.absoluteString, "https://box.ts.net/term")
         XCTAssertEqual(box.terminalTokenURL.absoluteString, "https://box.ts.net/term/token")
     }
 
@@ -34,11 +33,6 @@ final class BoxConfigTests: XCTestCase {
         XCTAssertEqual(box.terminalWebSocketURL().absoluteString, "wss://box.ts.net/term/ws")
         XCTAssertEqual(box.terminalWebSocketURL(arg: "agents").absoluteString,
                        "wss://box.ts.net/term/ws?arg=agents")
-    }
-
-    func testGitPorcelainCount() {
-        XCTAssertEqual(WorkStatus.changedFileCount(""), 0)
-        XCTAssertEqual(WorkStatus.changedFileCount(" M one\n?? two\n"), 2)
     }
 
     func testGitHubRemoteAllowlist() {

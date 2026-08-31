@@ -3,8 +3,6 @@
 set -eu
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 case "${1:-}" in
-  install) shift; exec "$HERE/install.sh" "$@";;
-  status) shift; exec "$HERE/status.sh" "$@";;
-  uninstall) shift; exec "$HERE/uninstall.sh" "$@";;
+  install|status|uninstall) c=$1; shift; exec "$HERE/$c.sh" "$@";;
   *) echo "usage: gravedecay-mac {install|status|uninstall} [options]" >&2; exit 2;;
 esac

@@ -1,23 +1,8 @@
-import importlib.util
-import os
-import pathlib
 import unittest
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+from helpers import ROOT, load
 
-
-def load_dashboard(env):
-    old = dict(os.environ)
-    os.environ.update(env)
-    try:
-        spec = importlib.util.spec_from_file_location("gravedecay_portable_probe",
-                                                       ROOT / "dashboard/gravedecay.py")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-    finally:
-        os.environ.clear()
-        os.environ.update(old)
+DASH = ROOT / "dashboard/gravedecay.py"
 
 
 class PortableDockerContractTests(unittest.TestCase):
@@ -41,7 +26,7 @@ class PortableDockerContractTests(unittest.TestCase):
         self.assertIn("absolute_redirect off;", nginx)
 
     def test_portable_dashboard_has_no_host_actions_or_host_state(self):
-        dash = load_dashboard({"GRAVEDECAY_PLATFORM": "container"})
+        dash = load(DASH, {"GRAVEDECAY_PLATFORM": "container"})
         self.assertTrue(dash.PORTABLE)
         self.assertEqual(set(dash.ACTIONS), {"t3-pair"})
         dash.unit_state = lambda _: (_ for _ in ()).throw(AssertionError("host systemd read"))
@@ -72,13 +57,13 @@ class PortableDockerContractTests(unittest.TestCase):
         self.assertIn("`:''}</td></tr>`", shell)
 
     def test_pairing_scheme_is_local_http_or_forwarded_https(self):
-        dash = load_dashboard({"GRAVEDECAY_PLATFORM": "container"})
+        dash = load(DASH, {"GRAVEDECAY_PLATFORM": "container"})
         self.assertEqual(dash.public_scheme({}), "http")
         self.assertEqual(dash.public_scheme({"Tailscale-User-Login": "me@example.com"}), "https")
         self.assertEqual(dash.public_scheme({"X-Forwarded-Proto": "https"}), "https")
 
     def test_summary_stays_within_the_portable_work_plane(self):
-        dash = load_dashboard({"GRAVEDECAY_PLATFORM": "container"})
+        dash = load(DASH, {"GRAVEDECAY_PLATFORM": "container"})
         for name in ("collect_system", "collect_services", "unit_state", "collect_docker"):
             setattr(dash, name, lambda name=name: (_ for _ in ()).throw(AssertionError(name)))
         dash.collect_tmux = lambda: [{"name": "one"}, {"name": "two"}]
@@ -113,8 +98,8 @@ class PortableDockerContractTests(unittest.TestCase):
         self.assertIn("http://127.0.0.1:4711/", dockerfile)
         self.assertIn("http://127.0.0.1:4712/healthz", dockerfile)
         self.assertIn("http://127.0.0.1:4713/term/", dockerfile)
-        self.assertEqual(load_dashboard({"GRAVEDECAY_PLATFORM": "container"}).BIND_HOST, "0.0.0.0")
-        self.assertEqual(load_dashboard({"GRAVEDECAY_PLATFORM": "linux"}).BIND_HOST, "127.0.0.1")
+        self.assertEqual(load(DASH, {"GRAVEDECAY_PLATFORM": "container"}).BIND_HOST, "0.0.0.0")
+        self.assertEqual(load(DASH, {"GRAVEDECAY_PLATFORM": "linux"}).BIND_HOST, "127.0.0.1")
 
 
 if __name__ == "__main__":

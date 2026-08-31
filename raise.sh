@@ -81,6 +81,14 @@ install_unit() { # install_unit <path under /etc/systemd/system>  (rendered file
   sudo tee "$dest" <"$tmp" >/dev/null
   rm -f "$tmp"
 }
+render() { # render <systemd tmpl> — every @TOKEN@ raise.sh knows
+  sed -e "s|@USER@|$RUN_USER|g" -e "s|@HOME@|$HOME_DIR|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
+      -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" -e "s|@TOOLPATH@|$TOOLPATH|g" -e "s|@DOCKER_HOST@|$DOCKER_HOSTV|g" \
+      -e "s|@PYTHON@|$PYTHON_BIN|g" -e "s|@T3@|$T3_BIN|g" -e "s|@TTYD@|$TTYD_BIN|g" \
+      -e "s|@T3_PORT@|$T3_PORT|g" -e "s|@DASH_PORT@|$DASH_PORT|g" -e "s|@TERM_PORT@|$TERM_PORT|g" \
+      -e "s|@NET_PORT@|$NET_PORT|g" -e "s|@ALLOWED_USERS@|$ALLOWED_USERS|g" -e "s|@UNITS@|$UNITS|g" \
+      "$REPO_DIR/systemd/$1" | grep -v '^Environment=DOCKER_HOST=$'
+}
 install_cli() { # install_cli <src> <dest> — sudo only when content differs
   same_file "$1" "$2" && return 0
   if [[ "$IMMUTABLE" == 1 ]]; then
@@ -89,43 +97,7 @@ install_cli() { # install_cli <src> <dest> — sudo only when content differs
     sudo install -m 755 "$1" "$2"
   fi
 }
-provision_agent_hooks() { # provision_agent_hooks <home> <helper>
-  local home="$1" helper="$2" claude_dir codex_dir settings tmp codex_conf
-  claude_dir="$home/.claude"; codex_dir="$home/.codex"
-  mkdir -p "$claude_dir" "$codex_dir"
-  settings="$claude_dir/settings.json"
-  tmp=$(mktemp)
-  if [[ -s "$settings" ]]; then
-    if ! jq --arg cmd "$helper claude" '
-      def hascmd($cmd): any(.[]?; any(.hooks[]?; .command == $cmd));
-      .hooks = (.hooks // {})
-      | .hooks.Stop = ((.hooks.Stop // []) as $a
-          | if ($a | hascmd($cmd)) then $a
-            else $a + [{"matcher":"","hooks":[{"type":"command","command":$cmd}]}] end)
-      | .hooks.Notification = ((.hooks.Notification // []) as $a
-          | if ($a | hascmd($cmd)) then $a
-            else $a + [{"matcher":"","hooks":[{"type":"command","command":$cmd}]}] end)
-    ' "$settings" >"$tmp"; then
-      rm -f "$tmp"; tmp=""; skip "Claude settings.json is not valid JSON — agent hooks not changed"
-    fi
-  else
-    jq --arg cmd "$helper claude" -n \
-      '{hooks:{Stop:[{matcher:"",hooks:[{type:"command",command:$cmd}]}],Notification:[{matcher:"",hooks:[{type:"command",command:$cmd}]}]}}' >"$tmp"
-  fi
-  if [[ -n "$tmp" ]]; then
-    mv "$tmp" "$settings"; chmod 600 "$settings"
-  fi
-
-  codex_conf="$codex_dir/config.toml"
-  touch "$codex_conf"; chmod 600 "$codex_conf"
-  if grep -q 'grave-agent-notify' "$codex_conf"; then
-    :
-  elif grep -qE '^[[:space:]]*notify[[:space:]]*=' "$codex_conf"; then
-    skip "Codex notify already set — leaving $codex_conf unchanged"
-  else
-    printf '\nnotify = ["%s", "codex"]\n' "$helper" >>"$codex_conf"
-  fi
-}
+provision_agent_hooks() { "$REPO_DIR/bin/grave-workspaces" hooks "$@"; }
 
 [[ $EUID -eq 0 ]] && { echo "Run as your normal user, not root (sudo is used internally)."; exit 1; }
 sudo -n systemctl --version >/dev/null 2>&1 || sudo -v || { echo "sudo access required"; exit 1; }
@@ -484,11 +456,9 @@ if [[ "${MULTI_USER:-0}" == 1 ]]; then
     fi
     [[ "$(stat -c '%U %a' "$token_file")" == "root 600" ]] || { sudo chown root:root "$token_file"; sudo chmod 600 "$token_file"; }
   done
-  sed -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" \
-    "$REPO_DIR/systemd/gravedecay-boundary.service.tmpl" | install_unit gravedecay-boundary.service
+  render gravedecay-boundary.service.tmpl | install_unit gravedecay-boundary.service
   [[ -d /etc/systemd/system/gravedecay.service.d ]] || sudo mkdir -p /etc/systemd/system/gravedecay.service.d
-  sed -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" "$REPO_DIR/systemd/gravedecay-multiuser-boundary.conf.tmpl" \
-    | install_unit gravedecay.service.d/multiuser-boundary.conf
+  render gravedecay-multiuser-boundary.conf.tmpl | install_unit gravedecay.service.d/multiuser-boundary.conf
   sudo systemctl daemon-reload
   sudo systemctl enable gravedecay-boundary.service >/dev/null
   sudo systemctl restart gravedecay-boundary.service
@@ -578,28 +548,13 @@ install -m 755 "$REPO_DIR/dashboard/gateway.py" "$GRAVE_ROOT/scripts/gateway.py"
 install -d -m 755 "$GRAVE_ROOT/scripts/dashboard-static"
 install -m 644 "$REPO_DIR/dashboard/static/"* "$GRAVE_ROOT/scripts/dashboard-static/"
 install -m 644 "$REPO_DIR/assets/gravedecay.png" "$GRAVE_ROOT/config/gravedecay.png"
-sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
-    -e "s|@DASH_PORT@|$DASH_PORT|g" -e "s|@ALLOWED_USERS@|$ALLOWED_USERS|g" \
-    -e "s|@TOOLPATH@|$TOOLPATH|g" -e "s|@DOCKER_HOST@|$DOCKER_HOSTV|g" \
-    -e "s|@UNITS@|$UNITS|g" -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" \
-    -e "s|@PYTHON@|$PYTHON_BIN|g" -e "s|@T3@|$T3_BIN|g" \
-    "$REPO_DIR/systemd/gravedecay.service.tmpl" \
-  | grep -v '^Environment=DOCKER_HOST=$' | install_unit gravedecay.service
-sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
-    -e "s|@TOOLPATH@|$TOOLPATH|g" -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" \
-    "$REPO_DIR/systemd/gravedecay-upgrade.service.tmpl" \
-    | install_unit gravedecay-upgrade.service
-sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
-    -e "s|@TOOLPATH@|$TOOLPATH|g" -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" \
-    "$REPO_DIR/systemd/gravedecay-upgrade@.service.tmpl" \
-    | install_unit gravedecay-upgrade@.service
+render gravedecay.service.tmpl | install_unit gravedecay.service
+render gravedecay-upgrade.service.tmpl | install_unit gravedecay-upgrade.service
+render gravedecay-upgrade@.service.tmpl | install_unit gravedecay-upgrade@.service
 # Failure notifier: every platform unit references it via OnFailure=, so it
 # must exist on every box (it sends nothing until notify.env is configured —
 # see docs/NOTIFICATIONS.md).
-sed -e "s|@USER@|$RUN_USER|g" -e "s|@HOME@|$HOME_DIR|g" \
-    -e "s|@TOOLPATH@|$TOOLPATH|g" -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" \
-    "$REPO_DIR/systemd/gravedecay-notify@.service.tmpl" \
-    | install_unit gravedecay-notify@.service
+render gravedecay-notify@.service.tmpl | install_unit gravedecay-notify@.service
 [[ -n "$ALLOWED_USERS" ]] && ok "dashboard actions allowed for: $ALLOWED_USERS" \
   || skip "dashboard is read-only until GRAVEDECAY_ALLOWED_USERS is set (auto-fills after tailscale login on re-raise)"
 sudo systemctl daemon-reload
@@ -610,7 +565,7 @@ if [[ "${MULTI_USER:-0}" == 1 ]]; then
   # the explicit gateway/maintenance trust boundary.
   dashboard_ready=0
   for _ in $(seq 1 10); do
-    sudo -n "$GRAVE_BIN" __dashboard-health && { dashboard_ready=1; break; }
+    sudo -n "$GRAVE_BIN" __dashboard-probe health >/dev/null && { dashboard_ready=1; break; }
     sleep 1
   done
   if (( dashboard_ready )); then ok "gravedecay maintenance health on :$DASH_PORT"; else
@@ -622,13 +577,9 @@ fi
 
 # Multi-user front door is installed only when explicitly enabled in grave.conf.
 if [[ "${MULTI_USER:-0}" == 1 ]]; then
-  sed -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" -e "s|@PYTHON@|$PYTHON_BIN|g" \
-      "$REPO_DIR/systemd/gravedecay-gateway.service.tmpl" \
-    | install_unit gravedecay-gateway.service
+  render gravedecay-gateway.service.tmpl | install_unit gravedecay-gateway.service
   for template in gravedecay-t3@ gravedecay-term@ gravedecay-dashboard@; do
-    sed -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" -e "s|@PYTHON@|$PYTHON_BIN|g" \
-        "$REPO_DIR/systemd/$template.service.tmpl" \
-      | install_unit "$template.service"
+    render "$template.service.tmpl" | install_unit "$template.service"
   done
   sudo systemctl daemon-reload
   # Provision the workspace units + registry BEFORE starting the gateway. The
@@ -654,27 +605,9 @@ if command -v ttyd >/dev/null; then
   # docs/TERMINAL.md. Built here (pure splice, no network) so the served
   # page always matches the repo; doctor greps for the marker.
   install -d "$GRAVE_ROOT/web/term"
-  python3 - "$REPO_DIR/web/term" "$GRAVE_ROOT/web/term/index.html" <<'PY'
-import os, sys
-src, out = sys.argv[1], sys.argv[2]
-html = open(os.path.join(src, "index.tmpl.html")).read()
-for marker, fname in [("/*@XTERM_CSS@*/", "vendor/xterm-5.5.0.css"),
-                      ("/*@XTERM_JS@*/",  "vendor/xterm-5.5.0.min.js"),
-                      ("/*@FIT_JS@*/",    "vendor/xterm-addon-fit-0.10.0.min.js"),
-                      ("/*@APP_JS@*/",    "app.js")]:
-    html = html.replace(marker, open(os.path.join(src, fname)).read())
-assert "/*@" not in html, "unspliced marker left in term index"
-tmp = out + ".tmp"
-open(tmp, "w").write(html)
-os.replace(tmp, out)
-PY
+  python3 "$REPO_DIR/docker/portable/build-term.py" "$REPO_DIR/web/term" "$GRAVE_ROOT/web/term/index.html"
   ok "term frontend built → $GRAVE_ROOT/web/term/index.html"
-  sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
-      -e "s|@TERM_PORT@|$TERM_PORT|g" -e "s|@HOME@|$HOME_DIR|g" \
-      -e "s|@TTYD@|$TTYD_BIN|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
-      -e "s|@DOCKER_HOST@|$DOCKER_HOSTV|g" \
-      "$REPO_DIR/systemd/gravedecay-term.service.tmpl" \
-    | grep -v '^Environment=DOCKER_HOST=$' | install_unit gravedecay-term.service
+  render gravedecay-term.service.tmpl | install_unit gravedecay-term.service
   sudo systemctl daemon-reload
   if [[ "${MULTI_USER:-0}" == 1 ]]; then
     sudo systemctl disable --now gravedecay-term
@@ -700,10 +633,7 @@ if ! command -v t3 >/dev/null; then
   fi
   sudo npm install -g t3
 fi
-sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
-    -e "s|@T3_PORT@|$T3_PORT|g" -e "s|@HOME@|$HOME_DIR|g" \
-    -e "s|@T3@|$T3_BIN|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
-    "$REPO_DIR/systemd/t3code.service.tmpl" | install_unit t3code.service
+render t3code.service.tmpl | install_unit t3code.service
 sudo systemctl daemon-reload
 if [[ "${MULTI_USER:-0}" == 1 ]]; then
   sudo systemctl disable --now t3code
@@ -721,11 +651,7 @@ fi
 if [[ "$IMMUTABLE" == 1 ]]; then
   step "Self-heal boot unit (post-update drift check)"
   install -m 755 "$REPO_DIR/bin/gravedecay-selfheal" "$GRAVE_ROOT/scripts/gravedecay-selfheal"
-  sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
-      -e "s|@HOME@|$HOME_DIR|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
-      -e "s|@DOCKER_HOST@|$DOCKER_HOSTV|g" \
-      "$REPO_DIR/systemd/gravedecay-selfheal.service.tmpl" \
-    | grep -v '^Environment=DOCKER_HOST=$' | install_unit gravedecay-selfheal.service
+  render gravedecay-selfheal.service.tmpl | install_unit gravedecay-selfheal.service
   sudo systemctl daemon-reload
   sudo systemctl enable gravedecay-selfheal >/dev/null 2>&1 || true
   ok "self-heal enabled (runs each boot)"
@@ -737,9 +663,7 @@ fi
 # SteamOS and preserves every explicit choice; capability never implies policy.
 step "Optional game-mode watcher"
 install -m 755 "$REPO_DIR/bin/gravedecay-gamewatch" "$GRAVE_ROOT/scripts/gravedecay-gamewatch"
-sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
-    -e "s|@HOME@|$HOME_DIR|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
-    "$REPO_DIR/systemd/gravedecay-gamewatch.service.tmpl" | install_unit gravedecay-gamewatch.service
+render gravedecay-gamewatch.service.tmpl | install_unit gravedecay-gamewatch.service
 sudo systemctl daemon-reload
 enable_restart gravedecay-gamewatch >/dev/null 2>&1 || true
 ok "optional game-mode watcher installed (toggle with: grave gamewatch on|off)"
@@ -751,9 +675,7 @@ ok "optional game-mode watcher installed (toggle with: grave gamewatch on|off)"
 # clients are common away from home.
 step "Tailnet keepalive watcher"
 install -m 755 "$REPO_DIR/bin/gravedecay-keepalive" "$GRAVE_ROOT/scripts/gravedecay-keepalive"
-sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
-    -e "s|@HOME@|$HOME_DIR|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
-    "$REPO_DIR/systemd/gravedecay-keepalive.service.tmpl" | install_unit gravedecay-keepalive.service
+render gravedecay-keepalive.service.tmpl | install_unit gravedecay-keepalive.service
 sudo systemctl daemon-reload
 enable_restart gravedecay-keepalive >/dev/null 2>&1 || true
 ok "tailnet keepalive installed (turn on with: grave keepalive on)"
@@ -766,9 +688,7 @@ step "Network flow monitor"
 install -m 755 "$REPO_DIR/dashboard/gravenet.py" "$GRAVE_ROOT/scripts/gravenet.py"
 install -d "$GRAVE_ROOT/web/net"
 install -m 644 "$REPO_DIR/web/net/index.html" "$GRAVE_ROOT/web/net/index.html"
-sed -e "s|@PYTHON@|$PYTHON_BIN|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
-    -e "s|@NET_PORT@|$NET_PORT|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
-    "$REPO_DIR/systemd/gravedecay-net.service.tmpl" | install_unit gravedecay-net.service
+render gravedecay-net.service.tmpl | install_unit gravedecay-net.service
 sudo systemctl daemon-reload
 enable_restart gravedecay-net
 wait_http "http://127.0.0.1:$NET_PORT/healthz" "gravenet answering on :$NET_PORT"
@@ -778,11 +698,7 @@ wait_http "http://127.0.0.1:$NET_PORT/healthz" "gravenet answering on :$NET_PORT
 # `grave backup`. The service pages via gravedecay-notify@ on failure and
 # doctor enforces marker freshness — see docs/RECOVERY.md.
 step "Nightly backup timer"
-sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
-    -e "s|@HOME@|$HOME_DIR|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
-    -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" -e "s|@DOCKER_HOST@|$DOCKER_HOSTV|g" \
-    "$REPO_DIR/systemd/gravedecay-backup.service.tmpl" \
-  | grep -v '^Environment=DOCKER_HOST=$' | install_unit gravedecay-backup.service
+render gravedecay-backup.service.tmpl | install_unit gravedecay-backup.service
 install_unit gravedecay-backup.timer <"$REPO_DIR/systemd/gravedecay-backup.timer.tmpl"
 sudo systemctl daemon-reload
 enable_restart gravedecay-backup.timer >/dev/null 2>&1 || true
@@ -793,11 +709,7 @@ ok "nightly verified backup scheduled (~05:00; run one any time: grave backup)"
 # box; `grave digest` gates delivery on notify config + the digest event class,
 # so an unconfigured box stays silent.
 step "Morning digest timer"
-sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
-    -e "s|@HOME@|$HOME_DIR|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
-    -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" \
-    "$REPO_DIR/systemd/gravedecay-digest.service.tmpl" \
-  | install_unit gravedecay-digest.service
+render gravedecay-digest.service.tmpl | install_unit gravedecay-digest.service
 install_unit gravedecay-digest.timer <"$REPO_DIR/systemd/gravedecay-digest.timer.tmpl"
 sudo systemctl daemon-reload
 enable_restart gravedecay-digest.timer >/dev/null 2>&1 || true

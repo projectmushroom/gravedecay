@@ -8,6 +8,7 @@ set -euo pipefail
 GRAVE_ROOT="${GRAVE_ROOT:-/srv/dev}"
 TMUX_SOCKET="${TMUX_SOCKET:-agents}"
 WORKSPACE_ROLE="${WORKSPACE_ROLE:-admin}"
+admin_only() { [[ "$WORKSPACE_ROLE" == admin ]] || { echo "$1"; exit 126; }; }
 
 choice="${1:-shell}"
 name="${choice//[^a-zA-Z0-9_-]/}"
@@ -20,8 +21,8 @@ case "$name" in
   # Opt-in per tile from ⚙️ settings (⚡). Safe-ish only because this box is a
   # single-human, tailnet-only appliance (see docs/SECURITY.md). These get
   # their own tmux session name so they never share state with a gated one.
-  claude-yolo) [[ "$WORKSPACE_ROLE" == admin ]] || { echo "skip-permissions sessions are disabled for developers"; exit 126; }; cmd=(claude --dangerously-skip-permissions) ;;
-  codex-yolo)  [[ "$WORKSPACE_ROLE" == admin ]] || { echo "skip-permissions sessions are disabled for developers"; exit 126; }; cmd=(codex --dangerously-bypass-approvals-and-sandbox) ;;
+  claude-yolo) admin_only "skip-permissions sessions are disabled for developers"; cmd=(claude --dangerously-skip-permissions) ;;
+  codex-yolo)  admin_only "skip-permissions sessions are disabled for developers"; cmd=(codex --dangerously-bypass-approvals-and-sandbox) ;;
   # auth shortcuts (⚙️ settings → opens a terminal running the login flow;
   # session ends when the flow exits).
   # The `auth-` PREFIX IS LOAD-BEARING: web/term/app.js treats `?arg=auth-*`
@@ -34,8 +35,8 @@ case "$name" in
   auth-github) cmd=(gh auth login) ;;
   # T3 Connect links are interactive (out-of-band OAuth code + relay client
   # install confirm), so they run here rather than as dashboard stream actions.
-  auth-t3publish) [[ "$WORKSPACE_ROLE" == admin ]] || { echo "T3 Connect is admin-only"; exit 126; }; cmd=(grave t3 connect publish) ;;
-  auth-t3full)    [[ "$WORKSPACE_ROLE" == admin ]] || { echo "T3 Connect is admin-only"; exit 126; }; cmd=(grave t3 connect full) ;;
+  auth-t3publish) admin_only "T3 Connect is admin-only"; cmd=(grave t3 connect publish) ;;
+  auth-t3full)    admin_only "T3 Connect is admin-only"; cmd=(grave t3 connect full) ;;
   *)      cmd=() ;;         # plain login shell
 esac
 

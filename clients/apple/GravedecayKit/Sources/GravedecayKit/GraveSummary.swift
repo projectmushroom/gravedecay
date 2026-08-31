@@ -21,23 +21,12 @@ public enum GraveDiscovery {
         }
     }
 
+    /// Strict lowercase DNS name: 2+ labels, alphanumeric with inner hyphens, letters-only TLD.
     public static func dnsName(_ value: String?) -> String? {
         var name = (value ?? "").lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         if name.hasSuffix(".") { name.removeLast() }
-        let labels = name.split(separator: ".", omittingEmptySubsequences: false)
-        guard !name.isEmpty, name.count <= 253, labels.count >= 2,
-              labels.allSatisfy({ label in
-                  guard !label.isEmpty, label.count <= 63,
-                        asciiAlphanumeric(label.utf8.first!),
-                        asciiAlphanumeric(label.utf8.last!) else { return false }
-                  return label.utf8.allSatisfy { asciiAlphanumeric($0) || $0 == 45 }
-              }), let suffix = labels.last, suffix.count <= 63,
-              suffix.utf8.allSatisfy({ $0 >= 97 && $0 <= 122 }) else { return nil }
+        guard name.count <= 253, name.wholeMatch(of: #/(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{1,63}/#) != nil else { return nil }
         return name
-    }
-
-    private static func asciiAlphanumeric(_ value: UInt8) -> Bool {
-        (value >= 97 && value <= 122) || (value >= 48 && value <= 57)
     }
 
     public static func candidates(statusData: Data) -> [GraveCandidate] {
@@ -94,19 +83,10 @@ public struct GraveSummary: Codable, Equatable, Sendable {
     /// Links are capabilities, not defaults. A client must not manufacture a
     /// terminal (or another privileged surface) for a box that did not publish
     /// one in its validated summary.
-    public var capabilities: GraveCapabilities { GraveCapabilities(links: links) }
-}
-
-public struct GraveCapabilities: Equatable, Sendable {
-    public let t3: String?
-    public let terminal: String?
-
-    public init(links: GraveSummary.Links) {
-        t3 = GravePresentation.safePath(links.t3)
-        // Native ttyd needs the well-known token and websocket children. Do
-        // not turn an arbitrary summary path into a terminal transport.
-        terminal = GravePresentation.terminalPath(links.terminal)
-    }
+    public var t3: String? { GravePresentation.safePath(links.t3) }
+    /// Native ttyd needs the well-known token and websocket children. Do
+    /// not turn an arbitrary summary path into a terminal transport.
+    public var terminal: String? { GravePresentation.terminalPath(links.terminal) }
 }
 
 public enum GravePresentation {
@@ -123,20 +103,10 @@ public enum GravePresentation {
     public static func percent(_ value: Double?) -> String { value.map { String(format: "%.0f%%", $0) } ?? "—" }
     public static func temperature(_ value: Double?) -> String { value.map { String(format: "%.0f°C", $0) } ?? "—" }
     public static func uptime(_ seconds: Double?) -> String {
-        guard let seconds else { return "—" }
-        guard seconds.isFinite else { return "—" }
-        let value = seconds >= Double(Int.max) ? Int.max : max(0, Int(seconds)); let days = value / 86_400; let hours = (value % 86_400) / 3_600
-        return days > 0 ? "\(days)d \(hours)h" : "\(hours)h \((value % 3_600) / 60)m"
+        guard let seconds, seconds.isFinite else { return "—" }
+        return Duration.seconds(min(max(0, seconds), Double(Int32.max))).formatted(.units(allowed: [.days, .hours, .minutes], width: .narrow, maximumUnitCount: 2))
     }
-    public static func age(_ date: Date?, now: Date = .now) -> String {
-        guard let date else { return "unknown" }
-        let seconds = max(0, Int(now.timeIntervalSince(date)))
-        if seconds < 5 { return "just now" }
-        if seconds < 60 { return "\(seconds)s ago" }
-        if seconds < 3_600 { return "\(seconds / 60)m ago" }
-        if seconds < 86_400 { return "\(seconds / 3_600)h ago" }
-        return "\(seconds / 86_400)d ago"
-    }
+    public static func age(_ date: Date?) -> String { date?.formatted(.relative(presentation: .numeric)) ?? "—" }
     public static func safePath(_ path: String?) -> String? {
         guard let path, path.hasPrefix("/"), !path.hasPrefix("//"),
               !path.contains("\\"), !path.contains("?"), !path.contains("#"),

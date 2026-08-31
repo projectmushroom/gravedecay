@@ -28,6 +28,7 @@ import ipaddress
 import json
 import glob
 import os
+import queue
 import re
 import shutil
 import socket
@@ -159,20 +160,22 @@ def read_counters():
     return out
 
 
+def read(p):
+    try:
+        with open(p) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
 def iface_static(name):
     if MACOS:
         return parse_ifconfig("\n".join(run_lines(["ifconfig", name]))).get(name,
             {"state": "down", "speed": None, "wireless": False})
     base = f"/sys/class/net/{name}"
-    def slurp(p):
-        try:
-            with open(f"{base}/{p}") as f:
-                return f.read().strip()
-        except OSError:
-            return ""
-    speed = slurp("speed")
-    state = slurp("operstate")
-    if state == "unknown" and slurp("carrier") == "1":
+    speed = read(f"{base}/speed")
+    state = read(f"{base}/operstate")
+    if state == "unknown" and read(f"{base}/carrier") == "1":
         state = "up"          # tun/tap devices (tailscale, wireguard) never report operstate
     return {
         "state": state,
@@ -263,18 +266,8 @@ def lease_ifaces():
 def thunderbolt():
     if MACOS:
         return []
-    devs = []
-    for d in glob.glob("/sys/bus/thunderbolt/devices/*/device_name"):
-        base = os.path.dirname(d)
-        try:
-            with open(d) as f:
-                name = f.read().strip()
-            with open(f"{base}/vendor_name") as f:
-                vendor = f.read().strip()
-            devs.append({"vendor": vendor, "device": name})
-        except OSError:
-            pass
-    return devs
+    return [{"vendor": read(f"{os.path.dirname(d)}/vendor_name"), "device": read(d)}
+            for d in glob.glob("/sys/bus/thunderbolt/devices/*/device_name") if read(d)]
 
 
 def default_gateway():
@@ -318,11 +311,8 @@ def tailscale_peers():
 def conntrack_count():
     if MACOS:
         return None
-    try:
-        with open("/proc/sys/net/netfilter/nf_conntrack_count") as f:
-            return int(f.read())
-    except OSError:
-        return None
+    v = read("/proc/sys/net/netfilter/nf_conntrack_count")
+    return int(v) if v else None
 
 
 def detect_role(name, st, gw_dev, shares):
@@ -463,7 +453,6 @@ class Handler(BaseHTTPRequestHandler):
         self._body(200, "text/html; charset=utf-8", page)
 
     def sse(self):
-        import queue
         q = queue.Queue(maxsize=30)
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")

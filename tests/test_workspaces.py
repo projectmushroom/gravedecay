@@ -91,5 +91,21 @@ class WorkspaceTests(unittest.TestCase):
     def test_provider_rejects_unknown_environment_names(self):
         self.run_cli("provider-set",ok=False,input="PATH=/evil/credential-value-long\n")
         self.assertFalse((self.root/"config/secrets/provider.env").exists())
+    def test_status_audit_and_doctor_agree_after_onboarding(self):
+        self.run_cli("add","100","owner@example.com","owner","--role","admin")
+        self.run_cli("add","200","alice@example.com","alice"); self.run_cli("add","300","bob@example.com","bob")
+        self.run_cli("grant","alice","app","https://github.com/example/app.git")
+        self.run_cli("linear-set","alice",input="lin_api_"+"a"*32+"\n")
+        provider="sk-test-"+"p"*32
+        self.run_cli("provider-set",input="OPENAI_API_KEY="+provider+"\n")
+        self.run_cli("provider-policy","revoke","bob"); self.run_cli("disable","bob")
+        by_slug={row["slug"]:row for row in json.loads(self.run_cli("status").stdout)}
+        self.assertTrue(by_slug["owner"]["llm"]); self.assertTrue(by_slug["alice"]["llm"]); self.assertFalse(by_slug["bob"]["llm"])
+        self.assertEqual(by_slug["alice"]["projects"],1)
+        audit=(self.root/"logs/audit.jsonl").read_text()
+        for event in ("workspace_added","project_granted","integration_login","provider_policy_changed","workspace_disabled"):
+            self.assertIn(event,audit)
+        self.assertNotIn("lin_api_",audit); self.assertNotIn(provider,audit)
+        self.run_cli("doctor")
 
 if __name__ == "__main__": unittest.main()

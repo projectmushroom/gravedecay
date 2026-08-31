@@ -12,8 +12,7 @@ opens in the default browser.
 |---|---|
 | `GravedecayKit/` | SwiftPM package: ttyd protocol + flow control, box URL layout, websocket transport. Platform-independent, tested on Linux and macOS in CI. |
 | `App/Sources/` | SwiftUI app (iOS 17+ / macOS 15+). iOS web panes; native macOS surfaces, menu bar, T3 hand-off, and SwiftTerm. |
-| `project.yml` | XcodeGen spec — base build, connectivity via the Tailscale VPN app. |
-| `project-embedded.yml` | Overlay adding TailscaleKit (in-app tailnet node). |
+| `project.yml` | XcodeGen spec. Connectivity comes from the Tailscale app on the device. |
 
 ## Build (on a Mac)
 
@@ -22,20 +21,9 @@ brew install xcodegen
 make project          # → Gravedecay.xcodeproj, open it in Xcode
 ```
 
-Embedded-tailnet build (needs Go, clones + builds tailscale/libtailscale):
-
-```sh
-make project-embedded
-```
-
-The app code adapts via `#if canImport(TailscaleKit)` — both projects build
-from the same sources.
-
 ## Native macOS app
 
-The macOS app is a normal Dock app with a menu-bar summary. First run starts
-remote-first: **Connect to Graves** discovers tailnet graves; **Share This
-Mac** opens Settings for the opt-in local host. You can do both later. The
+The macOS app is a normal Dock app with a menu-bar summary. The
 native window reads unprivileged macOS system state, scans a chosen work folder
 for Git repositories, reads GitHub CLI status, optionally reads assigned
 Linear issues from an app-owned Keychain key, discovers tailnet graves, and
@@ -63,35 +51,20 @@ constructed only from the selected DNS name and safe same-host single-slash
 paths supplied by that contract. Graveyard selects remote graves only. A native
 terminal is created only when the selected grave advertises `/term`.
 
-Settings → **Local host** → **Start Local Host** is off by default. It starts
-a native loopback-only (`127.0.0.1:4712`) GET/HEAD server for `/healthz` and
-`/api/v1/summary` while the app runs. It refuses an occupied port or the legacy
-`io.gravedecay.dashboard` companion, and does not alter Tailscale, Serve,
-login, or preferences. The UI shows a manual Serve command instead, because
-safely removing a shared path cannot be proven after a restart.
-
 When Tailscale is unavailable, Graveyard, Settings, and the menu bar offer
 **Get Tailscale** or **Open Tailscale**. They only open the official app or
 download page; sign-in and Tailscale configuration remain yours.
 
 The direct-distribution macOS target deliberately is not App Sandbox enabled:
 running the user-installed Tailscale CLI requires local process access. It
-uses no credentials, daemon, registry, analytics, or remote control; its
-optional listener is loopback-only and explicit. Network requests remain HTTPS
-tailnet requests. Hardened Runtime remains on
-for release builds.
+uses no credentials, daemon, registry, analytics, remote control, or
+listener. Network requests remain HTTPS tailnet requests. Hardened Runtime
+remains on for release builds.
 
-## Connectivity modes
+## Connectivity
 
-- **Tailscale app (VPN)** — default. The device is already on the tailnet;
-  the app just loads `https://<box>.ts.net/…`.
-- **Embedded (in-app node)** — TailscaleKit runs a userspace tsnet node
-  inside the app and vends a loopback SOCKS5 proxy. Webviews are routed
-  through it via `WKWebsiteDataStore.proxyConfigurations`, the terminal
-  websocket via `URLSessionConfiguration.proxyConfigurations`. First join
-  needs a Tailscale auth key (admin console → Settings → Keys); the node
-  identity persists in Application Support, the key is never stored. The
-  node appears as `gravedecay-app` in the tailnet admin panel.
+The device is already on the tailnet via the Tailscale app; the client just
+loads `https://<box>.ts.net/…`.
 
 ## Terminal
 
@@ -110,8 +83,8 @@ make test                        # GravedecayKit unit tests (macOS or Linux)
 docker run --rm -v "$PWD/GravedecayKit:/pkg" -w /pkg swift:6.0 swift test
 ```
 
-CI (`.github/workflows/apple.yml`) runs the package tests on Linux + macOS
-and builds both app targets unsigned. The release app is Universal 2.
+CI (`.github/workflows/apple.yml`) runs the package tests on macOS and
+builds both app targets unsigned. The release app is Universal 2.
 
 ```sh
 make project
