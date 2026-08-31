@@ -107,6 +107,13 @@ class T3ConnectContractTests(unittest.TestCase):
         # loopback OAuth callback and the flow dead-ends.
         self.assertIn("connect link --headless", GRAVE)
 
+    def test_connect_restart_waits_through_connection_refused(self):
+        # First-time relay reconciliation can keep T3 unavailable for more
+        # than ten seconds. A bare curl --retry exits immediately on refused
+        # connections and falsely reports a failed healthy link.
+        self.assertIn("for i in $(seq 1 30)", GRAVE)
+        self.assertIn('curl -sf --max-time 2', GRAVE)
+
     def test_dashboard_teardown_action_is_audited_as_administrative(self):
         self.assertIn('"t3connect-off": [GRAVE, "t3", "connect", "off"]', DASHBOARD)
         self.assertIn('"t3connect-off"', GATEWAY)

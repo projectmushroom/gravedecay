@@ -247,7 +247,7 @@ elif command -v pacman >/dev/null; then
   # — the headless upgrade path (#89) — must not run sudo pacman, which is
   # outside the scoped NOPASSWD grant and dies at a password prompt there.
   PACMAN_PKGS=(git tmux curl jq python docker docker-compose nodejs npm ufw nftables
-    lm_sensors python-pillow python-cryptography ttyd)
+    lm_sensors python-pillow python-cryptography ttyd openssh tailscale)
   if pacman -T "${PACMAN_PKGS[@]}" >/dev/null; then
     skip "packages already installed — no privileged install"
   else
@@ -497,7 +497,7 @@ if [[ -z "$SUDOERS_FILE" ]]; then
   fi
 fi
 sudoers_content="# gravedecay: let $RUN_USER (and gravedecay action buttons) drive the platform
-$RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker, $GRAVE_BIN, /usr/bin/journalctl, /usr/bin/ufw, /usr/sbin/ufw, /usr/libexec/gravedecay/firewall-harden, /usr/libexec/gravedecay/firewall-status, /usr/bin/snapper, /usr/sbin/sshd -T, /usr/bin/sshd -T, /usr/bin/tee /etc/systemd/system/*, /usr/bin/tee /sys/fs/cgroup/grave-torpor/*, /usr/bin/mkdir -p /sys/fs/cgroup/grave-torpor, /usr/bin/npm update -g *"
+$RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker, $GRAVE_BIN, /usr/bin/journalctl, /usr/bin/ufw, /usr/sbin/ufw, /usr/libexec/gravedecay/firewall-harden, /usr/libexec/gravedecay/firewall-status, /usr/bin/snapper, /usr/sbin/sshd -T, /usr/bin/sshd -T, /usr/sbin/sshd -t, /usr/bin/sshd -t, /usr/bin/ssh-keygen -A, /usr/bin/tee /etc/ssh/sshd_config.d/50-gravedecay.conf, /usr/bin/tee /etc/systemd/system/*, /usr/bin/tee /sys/fs/cgroup/grave-torpor/*, /usr/bin/mkdir -p /sys/fs/cgroup/grave-torpor, /usr/bin/npm update -g *"
 # /etc/sudoers.d entries are 440 — unreadable to us — so the unchanged-skip
 # (#89: headless upgrades must not need out-of-scope sudo) compares against a
 # user-side stamp of what the last successful install wrote instead.
@@ -631,7 +631,10 @@ if ! command -v t3 >/dev/null; then
   if [[ "$MANAGED_TOOLCHAIN" == 1 ]]; then
     skip "t3 not found under \$HOME — install it per docs/STEAMOS.md and rerun"; exit 1
   fi
-  sudo npm install -g t3
+  # npm 11+ blocks dependency lifecycle scripts unless explicitly allowed.
+  # T3 needs node-pty's install script to provide its native pty.node module;
+  # without it the service enters a restart loop immediately after install.
+  sudo npm install -g --allow-scripts=msgpackr-extract,node-pty t3
 fi
 render t3code.service.tmpl | install_unit t3code.service
 sudo systemctl daemon-reload
@@ -787,6 +790,28 @@ if [[ "${MULTI_USER:-0}" == 1 ]]; then
   ok "multi-user loopback boundary reapplied after firewall"
 fi
 
+# --------------------------------------------------------------- 8. SSH ----
+step "SSH (key-only)"
+SSHD_BIN=$(command -v sshd)
+ssh_dropin=/etc/ssh/sshd_config.d/50-gravedecay.conf
+ssh_tmp=$(mktemp)
+printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n' >"$ssh_tmp"
+if same_file "$ssh_tmp" "$ssh_dropin"; then
+  skip "sshd key-only policy unchanged"
+else
+  [[ -d /etc/ssh/sshd_config.d ]] || sudo mkdir -p /etc/ssh/sshd_config.d
+  sudo tee "$ssh_dropin" <"$ssh_tmp" >/dev/null
+  ok "sshd password authentication disabled"
+fi
+rm -f "$ssh_tmp"
+if ! compgen -G '/etc/ssh/ssh_host_*_key' >/dev/null; then
+  sudo ssh-keygen -A
+  ok "sshd host keys generated"
+fi
+sudo "$SSHD_BIN" -t
+enable_restart "$SSHD_UNIT"
+ok "$SSHD_UNIT enabled and running"
+
 # ----------------------------------------------------------- 9. tailscale ----
 step "Tailscale"
 # On a managed-toolchain host tailscaled is the Homebrew binary with no unit —
@@ -821,9 +846,14 @@ EOF
 fi
 if ! command -v tailscale >/dev/null; then
   skip "tailscale not installed — install it, run 'sudo tailscale up --ssh', rerun raise.sh"
-elif ! tailscale status --peers=false >/dev/null 2>&1; then
-  skip "tailscale not logged in — run 'sudo tailscale up --ssh', rerun raise.sh"
 else
+  # Distro packages ship the upstream unit but generally leave it disabled.
+  # `tailscale up` cannot reach LocalAPI until the daemon has been started.
+  sudo systemctl enable --now tailscaled
+fi
+if command -v tailscale >/dev/null && ! tailscale status --peers=false >/dev/null 2>&1; then
+  skip "tailscale not logged in — run 'sudo tailscale up --ssh', rerun raise.sh"
+elif command -v tailscale >/dev/null; then
   # Ensure the appliance owner can manage serve/funnel without root on every
   # raise. `tailscale serve status` can succeed without operator rights (it
   # just reports no config), so the old "status works ⇒ operator set" probe
