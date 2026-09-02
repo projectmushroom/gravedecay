@@ -95,7 +95,7 @@ agent sessions and frees RAM/GPU until you're done.
 ## Quickstart (Linux appliance)
 
 Requirements: a systemd distro (Arch-family—including Arch, CachyOS, and
-Omarchy—first-class; Debian/Fedora best-effort), ~8 GB RAM, a free
+Omarchy—first-class; Debian/Fedora/openSUSE best-effort), ~8 GB RAM, a free
 [Tailscale](https://tailscale.com) account.
 
 **The agent way (recommended).** SSH in, install your coding agent, and say:
@@ -235,6 +235,7 @@ Writing your own is ~20 lines; see `profiles/README.md`.
 | [AGENTS.md](AGENTS.md) | Playbook for the coding agent doing the install |
 | [docs/STEAMOS.md](docs/STEAMOS.md) | Raising on stock SteamOS (immutable rootfs): durable toolchain, update-survival |
 | [docs/AWS.md](docs/AWS.md) | Raising on EC2 (Amazon Linux 2023): package gaps, `--profile aws`, security group |
+| [docs/VM.md](docs/VM.md) | Raising in a plain VM (KVM/Proxmox): pre-flight probes, openSUSE Leap notes |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Why native-first, layout, mode model |
 | [docs/API.md](docs/API.md) | Versioned, read-only summary contract for thin clients |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, tailnet-only, T3 Connect trade-offs, sudoers scope, terminal trust |

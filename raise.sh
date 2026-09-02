@@ -348,35 +348,62 @@ elif command -v dnf >/dev/null; then
     fi
   fi
 
-  if ! command -v ttyd >/dev/null; then
-    # ttyd isn't packaged for Fedora-family dnf repos (Amazon Linux included);
-    # fetch the static release binary instead of skipping the web terminal.
-    # sha256-pinned like compose above (hashes from the release's SHA256SUMS).
-    case "$(uname -m)" in
-      x86_64)  ttyd_asset=ttyd.x86_64
-               ttyd_sha=8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55 ;;
-      aarch64) ttyd_asset=ttyd.aarch64
-               ttyd_sha=b38acadd89d1d396a0f5649aa52c539edbad07f4bc7348b27b4f4b7219dd4165 ;;
-      *)       ttyd_asset="" ;;
-    esac
-    if [[ -z "$ttyd_asset" ]]; then
-      skip "ttyd: no prebuilt binary for $(uname -m) — install it manually for the web terminal"
-    else
-      ttyd_tmp=$(mktemp)
-      if curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/1.7.7/$ttyd_asset" -o "$ttyd_tmp" \
-          && [[ "$(sha256sum <"$ttyd_tmp" | cut -d' ' -f1)" == "$ttyd_sha" ]] \
-          && sudo install -m 755 "$ttyd_tmp" /usr/local/bin/ttyd; then
-        ok "ttyd installed from upstream release (not packaged for dnf)"
-      else
-        skip "ttyd not in dnf repos and release fetch/verify failed — install it manually for the web terminal"
-      fi
-      rm -f "$ttyd_tmp"
-    fi
-  fi
+  ok "packages present"
+elif command -v zypper >/dev/null; then
+  # openSUSE Leap 15.x: /usr/bin/python3 is still 3.6 (grave needs 3.8+) and
+  # plain `nodejs` is too old for T3 Code, so pull the versioned packages and
+  # point PYTHON_BIN at the 3.11 interpreter below. ttyd is fetched after.
+  sudo zypper --non-interactive install --no-recommends git tmux curl jq \
+    python311 python311-Pillow python311-cryptography docker docker-compose \
+    nodejs22 npm22 nftables sensors \
+    || skip "some packages failed — fix names for your distro and rerun"
   ok "packages present"
 else
   skip "unknown package manager — install git tmux curl jq python3 docker nodejs npm manually"
 fi
+
+# Prefer the newest python3.x on PATH when the distro's `python3` is too old
+# for the grave CLI (walrus operator, 3.8+): openSUSE Leap pins python3 to 3.6.
+if ! "$PYTHON_BIN" -c 'import sys; sys.exit(sys.version_info < (3, 8))' 2>/dev/null; then
+  newer="$(compgen -c python3. | grep -E '^python3\.[0-9]+$' | sort -t. -k2 -n | tail -1)"
+  if [[ -n "$newer" ]]; then
+    PYTHON_BIN="$(command -v "$newer")"
+    ok "python3 too old — units will run $PYTHON_BIN"
+  else
+    skip "python3 is $("$PYTHON_BIN" --version 2>&1) — grave needs 3.8+; install a newer python3 and rerun"
+  fi
+fi
+
+if ! command -v ttyd >/dev/null; then
+  # ttyd isn't packaged for Fedora-family dnf repos (Amazon Linux included)
+  # or openSUSE; fetch the static release binary instead of skipping the
+  # web terminal. Runs after every package-manager branch, so any distro
+  # whose repo lacks ttyd gets the same pinned binary.
+  # sha256-pinned like compose above (hashes from the release's SHA256SUMS).
+  case "$(uname -m)" in
+    x86_64)  ttyd_asset=ttyd.x86_64
+             ttyd_sha=8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55 ;;
+    aarch64) ttyd_asset=ttyd.aarch64
+             ttyd_sha=b38acadd89d1d396a0f5649aa52c539edbad07f4bc7348b27b4f4b7219dd4165 ;;
+    *)       ttyd_asset="" ;;
+  esac
+  if [[ -z "$ttyd_asset" ]]; then
+    skip "ttyd: no prebuilt binary for $(uname -m) — install it manually for the web terminal"
+  else
+    ttyd_tmp=$(mktemp)
+    if curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/1.7.7/$ttyd_asset" -o "$ttyd_tmp" \
+        && [[ "$(sha256sum <"$ttyd_tmp" | cut -d' ' -f1)" == "$ttyd_sha" ]] \
+        && sudo install -m 755 "$ttyd_tmp" /usr/local/bin/ttyd; then
+      ok "ttyd installed from upstream release (not in this distro's repos)"
+    else
+      skip "ttyd not in repos and release fetch/verify failed — install it manually for the web terminal"
+    fi
+    rm -f "$ttyd_tmp"
+  fi
+fi
+# Re-resolve: on a first raise the binary did not exist when TTYD_BIN was
+# captured above, and a fetched ttyd lands in /usr/local/bin, not /usr/bin.
+TTYD_BIN="$(command -v ttyd 2>/dev/null || echo "$TTYD_BIN")"
 
 # -------------------------------------------------------------- 2. layout ----
 step "Layout at $GRAVE_ROOT"
