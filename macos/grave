@@ -3,7 +3,7 @@
 import json, os, re, subprocess, sys, time
 ROOT=os.path.realpath(os.environ.get("GRAVE_ROOT",os.path.expanduser("~/Library/Application Support/Gravedecay")))
 ORIGIN="https://github.com/projectmushroom/gravedecay.git"; REPO=os.path.join(ROOT,"repos","gravedecay"); CONFIG=os.path.join(ROOT,"config")
-META=os.path.join(CONFIG,"release.json"); REQUEST=os.path.join(CONFIG,"update-request.json"); STATUS=os.path.join(CONFIG,"update-status.json"); LOCK=os.path.join(CONFIG,"update.lock"); TAG=re.compile(r"v(\d+)\.(\d+)\.(\d+)$")
+META=os.path.join(CONFIG,"release.json"); REQUEST=os.path.join(CONFIG,"update-request.json"); STATUS=os.path.join(CONFIG,"update-status.json"); TAG=re.compile(r"v(\d+)\.(\d+)\.(\d+)$")
 NOTIFY_ENV=os.path.join(CONFIG,"secrets","notify.env")
 def die(s): print(s,file=sys.stderr); raise SystemExit(2)
 def inside(p): return os.path.commonpath((ROOT,os.path.realpath(p)))==ROOT and os.path.realpath(p)!=ROOT

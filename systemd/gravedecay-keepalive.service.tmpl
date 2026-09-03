@@ -4,8 +4,6 @@ Description=gravedecay tailnet keepalive (warm relay paths so idle websockets do
 # $GRAVE_ROOT/config/keepalive.on (`grave keepalive on`). Needs tailscaled up.
 After=multi-user.target tailscaled.service
 Wants=network-online.target
-# Page the human if this unit lands in failed state (silent no-op unless
-# notifications are configured -- see docs/NOTIFICATIONS.md).
 OnFailure=gravedecay-notify@%n.service
 
 [Service]

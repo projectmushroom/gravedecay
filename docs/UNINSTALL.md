@@ -100,21 +100,14 @@ environment.
 
 ## When the CLI is broken
 
-`grave` refuses to start without `/etc/gravedecay/grave.conf`, so a box whose
-`/etc` was wiped (a SteamOS update, a bad restore) cannot uninstall itself the
-normal way. Use the repo script:
+A box whose `/etc` was wiped (a SteamOS update, a bad restore) has no
+`/etc/gravedecay/grave.conf`; `grave uninstall` then assumes `GRAVE_ROOT=/srv/dev`
+and no docker stacks. If the `grave` binary itself is gone, run the repo script —
+it hands off to a scratch copy of the checkout's `bin/grave`:
 
 ```sh
 $GRAVE_ROOT/repos/gravedecay/uninstall.sh          # or from any checkout
 ```
-
-It prefers to hand off to the installed CLI. When it cannot — no `grave`
-binary, or no readable config — it falls back to removing the fixed surface it
-can identify without configuration: units, `/etc` entries, sudoers drop-ins, the
-CLIs, and any masked sleep targets. Anything config-dependent (containers,
-`$GRAVE_ROOT`, tailnet mounts) is printed as a short list of commands for you to
-run. `--purge` is **not** honored on the fallback path — it will not guess at
-which directory holds your data.
 
 ## Verifying
 

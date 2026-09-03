@@ -57,8 +57,8 @@ class T3ConnectContractTests(unittest.TestCase):
             self.assertIn(arg, WEBTERM)
             self.assertIn(arg, DASHBOARD)
             self.assertIn(arg, SHELL)
-        self.assertIn('auth-t3publish) [[ "$WORKSPACE_ROLE" == admin ]]', WEBTERM)
-        self.assertIn('auth-t3full)    [[ "$WORKSPACE_ROLE" == admin ]]', WEBTERM)
+        self.assertIn('auth-t3publish) admin_only', WEBTERM)
+        self.assertIn('auth-t3full)    admin_only', WEBTERM)
 
     def test_one_shot_flows_do_not_reconnect_and_re_run(self):
         # Regression: a finished `auth-*` flow closes the socket,
@@ -125,7 +125,9 @@ class T3ConnectContractTests(unittest.TestCase):
     def test_t3_tile_setting_is_clamped_on_load_and_save(self):
         # t3_tile comes from a user-writable settings file; anything but the
         # two known values must degrade to the web UI, not into a tile href.
-        self.assertEqual(DASHBOARD.count('not in ("pwa", "app")'), 2)
+        self.assertEqual(DASHBOARD.count('not in ("pwa", "app")'), 1)
+        self.assertEqual(DASHBOARD.count("return _normalize("), 1)
+        self.assertIn("merged = _normalize(merged)", DASHBOARD)
 
     def test_official_app_tile_href_is_a_constant(self):
         # The app-mode tile bypasses _safe_tile_url (which rightly refuses

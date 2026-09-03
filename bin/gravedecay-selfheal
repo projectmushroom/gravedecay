@@ -23,9 +23,6 @@ LOG="$LOGDIR/selfheal.log"
 MARK="$LOGDIR/DRIFT-DETECTED"
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG" >&2; }
 
-# durable toolchain env (Homebrew + rootless docker under $HOME)
-[[ -x /home/linuxbrew/.linuxbrew/bin/brew ]] && eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv bash)" 2>/dev/null || true
-export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 
 # 1. drift detection — the /etc pieces a SteamOS update could wipe
@@ -56,12 +53,7 @@ rm -f "$MARK" 2>/dev/null || true
 # 2. no drift — make sure the dev stacks are actually up (container restart
 # policies usually handle this; this covers the edge cases), but only in the
 # developer boot posture so we never override `grave bootmode gaming`.
-multi_dev=0
-if [[ "${MULTI_USER:-0}" == 1 && -r "$GRAVE_ROOT/config/workspaces.json" ]]; then
-  first_slug=$(jq -r '.workspaces[] | select(.enabled) | .slug' "$GRAVE_ROOT/config/workspaces.json" 2>/dev/null | head -1)
-  [[ -n "$first_slug" ]] && systemctl is-enabled --quiet "gravedecay-t3@$first_slug" 2>/dev/null && multi_dev=1
-fi
-if systemctl is-enabled --quiet t3code 2>/dev/null || [[ "$multi_dev" == 1 ]]; then
+if grave bootmode 2>/dev/null | grep -q developer; then
   systemctl --user start docker >/dev/null 2>&1 || true
   for stack in "${DEV_STACKS[@]:-}"; do
     [[ -n "$stack" ]] && grave docker up "$stack" >>"$LOG" 2>&1 || true

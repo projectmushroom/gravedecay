@@ -11,12 +11,6 @@ public enum TtydProtocol {
     public static let pause: UInt8 = UInt8(ascii: "2")
     public static let resume: UInt8 = UInt8(ascii: "3")
 
-    public enum ServerMessage: Equatable {
-        case output(Data)            // '0' — terminal bytes
-        case setWindowTitle(String)  // '1'
-        case preferences(Data)       // '2' — JSON blob of the server's -t flags
-    }
-
     public static let pauseFrame = Data([pause])
     public static let resumeFrame = Data([resume])
 
@@ -31,12 +25,6 @@ public enum TtydProtocol {
         // Encoding Hello cannot fail; fall back to an empty-token hello anyway.
         return (try? JSONEncoder().encode(Hello(AuthToken: token, columns: columns, rows: rows)))
             ?? Data("{\"AuthToken\":\"\"}".utf8)
-    }
-
-    public static func inputFrame(_ text: String) -> Data {
-        var frame = Data([input])
-        frame.append(contentsOf: Array(text.utf8))
-        return frame
     }
 
     public static func inputFrame(_ bytes: [UInt8]) -> Data {
@@ -55,18 +43,9 @@ public enum TtydProtocol {
         return frame
     }
 
-    public static func parse(_ frame: Data) -> ServerMessage? {
-        guard let command = frame.first else { return nil }
-        let payload = Data(frame.dropFirst())
-        switch command {
-        case UInt8(ascii: "0"):
-            return .output(payload)
-        case UInt8(ascii: "1"):
-            return .setWindowTitle(String(decoding: payload, as: UTF8.self))
-        case UInt8(ascii: "2"):
-            return .preferences(payload)
-        default:
-            return nil
-        }
+    /// Terminal bytes from an output ('0') frame; title ('1') and preference
+    /// ('2') frames are ignored.
+    public static func parse(_ frame: Data) -> Data? {
+        frame.first == input ? Data(frame.dropFirst()) : nil
     }
 }

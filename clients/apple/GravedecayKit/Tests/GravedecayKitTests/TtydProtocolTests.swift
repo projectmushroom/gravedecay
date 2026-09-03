@@ -14,12 +14,6 @@ final class TtydProtocolTests: XCTestCase {
         XCTAssertEqual(obj["rows"] as? Int, 40)
     }
 
-    func testInputFrameIsZeroPlusUTF8() {
-        let frame = TtydProtocol.inputFrame("ls\r")
-        XCTAssertEqual(frame.first, UInt8(ascii: "0"))
-        XCTAssertEqual(Data(frame.dropFirst()), Data("ls\r".utf8))
-    }
-
     func testBinaryInputFrame() {
         let frame = TtydProtocol.inputFrame([0x1b, 0x5b, 0x41]) // up arrow
         XCTAssertEqual(Array(frame), [UInt8(ascii: "0"), 0x1b, 0x5b, 0x41])
@@ -41,17 +35,12 @@ final class TtydProtocolTests: XCTestCase {
     func testParseOutput() {
         var frame = Data([UInt8(ascii: "0")])
         frame.append(contentsOf: Array("hi".utf8))
-        XCTAssertEqual(TtydProtocol.parse(frame), .output(Data("hi".utf8)))
+        XCTAssertEqual(TtydProtocol.parse(frame), Data("hi".utf8))
     }
 
-    func testParseTitleAndPreferences() {
-        var title = Data([UInt8(ascii: "1")])
-        title.append(contentsOf: Array("agents".utf8))
-        XCTAssertEqual(TtydProtocol.parse(title), .setWindowTitle("agents"))
-
-        var prefs = Data([UInt8(ascii: "2")])
-        prefs.append(contentsOf: Array("{\"fontSize\":14}".utf8))
-        XCTAssertEqual(TtydProtocol.parse(prefs), .preferences(Data("{\"fontSize\":14}".utf8)))
+    func testParseIgnoresTitleAndPreferences() {
+        XCTAssertNil(TtydProtocol.parse(Data([UInt8(ascii: "1"), 0x41])))
+        XCTAssertNil(TtydProtocol.parse(Data([UInt8(ascii: "2"), UInt8(ascii: "{"), UInt8(ascii: "}")])))
     }
 
     func testParseRejectsEmptyAndUnknown() {
@@ -63,6 +52,6 @@ final class TtydProtocolTests: XCTestCase {
     func testParseHandlesSlicedData() {
         let padded = Data([0xff, UInt8(ascii: "0"), 0x41])
         let sliced = Data(padded.dropFirst())
-        XCTAssertEqual(TtydProtocol.parse(sliced), .output(Data([0x41])))
+        XCTAssertEqual(TtydProtocol.parse(sliced), Data([0x41]))
     }
 }

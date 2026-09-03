@@ -60,7 +60,7 @@ class DoctorContractTests(unittest.TestCase):
     def test_doctor_checks_the_versioned_summary_contract(self):
         self.assertIn('check "dashboard summary API contract"', GRAVE)
         self.assertIn('/api/v1/summary', GRAVE)
-        self.assertIn('.product == \\"gravedecay\\" and .api_version == 1', GRAVE)
+        self.assertIn('.product == "gravedecay" and .api_version == 1', GRAVE)
 
     def test_t3_activity_doctor_keeps_the_source_boundary_and_bearer_off_argv(self):
         self.assertIn('t3_activity_configured()', GRAVE)
@@ -97,6 +97,18 @@ class DoctorContractTests(unittest.TestCase):
             enabled = subprocess.run(["bash", "-c", f"systemctl() {{ return 0; }}\n{body}\n{name}"], capture_output=True)
             self.assertEqual(disabled.returncode, 0, unit)
             self.assertNotEqual(enabled.returncode, 0, unit)
+
+    def test_migration_backup_and_recovery_contracts_are_wired(self):
+        recovery = (ROOT / "docs/RECOVERY.md").read_text()
+        self.assertIn("cmd_multiuser", GRAVE); self.assertIn("--reflink=auto", GRAVE)
+        self.assertIn('[[ -d "$repo" && ! -L "$repo" ]] || continue', GRAVE)
+        self.assertIn('[[ -d "$repo/.git" && ! -L "$repo" ]] || continue', GRAVE)
+        self.assertIn("migration failed; single-user config restored", GRAVE)
+        self.assertIn("workspaces.tar.gz", GRAVE); self.assertIn("--include-secrets", GRAVE)
+        self.assertIn("Tailscale LocalAPI hidden from workspaces", GRAVE)
+        self.assertIn("chmod 0660 /run/tailscale/tailscaled.sock", RAISE)
+        self.assertIn("grave restore <ts> workspaces", recovery)
+        self.assertIn("Secrets are excluded by default", recovery)
 
 
 if __name__ == "__main__":

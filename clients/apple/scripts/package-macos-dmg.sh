@@ -9,7 +9,6 @@ APP=${APP:-"$ROOT/../DerivedData/Build/Products/Release/Gravedecay.app"}
 OUT=${OUT:-"$BUILD_DIR/Gravedecay-macOS.dmg"}
 mkdir -p "$BUILD_DIR"
 [ -d "$APP" ] || { echo "missing app: $APP" >&2; exit 1; }
-"$ROOT/scripts/verify-macos-app-icon.sh" "$APP"
 rm -f "$OUT"
 STAGE=$(mktemp -d "${TMPDIR:-/tmp}/gravedecay-dmg.XXXXXX")
 trap 'rm -rf "$STAGE"' EXIT

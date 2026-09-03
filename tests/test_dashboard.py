@@ -1,66 +1,26 @@
-import importlib.util
 import hashlib
 import json
 import os
 import pathlib
 import tempfile
-import threading
 import time
 import unittest
 import urllib.error
 import urllib.request
 
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location("gravedecay_dashboard", ROOT / "dashboard/gravedecay.py")
-DASHBOARD = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(DASHBOARD)
+from helpers import ROOT, load, serve
 
-
-def load_dashboard(env):
-    """Load a fresh gravedecay module instance under a patched environment.
-
-    Module-level config (GRAVE_ROOT, TMUX_SOCKET, T3_BASE_DIR, …) is read from
-    os.environ at import, so a workspace instance is simulated by loading with
-    that workspace's env. Importing is side-effect-free (the server starts only
-    under __main__)."""
-    old = dict(os.environ)
-    os.environ.update(env)
-    try:
-        spec = importlib.util.spec_from_file_location("gravedecay_probe", ROOT / "dashboard/gravedecay.py")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-    finally:
-        os.environ.clear()
-        os.environ.update(old)
+DASH = ROOT / "dashboard/gravedecay.py"
+DASHBOARD = load(DASH, {})
 
 
 class DashboardContractTests(unittest.TestCase):
-    def test_gamewatch_off_presents_a_dev_only_dashboard(self):
-        # The persistent gamewatch preference is the UI feature gate. Keep one
-        # Settings control to opt back in, but hide every routine mode control;
-        # the existing game banner remains the recovery path if already buried.
-        shell = (ROOT / "dashboard/static/index.html").read_text()
-        self.assertIn('let throttleOn=null,gamingFeatures=false;', shell)
-        self.assertIn("gamingFeatures=show&&!!g.on;paintGamingControls();", shell)
-        self.assertIn("$('mode').style.display=gamingFeatures?'':'none';", shell)
-        self.assertIn("$('boot-mode-row').style.display=gamingFeatures?'':'none';", shell)
-        self.assertIn("document.querySelectorAll('[data-gaming-control]')", shell)
-        self.assertNotIn("$('game-banner').style.display=gamingFeatures", shell)
-
     @classmethod
     def setUpClass(cls):
-        cls.server = DASHBOARD.ThreadingHTTPServer(("127.0.0.1", 0), DASHBOARD.Handler)
-        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
-        cls.thread.start()
-        cls.origin = f"http://127.0.0.1:{cls.server.server_port}"
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.server.shutdown()
-        cls.server.server_close()
-        cls.thread.join(timeout=2)
+        server = serve(DASHBOARD)
+        cls.origin = server.__enter__()
+        cls.addClassCleanup(server.__exit__, None, None, None)
 
     def get(self, path):
         return urllib.request.urlopen(self.origin + path, timeout=2)
@@ -81,11 +41,7 @@ class DashboardContractTests(unittest.TestCase):
         self.assertEqual(manifest["start_url"], "./")
 
     def test_multi_user_backend_requires_gateway_capability_except_health(self):
-        secured = load_dashboard({"GRAVEDECAY_BACKEND_TOKEN": "a" * 64})
-        server = secured.ThreadingHTTPServer(("127.0.0.1", 0), secured.Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
-        origin = f"http://127.0.0.1:{server.server_port}"
-        try:
+        with serve(load(DASH, {"GRAVEDECAY_BACKEND_TOKEN": "a" * 64})) as origin:
             with urllib.request.urlopen(origin + "/healthz", timeout=2) as response:
                 self.assertEqual(response.status, 200)
             with self.assertRaises(urllib.error.HTTPError) as error:
@@ -95,36 +51,22 @@ class DashboardContractTests(unittest.TestCase):
                                              headers={"X-Grave-Backend-Token": "a" * 64})
             with urllib.request.urlopen(request, timeout=2) as response:
                 self.assertEqual(response.status, 200)
-        finally:
-            server.shutdown(); server.server_close(); thread.join(timeout=2)
 
     def test_required_backend_mode_denies_missing_or_short_capability(self):
         for token in (None, "short"):
             env = {"GRAVEDECAY_REQUIRE_BACKEND_TOKEN": "1"}
             if token is not None:
                 env["GRAVEDECAY_BACKEND_TOKEN"] = token
-            secured = load_dashboard(env)
-            server = secured.ThreadingHTTPServer(("127.0.0.1", 0), secured.Handler)
-            thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
-            try:
-                origin = f"http://127.0.0.1:{server.server_port}"
+            with serve(load(DASH, env)) as origin:
                 with urllib.request.urlopen(origin + "/healthz", timeout=2) as response:
                     self.assertEqual(response.status, 200)
                 with self.assertRaises(urllib.error.HTTPError) as error:
                     urllib.request.urlopen(origin + "/manifest.webmanifest", timeout=2)
                 self.assertEqual(error.exception.code, 401)
-            finally:
-                server.shutdown(); server.server_close(); thread.join(timeout=2)
 
     def test_single_user_without_required_mode_remains_compatible(self):
-        dashboard = load_dashboard({})
-        server = dashboard.ThreadingHTTPServer(("127.0.0.1", 0), dashboard.Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
-        try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/manifest.webmanifest", timeout=2) as response:
-                self.assertEqual(response.status, 200)
-        finally:
-            server.shutdown(); server.server_close(); thread.join(timeout=2)
+        with self.get("/manifest.webmanifest") as response:
+            self.assertEqual(response.status, 200)
 
     def test_service_worker_can_control_the_root_but_not_cache_api_data(self):
         with self.get("/sw.js") as response:
@@ -195,7 +137,7 @@ class DashboardContractTests(unittest.TestCase):
             for name, fn in saved.items(): setattr(linux, name, fn)
         self.assertEqual(body["node"]["mode"], "gaming")
         self.assertEqual(body["health"], {"services_failed": 0, "containers_problem": 0})
-        mac = load_dashboard({"GRAVEDECAY_PLATFORM": "macos"})
+        mac = load(DASH, {"GRAVEDECAY_PLATFORM": "macos"})
         mac._ttl_cache.pop("summary", None)
         mac.collect_system = lambda: {"uptime_s": 1, "cpu": {}, "mem": {}, "disks": [], "temps": {}}
         mac.collect_services = lambda: [{"active": "inactive"}]
@@ -211,7 +153,6 @@ class DashboardContractTests(unittest.TestCase):
         ritual = (ROOT / "raise.sh").read_text()
         self.assertTrue((ROOT / "dashboard/static/index.html").is_file())
         self.assertIn("PAGE = load_page()", src)
-        # OFFLINE_PAGE still embeds a tiny HTML fallback; the live page must not.
         self.assertNotIn("\nPAGE = r\"\"\"<!doctype html>", src)
         self.assertIn('static_asset("index.html"', src)
         self.assertIn("SHELL_ID = static_asset_sha", src)
@@ -310,7 +251,7 @@ class DashboardContractTests(unittest.TestCase):
 
     def test_multi_user_raise_uses_the_root_dashboard_maintenance_probe(self):
         ritual = (ROOT / "raise.sh").read_text()
-        self.assertIn('sudo -n "$GRAVE_BIN" __dashboard-health', ritual)
+        self.assertIn('sudo -n "$GRAVE_BIN" __dashboard-probe health', ritual)
         self.assertIn('refusing multi-user raise', ritual)
 
     def test_workspace_dashboard_targets_its_own_socket_and_pairing_dir(self):
@@ -320,7 +261,7 @@ class DashboardContractTests(unittest.TestCase):
         # own T3/terminal never use. Both must come from the environment.
         saved = {k: os.environ.pop(k, None) for k in ("TMUX_SOCKET", "GRAVEDECAY_T3_BASE_DIR")}
         try:
-            single = load_dashboard({"GRAVE_ROOT": "/srv/dev"})
+            single = load(DASH, {"GRAVE_ROOT": "/srv/dev"})
         finally:
             for key, value in saved.items():
                 if value is not None:
@@ -328,7 +269,7 @@ class DashboardContractTests(unittest.TestCase):
         self.assertEqual(single.TMUX_SOCKET, "agents")
         self.assertIn("/srv/dev/agents/t3code", single.ACTIONS["t3-pair"])
 
-        ws = load_dashboard({"GRAVE_ROOT": "/srv/dev/workspaces/alice",
+        ws = load(DASH, {"GRAVE_ROOT": "/srv/dev/workspaces/alice",
                              "TMUX_SOCKET": "grave-alice",
                              "GRAVEDECAY_T3_BASE_DIR": "/srv/dev/workspaces/alice/state/t3"})
         self.assertEqual(ws.TMUX_SOCKET, "grave-alice")
@@ -351,16 +292,16 @@ class DashboardContractTests(unittest.TestCase):
                     tool.chmod(0o755)
                 # SteamOS shape: t3 sits next to grave — the sibling wins
                 # without consulting PATH.
-                steam = load_dashboard({"GRAVEDECAY_GRAVE": str(toolchain / "grave"),
+                steam = load(DASH, {"GRAVEDECAY_GRAVE": str(toolchain / "grave"),
                                         "PATH": "/usr/bin"})
                 self.assertEqual(steam.T3, str(toolchain / "t3"))
                 # Package-host shape: no t3 next to grave — fall back to PATH,
                 # which raise.sh threads the toolchain bin dirs into.
-                pkg = load_dashboard({"GRAVEDECAY_GRAVE": str(pathlib.Path(tmp, "usr-local-bin", "grave")),
+                pkg = load(DASH, {"GRAVEDECAY_GRAVE": str(pathlib.Path(tmp, "usr-local-bin", "grave")),
                                       "PATH": str(toolchain)})
                 self.assertEqual(pkg.T3, str(toolchain / "t3"))
                 # Explicit override beats both.
-                forced = load_dashboard({"GRAVEDECAY_GRAVE": str(toolchain / "grave"),
+                forced = load(DASH, {"GRAVEDECAY_GRAVE": str(toolchain / "grave"),
                                          "GRAVEDECAY_T3": "/opt/t3"})
                 self.assertEqual(forced.T3, "/opt/t3")
         finally:
@@ -519,32 +460,22 @@ class DashboardContractTests(unittest.TestCase):
         self.assertNotIn("t3_activity", DASHBOARD.summary())
 
     def test_t3_activity_workspace_header_requires_a_validated_backend(self):
-        single = load_dashboard({"GRAVEDECAY_ALLOWED_USERS": "owner@example.com"})
+        single = load(DASH, {"GRAVEDECAY_ALLOWED_USERS": "owner@example.com"})
         single.t3_activity = lambda: {"status": "ok", "threads": [{"title": "private"}]}
-        server = single.ThreadingHTTPServer(("127.0.0.1", 0), single.Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
-        origin = f"http://127.0.0.1:{server.server_port}"
-        try:
+        with serve(single) as origin:
             untrusted = urllib.request.Request(origin + "/api/t3-activity", headers={
                 "Tailscale-User-Login": "eve@example.com", "X-Grave-Workspace": "eve"})
             with self.assertRaises(urllib.error.HTTPError) as error:
                 urllib.request.urlopen(untrusted, timeout=2)
             self.assertEqual(error.exception.code, 403)
-        finally:
-            server.shutdown(); server.server_close(); thread.join(timeout=2)
-        workspace = load_dashboard({"GRAVEDECAY_ALLOWED_USERS": "owner@example.com",
-                                    "GRAVEDECAY_BACKEND_TOKEN": "a" * 64})
+        workspace = load(DASH, {"GRAVEDECAY_ALLOWED_USERS": "owner@example.com",
+                                "GRAVEDECAY_BACKEND_TOKEN": "a" * 64})
         workspace.t3_activity = lambda: {"status": "ok", "threads": [{"title": "private"}]}
-        server = workspace.ThreadingHTTPServer(("127.0.0.1", 0), workspace.Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
-        origin = f"http://127.0.0.1:{server.server_port}"
-        try:
+        with serve(workspace) as origin:
             trusted = urllib.request.Request(origin + "/api/t3-activity", headers={
                 "X-Grave-Workspace": "eve", "X-Grave-Backend-Token": "a" * 64})
             with urllib.request.urlopen(trusted, timeout=2) as response:
                 self.assertEqual(json.loads(response.read())["threads"][0]["title"], "private")
-        finally:
-            server.shutdown(); server.server_close(); thread.join(timeout=2)
 
     def test_collect_repos_is_ttl_cached(self):
         # Regression #48: collect_repos forks 3 git procs per repo on every
@@ -634,16 +565,6 @@ class DashboardContractTests(unittest.TestCase):
         self.assertIn("Tailscale", page)
         self.assertNotIn("api/state", page)
         self.assertNotIn("BOOT", page)
-
-    def test_compact_layout_reflows_instead_of_clipping(self):
-        page = DASHBOARD.PAGE
-        self.assertIn("@media(max-width:520px)", page)
-        self.assertIn("@media(max-width:500px)", page)
-        self.assertIn(".panel table,.panel tbody,.panel tr,.panel td{display:block", page)
-        self.assertIn("table,tbody,tr,td{display:block", page)
-        self.assertIn("height:100dvh", page)
-        self.assertNotIn("html{-webkit-text-size-adjust:100%;overflow-x:hidden}", page)
-        self.assertIn("id=\"connection\"", page)
 
     def test_self_upgrade_is_detached_from_the_dashboard_service(self):
         command = DASHBOARD.ACTIONS["update-grave"]

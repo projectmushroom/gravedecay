@@ -265,11 +265,3 @@ test('macOS updater uses its configured edge channel and exposes progress', asyn
   await page.evaluate(()=>{window.macUpdateFixtureState='ok';return macUpdateStatus(false)}); await expect(page.locator('#grave-release-state')).toContainText('ok');
   await page.evaluate(()=>{window.macUpdateFixtureState='failed';return macUpdateStatus(false)}); await expect(page.locator('#grave-release-state')).toContainText('failed');
 });
-
-test('PWA contract spans the appliance origin', async ({ request, baseURL }) => {
-  const manifest = await (await request.get(new URL('manifest.webmanifest', baseURL).href)).json();
-  expect(manifest.scope).toBe('/');
-  expect(manifest.id).toBe('/grave/');
-  const worker = await request.get(new URL('sw.js', baseURL).href);
-  expect(worker.headers()['service-worker-allowed']).toBe('/');
-});

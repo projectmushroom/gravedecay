@@ -1,6 +1,4 @@
 # XcodeGen spec — `make project` regenerates Gravedecay.xcodeproj.
-# The base project builds WITHOUT TailscaleKit (connectivity = Tailscale VPN
-# app); `make project-embedded` layers the in-app tailnet on top.
 name: Gravedecay
 options:
   bundleIdPrefix: com.projectmushroom
@@ -62,9 +60,8 @@ targets:
           - App/Assets.xcassets/AppIcon.appiconset/icon-512.png
           - App/Assets.xcassets/AppIcon.appiconset/icon-1024.png
     sources:
-      - path: App/Sources
-        excludes: [WebPane.swift]
-      - path: App/Assets.xcassets
+      - App/Sources
+      - App/Assets.xcassets
     dependencies:
       - package: GravedecayKit
       - package: SwiftTerm

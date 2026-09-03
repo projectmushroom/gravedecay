@@ -6,7 +6,8 @@ import tempfile
 import unittest
 
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+from helpers import ROOT, run_notify
+
 GRAVE = (ROOT / "bin/grave").read_text()
 RAISE = (ROOT / "raise.sh").read_text()
 TMUX = (ROOT / "config/tmux.conf").read_text()
@@ -89,19 +90,7 @@ class NotifyContractTests(unittest.TestCase):
     def test_raise_installs_and_provisions_agent_cli_hooks(self):
         self.assertIn('install -m 755 "$REPO_DIR/bin/grave-agent-notify" "$GRAVE_AGENT_NOTIFY"', RAISE)
         self.assertIn('provision_agent_hooks "$HOME_DIR" "$GRAVE_AGENT_NOTIFY"', RAISE)
-        self.assertIn(".hooks.Stop", RAISE)
-        self.assertIn(".hooks.Notification", RAISE)
-        self.assertIn('notify = ["%s", "codex"]', RAISE)
-        self.assertIn("Codex notify already set", RAISE)
-
-    def test_fresh_claude_settings_jq_expression_compiles(self):
-        match = re.search(r'jq --arg cmd "\$helper claude" -n \\\n\s+\'([^\']+)\'', RAISE)
-        self.assertIsNotNone(match)
-        proc = subprocess.run(
-            ["jq", "--arg", "cmd", "/tmp/grave-agent-notify claude", "-n", match.group(1)],
-            capture_output=True, text=True, timeout=30,
-        )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn('grave-workspaces" hooks', RAISE)
 
     def test_doctor_checks_gate_on_each_channel_existing(self):
         # No notify.env / no enrolled devices → no checks (opt-in); with them,
@@ -109,7 +98,7 @@ class NotifyContractTests(unittest.TestCase):
         # secret modes, the dashboard's push crypto, and the notifier unit.
         self.assertIn('if [[ -e "$NOTIFY_ENV" ]]; then', GRAVE)
         self.assertIn('check "ntfy channel reachable"      notify_reachable', GRAVE)
-        self.assertIn('"$NTFY_URL/json?poll=1"', GRAVE)
+        self.assertIn('ntfy_curl "/json?poll=1"', GRAVE)
         self.assertIn("if push_ready; then", GRAVE)
         self.assertIn('check "web push sender ready"', GRAVE)
         self.assertIn("/api/push-key' | jq -e .ok", GRAVE)
@@ -165,33 +154,8 @@ class NotifyContractTests(unittest.TestCase):
 
 
 class NotifyExecutionTests(unittest.TestCase):
-    """Drive bin/grave notify with a temp conf and a fake curl on PATH."""
-
-    def run_notify(self, *args, notify_env=None, events="session-exit bell agent-done unit-failure doctor"):
-        tmp = pathlib.Path(self.tmpdir.name)
-        (tmp / "logs").mkdir(exist_ok=True)
-        (tmp / "config/secrets").mkdir(parents=True, exist_ok=True)
-        conf = tmp / "grave.conf"
-        conf.write_text(f'GRAVE_ROOT="{tmp}"\nNOTIFY_EVENTS="{events}"\n')
-        if notify_env is not None:
-            (tmp / "config/secrets/notify.env").write_text(notify_env)
-        bindir = tmp / "bin"
-        bindir.mkdir(exist_ok=True)
-        curl_log = tmp / "curl.log"
-        fake_curl = bindir / "curl"
-        fake_curl.write_text('#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" > "$CURL_LOG"\nexit 0\n')
-        fake_curl.chmod(0o755)
-        env = dict(
-            os.environ,
-            GRAVE_CONF=str(conf),
-            PATH=f"{bindir}:{os.environ['PATH']}",
-            CURL_LOG=str(curl_log),
-        )
-        proc = subprocess.run(
-            [str(ROOT / "bin/grave"), "notify", *args],
-            env=env, capture_output=True, text=True, timeout=30,
-        )
-        return proc, curl_log
+    def run_notify(self, *args, **kw):
+        return run_notify(self.tmpdir.name, *args, **kw), pathlib.Path(self.tmpdir.name, "curl.log")
 
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()

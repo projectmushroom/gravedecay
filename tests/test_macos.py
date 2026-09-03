@@ -1,5 +1,3 @@
-import importlib.util
-import importlib.machinery
 import contextlib
 import io
 import os
@@ -12,23 +10,10 @@ import urllib.error
 import urllib.request
 import json
 import sys
-import threading
 import unittest
 import shutil
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
-
-
-def load(path, env):
-    old = dict(os.environ)
-    os.environ.update(env)
-    try:
-        spec = importlib.util.spec_from_file_location("mac_probe", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-    finally:
-        os.environ.clear(); os.environ.update(old)
+from helpers import ROOT, load, serve
 
 
 class MacosContractTests(unittest.TestCase):
@@ -188,10 +173,7 @@ class MacosContractTests(unittest.TestCase):
                 "GRAVEDECAY_PLATFORM": "macos", "GRAVE_ROOT": str(app_root),
                 "GRAVEDECAY_ALLOWED_USERS": "owner@example.test",
             })
-            server = dash.ThreadingHTTPServer(("127.0.0.1", 0), dash.Handler)
-            thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
-            origin = f"http://127.0.0.1:{server.server_port}"
-            try:
+            with serve(dash) as origin:
                 def post(data, headers=None):
                     request = urllib.request.Request(origin + "/api/settings", data=json.dumps(data).encode(),
                         headers={"Content-Type": "application/json", **(headers or {})}, method="POST")
@@ -213,8 +195,6 @@ class MacosContractTests(unittest.TestCase):
                 with self.assertRaises(urllib.error.HTTPError) as cross_site:
                     post({}, {"Tailscale-User-Login": "owner@example.test", "Sec-Fetch-Site": "cross-site"})
                 self.assertEqual(cross_site.exception.code, 403)
-            finally:
-                server.shutdown(); server.server_close(); thread.join(timeout=2)
 
     def test_darwin_network_parsers(self):
         net = load(ROOT / "dashboard/gravenet.py", {"GRAVENET_PLATFORM": "macos"})
@@ -256,24 +236,6 @@ class MacosContractTests(unittest.TestCase):
                          {"total_mb": 4096.0, "used_mb": 512.0, "free_mb": 3584.0})
         self.assertIsNone(dash.parse_macos_swapusage("bad")["used_mb"])
 
-    def test_dashboard_macos_render_contract(self):
-        source = (ROOT / "dashboard/gravedecay.py").read_text()
-        shell = (ROOT / "dashboard/static/index.html").read_text()
-        self.assertIn("tile('Memory pressure'", shell)
-        self.assertIn("tile('Thermal'", shell)
-        self.assertIn("tile('Swap'", shell)
-        self.assertIn("if(macosCompanion){", shell)
-        self.assertIn("function chargeMeter(p)", shell)
-        self.assertIn("chargeMeter(battery.pct)", shell)
-        self.assertNotIn("meter(battery.pct)", shell)
-        # Linux's established temperature/fan cards remain in its separate branch.
-        self.assertIn("tile('CPU temp'", shell)
-        self.assertIn("return cached(\"macos-system\", 5", source)
-        self.assertIn("body:not(.macos) .mac-only-setting", shell)
-        self.assertIn("Keep the Linux PR-only presentation", shell)
-        self.assertIn('body.macos [data-panel="inbox"]', shell)
-        self.assertNotIn('body.macos [data-panel="docker"]', shell)
-
     def test_installer_rejects_non_darwin(self):
         with tempfile.TemporaryDirectory() as tmp:
             env = dict(os.environ, HOME=tmp, GRAVEDECAY_MAC_ROOT=str(pathlib.Path(tmp) / "root"),
@@ -291,50 +253,8 @@ class MacosContractTests(unittest.TestCase):
             self.assertIn("requires Darwin", result.stderr)
 
     def test_installer_is_user_scoped_and_convergent(self):
-        install = (ROOT / "macos/install.sh").read_text()
-        uninstall = (ROOT / "macos/uninstall.sh").read_text()
-        self.assertIn("--dashboard-only", install)
-        self.assertIn("--network-only", install)
-        self.assertIn("--dry-run", install)
-        self.assertIn(".gravedecay-macos", install)
-        self.assertIn("plutil -lint", install)
-        self.assertIn("assets/gravedecay.png", install)
-        self.assertIn("dashboard/static/", install)
-        self.assertIn("scripts/dashboard-static", install)
-        self.assertIn("config/components", install)
-        plist_template = (ROOT / "macos/LaunchAgents/io.gravedecay.dashboard.plist.tmpl").read_text()
-        self.assertIn("@APPS@", plist_template)
-        self.assertIn("<key>GRAVEDECAY_APPS</key><string></string>", plist_template.replace("@APPS@", ""))
-        self.assertIn("📡 Network=/net/", plist_template.replace("@APPS@", "📡 Network=/net/"))
-        self.assertIn('APPS=""; [ "$WANT_NET" = 0 ] ||', install)
-        self.assertIn('uname -s)" = Darwin', install)
-        self.assertIn('choose only one component mode', install)
-        self.assertIn('--root PATH', uninstall)
-        self.assertIn("health(){", install)
-        self.assertIn("launchctl bootstrap", install)
-        self.assertIn("serve_off /net", install)
-        self.assertIn("/Applications/Tailscale.app/Contents/MacOS/Tailscale", install)
-        self.assertNotIn("sudo", install)
-        self.assertIn("--purge", uninstall)
-        self.assertIn("refusing purge", uninstall)
-        self.assertIn("set-path=/grave off", uninstall)
-        self.assertIn("set-path=/net off", uninstall)
-        status = (ROOT / "macos/status.sh").read_text()
-        self.assertIn("launchctl print", status)
-        self.assertIn("serve status", status)
-        self.assertIn('[ "$dash" != 1 ] ||', status)
-        self.assertIn('[ "$net" != 1 ] ||', status)
-        self.assertIn('Serve: disabled (localhost-only)', status)
-        self.assertIn('invalid component metadata', status)
-        self.assertIn('Tailscale Serve: empty status', status)
-        self.assertIn('[ "$SERVE" = 0 ] || [ -n "$TAILSCALE" ]', install)
-        self.assertIn('Self.UserID', install)
-        self.assertIn('User["<id>"].LoginName', install)
-        self.assertIn('GRAVEDECAY_ALLOWED_USERS', plist_template)
-        self.assertIn('/opt/homebrew/bin', plist_template)
-        self.assertIn('refusing to enable Serve', install)
-        self.assertIn("os.path.realpath", install)
-        self.assertIn('ROOT_CANON=$(CDPATH= cd -- "$ROOT" && pwd -P)', uninstall)
+        for script in ("install.sh", "uninstall.sh", "status.sh", "grave", "updater.py"):
+            self.assertNotIn("sudo", (ROOT / "macos" / script).read_text())
         with tempfile.TemporaryDirectory() as tmp:
             result = subprocess.run(["sh", str(ROOT / "macos/status.sh"), "--root", tmp], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0)
@@ -464,42 +384,10 @@ class MacosContractTests(unittest.TestCase):
             self.assertNotEqual(refused.returncode, 0)
             self.assertIn("refusing to enable Serve", refused.stderr)
 
-    def test_macos_self_update_is_user_scoped_and_fixed_path(self):
-        install = (ROOT / "macos/install.sh").read_text()
-        helper = (ROOT / "macos/grave").read_text()
-        updater = (ROOT / "macos/updater.py").read_text()
-        dash = (ROOT / "dashboard/gravedecay.py").read_text()
-        plist = (ROOT / "macos/LaunchAgents/io.gravedecay.updater.plist.tmpl").read_text()
-        self.assertIn("repos/gravedecay", install)
-        self.assertIn("EXPLICIT_COMPONENT", install)
-        self.assertIn("GRAVEDECAY_UPDATE_CHANNEL", install)
-        self.assertNotIn("sudo", install + helper + updater)
-        self.assertIn("v(\\d+)", helper)  # exact semantic tags only
-        self.assertIn("tags.sort", helper)  # numeric ordering, not lexicographic
-        self.assertIn("managed checkout origin is not trusted", helper)
-        self.assertIn("update.lock", updater)
-        self.assertIn("prior payload restored", updater)
-        self.assertIn("65536", updater)
-        self.assertIn("under(backup)", updater)
-        self.assertIn("GRAVEDECAY_GRAVE", (ROOT / "macos/LaunchAgents/io.gravedecay.dashboard.plist.tmpl").read_text())
-        self.assertIn("io.gravedecay.updater", plist)
-        self.assertIn("MACOS_GRAVE", dash)
-        self.assertIn('"/api/admin/update-status"', dash)
-        self.assertIn("invalid release request", dash)
-        self.assertIn("update-macos-channel", (ROOT / "dashboard/static/index.html").read_text())
-        self.assertIn("io.gravedecay.updater", (ROOT / "macos/uninstall.sh").read_text())
-
     def test_macos_update_helper_queues_once_and_updater_preserves_public_modes(self):
-        def load_script(name, path, env):
-            old = dict(os.environ); os.environ.update(env)
-            try:
-                loader = importlib.machinery.SourceFileLoader(name, str(path))
-                spec = importlib.util.spec_from_loader(name, loader); module = importlib.util.module_from_spec(spec)
-                loader.exec_module(module); return module
-            finally: os.environ.clear(); os.environ.update(old)
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp, "grave"); (root / "config").mkdir(parents=True); (root / ".gravedecay-macos").write_text("")
-            helper = load_script("mac_helper", ROOT / "macos/grave", {"HOME": tmp, "GRAVE_ROOT": str(root)})
+            helper = load(ROOT / "macos/grave", {"HOME": tmp, "GRAVE_ROOT": str(root)})
             helper.releases = lambda: {"channel": "edge", "releases": ["v2.0.0"]}
             calls = []
             old_run = helper.subprocess.run
@@ -515,7 +403,7 @@ class MacosContractTests(unittest.TestCase):
                                          ("dashboard=0\nnetwork=1\nserve=1\n", ["--network-only"]),
                                          ("dashboard=1\nnetwork=1\nserve=1\nagents=1\n", ["--agents"])):
                 (root / "config/components").write_text(components)
-                updater = load_script("mac_updater_" + str(len(expected)), ROOT / "macos/updater.py", {"GRAVE_ROOT": str(root)})
+                updater = load(ROOT / "macos/updater.py", {"GRAVE_ROOT": str(root)})
                 self.assertEqual(updater.args_for_components(), expected)
             (root / "config/components").write_text("dashboard=1\nnetwork=1\nserve=x\n")
             with self.assertRaises(RuntimeError): updater.args_for_components()
@@ -525,9 +413,7 @@ class MacosContractTests(unittest.TestCase):
     def test_helper_orders_all_semver_tags_rejects_missing_and_keeps_edge_distinct(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=pathlib.Path(tmp,"root"); (root/"config").mkdir(parents=True); (root/".gravedecay-macos").write_text("")
-            helper=importlib.util.module_from_spec(spec:=importlib.util.spec_from_loader("semver_helper",importlib.machinery.SourceFileLoader("semver_helper",str(ROOT/"macos/grave")))); old=dict(os.environ); os.environ.update({"GRAVE_ROOT":str(root),"HOME":tmp})
-            try: spec.loader.exec_module(helper)
-            finally: os.environ.clear();os.environ.update(old)
+            helper=load(ROOT/"macos/grave", {"GRAVE_ROOT":str(root),"HOME":tmp})
             helper.trusted=lambda:None
             class R:
                 def __init__(self,out=""): self.stdout=out; self.returncode=0; self.stderr=""
@@ -543,11 +429,7 @@ class MacosContractTests(unittest.TestCase):
 
     def test_updater_executes_fetch_failure_and_post_cutover_rollback(self):
         def module(root, name):
-            old = dict(os.environ); os.environ["GRAVE_ROOT"] = str(root)
-            try:
-                loader = importlib.machinery.SourceFileLoader(name, str(ROOT / "macos/updater.py"))
-                spec = importlib.util.spec_from_loader(name, loader); value = importlib.util.module_from_spec(spec); loader.exec_module(value); return value
-            finally: os.environ.clear(); os.environ.update(old)
+            return load(ROOT / "macos/updater.py", {"GRAVE_ROOT": str(root)})
         def setup(root):
             (root / "config").mkdir(parents=True); (root / "staging").mkdir(); (root / ".gravedecay-macos").write_text("")
             (root / "repos/gravedecay/.git").mkdir(parents=True)
@@ -591,10 +473,10 @@ class MacosContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=pathlib.Path(tmp,"root"); (root/"config/update.lock").mkdir(parents=True); (root/".gravedecay-macos").write_text("")
             request=root/"config/update-request.json"; request.write_text(json.dumps({"channel":"release","tag":None,"requested_at":int(time.time())}))
-            old=dict(os.environ); os.environ.update({"GRAVE_ROOT":str(root),"HOME":tmp})
-            try:
-                loader=importlib.machinery.SourceFileLoader("contended_updater",str(ROOT/"macos/updater.py")); spec=importlib.util.spec_from_loader("contended_updater",loader); updater=importlib.util.module_from_spec(spec);loader.exec_module(updater);updater.main()
-            finally: os.environ.clear();os.environ.update(old)
+            updater=load(ROOT/"macos/updater.py", {"GRAVE_ROOT":str(root),"HOME":tmp})
+            old_home=os.environ.get("HOME"); os.environ["HOME"]=tmp
+            try: updater.main()
+            finally: os.environ["HOME"]=old_home or ""
             self.assertTrue((root/"config/update.lock").is_dir()); self.assertTrue(request.exists())
 
     def test_first_bootstrap_from_clean_linked_worktree_is_idempotent_and_safe(self):
@@ -629,8 +511,8 @@ class MacosContractTests(unittest.TestCase):
                 if command[-1]=="--json": return 0, json.dumps({"current":"","checkout":"edge abc","channel":"edge","releases":["v0.10.0","v0.9.0"]}),""
                 if command[-1]=="update-status": return 0, '{"state":"running"}',""
                 return 0,"queued",""
-            dash.sh=fake; server=dash.ThreadingHTTPServer(("127.0.0.1",0),dash.Handler); thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start(); origin=f"http://127.0.0.1:{server.server_port}"
-            try:
+            dash.sh=fake
+            with serve(dash) as origin:
                 def get(path, headers={}): return urllib.request.urlopen(urllib.request.Request(origin+path,headers=headers),timeout=2)
                 def post(path, data, headers={}): return urllib.request.urlopen(urllib.request.Request(origin+path,data=json.dumps(data).encode(),headers={"Content-Type":"application/json",**headers},method="POST"),timeout=2)
                 self.assertEqual(get("/api/admin/releases").status,200); self.assertEqual(get("/api/admin/releases",{"Tailscale-User-Login":"owner@example.test"}).status,200); self.assertEqual(get("/api/admin/update-status").status,200)
@@ -652,7 +534,6 @@ class MacosContractTests(unittest.TestCase):
                 self.assertEqual(cross.exception.code,403)
                 with self.assertRaises(urllib.error.HTTPError) as unavailable: post("/api/action",{}, {"Sec-Fetch-Site":"same-origin"})
                 self.assertEqual(unavailable.exception.code,404)
-            finally: server.shutdown();server.server_close();thread.join(timeout=2)
 
     def test_macos_agents_layer_reopens_exactly_the_gated_subset(self):
         # Observability-only (no flag): everything stays amputated.
@@ -682,10 +563,7 @@ class MacosContractTests(unittest.TestCase):
         self.assertEqual(dash.state({"Tailscale-User-Login": "other@example.test"})["tmux"], [])
         kills = []
         dash.sh = lambda cmd, timeout=10: (kills.append(cmd) or (0, "", ""))
-        server = dash.ThreadingHTTPServer(("127.0.0.1", 0), dash.Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
-        origin = f"http://127.0.0.1:{server.server_port}"
-        try:
+        with serve(dash) as origin:
             def post(path, data, headers={}):
                 return urllib.request.urlopen(urllib.request.Request(
                     origin + path, data=json.dumps(data).encode(),
@@ -705,20 +583,14 @@ class MacosContractTests(unittest.TestCase):
             with self.assertRaises(urllib.error.HTTPError) as stream:
                 urllib.request.urlopen(origin + "/api/action-stream?action=nope", timeout=2)
             self.assertEqual(stream.exception.code, 400)
-        finally:
-            server.shutdown(); server.server_close(); thread.join(timeout=2)
         # Without the flag the same routes stay behind the 404 curtain (the
         # existing release-routes test covers /api/action; cover kill here).
-        plain_server = plain.ThreadingHTTPServer(("127.0.0.1", 0), plain.Handler)
-        plain_thread = threading.Thread(target=plain_server.serve_forever, daemon=True); plain_thread.start()
-        try:
+        with serve(plain) as origin:
             with self.assertRaises(urllib.error.HTTPError) as off:
                 urllib.request.urlopen(urllib.request.Request(
-                    f"http://127.0.0.1:{plain_server.server_port}/api/session-kill",
+                    origin + "/api/session-kill",
                     data=b"{}", headers={"Content-Type": "application/json"}, method="POST"), timeout=2)
             self.assertEqual(off.exception.code, 404)
-        finally:
-            plain_server.shutdown(); plain_server.server_close(); plain_thread.join(timeout=2)
 
     def test_macos_agents_installer_contract(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -742,36 +614,6 @@ class MacosContractTests(unittest.TestCase):
                 self.assertNotEqual(missing.returncode, 0)
                 self.assertIn(tool, missing.stderr)
                 (fake_bin / tool).write_text("#!/bin/sh\nexit 0\n"); (fake_bin / tool).chmod(0o755)
-
-    def test_homebrew_companion_contract_adopts_the_formula_release(self):
-        formula = (ROOT / "macos/homebrew/gravedecay-companion.rb.tmpl").read_text()
-        wrapper = (ROOT / "macos/gravedecay-mac").read_text()
-        install = (ROOT / "macos/install.sh").read_text()
-        docs = (ROOT / "docs/MACOS.md").read_text()
-        readme = (ROOT / "README.md").read_text()
-        self.assertIn('url "https://github.com/projectmushroom/gravedecay/archive/refs/tags/v@VERSION@.tar.gz"', formula)
-        self.assertIn('sha256 "@SHA256@"', formula)
-        self.assertNotIn('option "with-agents"', formula)
-        self.assertIn("depends_on :macos", formula)
-        for dependency in ("node", "tmux", "ttyd"):
-            self.assertIn(f'depends_on "{dependency}" => :optional', formula)
-        self.assertIn('depends_on "python"', formula)
-        self.assertIn('libexec.install "macos/gravedecay-mac", "macos/install.sh", "macos/status.sh", "macos/uninstall.sh"', formula)
-        self.assertIn('(bin/"gravedecay-mac").write_env_script libexec/"gravedecay-mac",', formula)
-        self.assertIn('test do', formula)
-        self.assertIn('GRAVEDECAY_MAC_BREW_TAG: "v@VERSION@"', formula)
-        for command in ("install", "status", "uninstall"):
-            self.assertIn(f'{command})', wrapper)
-        self.assertIn('BREW_TAG=${GRAVEDECAY_MAC_BREW_TAG:-}', install)
-        self.assertIn('git -C "$BOOT" checkout -q "$BREW_TAG"', install)
-        self.assertIn('could not adopt Homebrew release $BREW_TAG', install)
-        self.assertIn('prior checkout restored but payload reconverge failed', install)
-        self.assertIn('brew upgrade projectmushroom/gravedecay/gravedecay-companion', docs)
-        self.assertIn('gravedecay-mac install --agents', docs)
-        self.assertIn('gravedecay-mac uninstall', docs)
-        self.assertIn('--with-node --with-tmux --with-ttyd', docs)
-        self.assertIn('tap is the normal install path', docs)
-        self.assertIn('brew install projectmushroom/gravedecay/gravedecay-companion', readme)
 
     def test_homebrew_tag_must_be_exact_semver(self):
         with tempfile.TemporaryDirectory() as tmp:

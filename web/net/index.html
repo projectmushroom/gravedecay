@@ -53,8 +53,6 @@ h1{font-size:17px;font-weight:700;color:var(--ink);text-shadow:var(--glow);white
 /* topology strip — stat tiles on the card grid's tracks */
 #topo{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));
   margin-bottom:18px;font-size:13px}
-.cell{position:relative;min-width:0}
-.cell>.node{height:100%}
 .node{background:var(--surface);border:1px solid var(--ring);padding:9px 12px;min-width:0;overflow:hidden}
 .node .t{color:var(--muted);font-size:11px;letter-spacing:.07em;text-transform:uppercase}
 .node .v{margin-top:3px;color:var(--ink);font-weight:700;
@@ -131,7 +129,7 @@ footer{margin-top:22px;color:var(--muted);font-size:11px;text-align:center}
 <script>
 "use strict";
 const css = k => getComputedStyle(document.documentElement).getPropertyValue(k).trim();
-const RX = css("--rx"), TX = css("--tx"), GRID = css("--grid"),
+const RX = css("--rx"), TX = css("--tx"), GRID = css("--grid"), BASELINE = css("--baseline"),
       INK2 = css("--ink-2"), SURFACE = css("--surface");
 const WINDOW = 180;
 
@@ -218,7 +216,7 @@ function drawCard(name, c) {
   // recessive grid: mid + baseline
   ctx.strokeStyle = GRID; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(0, h / 2 + .5); ctx.lineTo(w, h / 2 + .5); ctx.stroke();
-  ctx.strokeStyle = css("--baseline");
+  ctx.strokeStyle = BASELINE;
   ctx.beginPath(); ctx.moveTo(0, h - .5); ctx.lineTo(w, h - .5); ctx.stroke();
 
   const x = i => (i / (n - 1)) * w;
@@ -296,23 +294,20 @@ function renderTopo(s) {
   (s.clients || []).forEach(c => (clientsBy[c.iface] = clientsBy[c.iface] || []).push(c));
 
   let html = `
-    <div class="cell">
-      <div class="node"><div class="t">wan</div><div class="v">${up.gw || "?"}</div>
-        <div class="r">${up.ok ? (up.rtt != null ? up.rtt.toFixed(1) + " ms" : "ok") : "unreachable"}</div></div></div>
-    <div class="cell">
-      <div class="node"><div class="t">${up.dev || "uplink"}</div>
-        <div class="v">${upIf.speed ? (upIf.speed >= 1000 ? upIf.speed / 1000 + " GbE" : upIf.speed + " MbE") : "link"}</div>
-        <div class="r">↓${fmt2(upIf.rx_bps || 0)} ↑${fmt2(upIf.tx_bps || 0)}</div></div></div>
-    <div class="cell">
-      <div class="node host"><div class="t">host</div><div class="v" id="topohost">${s.host || "grave"}</div>
-        <div class="r">${(s.thunderbolt || []).map(d => d.device).join(" · ") || ""}</div></div></div>`;
+    <div class="node"><div class="t">wan</div><div class="v">${up.gw || "?"}</div>
+      <div class="r">${up.ok ? (up.rtt != null ? up.rtt.toFixed(1) + " ms" : "ok") : "unreachable"}</div></div>
+    <div class="node"><div class="t">${up.dev || "uplink"}</div>
+      <div class="v">${upIf.speed ? (upIf.speed >= 1000 ? upIf.speed / 1000 + " GbE" : upIf.speed + " MbE") : "link"}</div>
+      <div class="r">↓${fmt2(upIf.rx_bps || 0)} ↑${fmt2(upIf.tx_bps || 0)}</div></div>
+    <div class="node host"><div class="t">host</div><div class="v">${s.host || "grave"}</div>
+      <div class="r">${(s.thunderbolt || []).map(d => d.device).join(" · ") || ""}</div></div>`;
   for (const [name, i] of shares) {
     const cl = (clientsBy[name] || []).map(c => c.host || c.ip).join(", ") || "no lease";
-    html += `<div class="cell"><div class="node"><div class="t">${name}</div><div class="v">${cl}</div>
-      <div class="r">↓${fmt2(i.tx_bps)} ↑${fmt2(i.rx_bps)}</div></div></div>`;
+    html += `<div class="node"><div class="t">${name}</div><div class="v">${cl}</div>
+      <div class="r">↓${fmt2(i.tx_bps)} ↑${fmt2(i.rx_bps)}</div></div>`;
   }
   if (s.tailscale)
-    html += `<div class="cell"><div class="node"><div class="t">tailnet</div><div class="v">${ts.online}/${ts.total} peers</div></div></div>`;
+    html += `<div class="node"><div class="t">tailnet</div><div class="v">${ts.online}/${ts.total} peers</div></div>`;
   document.getElementById("topo").innerHTML = html;
 }
 

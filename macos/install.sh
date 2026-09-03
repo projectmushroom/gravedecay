@@ -40,7 +40,8 @@ if [ -f "$ROOT/config/components" ]; then
   [ "$EXPLICIT_KEEPAWAKE" = 1 ] || [ -z "$OLD_KEEP" ] || KEEPAWAKE=$OLD_KEEP
 fi
 case "$WANT_DASH:$WANT_NET:$SERVE" in 1:1:[01]|1:0:[01]|0:1:[01]) ;; *) echo "invalid component metadata" >&2; exit 2;; esac
-source_install(){ clear_tag=${1:-0}; set -- --root "$ROOT"; [ "$WANT_DASH" = 1 ] && [ "$WANT_NET" = 0 ] && set -- "$@" --dashboard-only; [ "$WANT_NET" = 1 ] && [ "$WANT_DASH" = 0 ] && set -- "$@" --network-only; [ "$SERVE" = 0 ] && set -- "$@" --no-serve; [ "$KEEPAWAKE" = 0 ] && set -- "$@" --allow-sleep; [ "$WANT_AGENTS" = 0 ] || set -- "$@" --agents; if [ "$clear_tag" = 0 ]; then "$SOURCE/macos/install.sh" "$@"; else GRAVEDECAY_MAC_BREW_TAG= "$SOURCE/macos/install.sh" "$@"; fi; }
+run_install(){ set -- "$@" --root "$ROOT"; [ "$WANT_DASH" = 1 ] && [ "$WANT_NET" = 0 ] && set -- "$@" --dashboard-only; [ "$WANT_NET" = 1 ] && [ "$WANT_DASH" = 0 ] && set -- "$@" --network-only; [ "$SERVE" = 0 ] && set -- "$@" --no-serve; [ "$KEEPAWAKE" = 0 ] && set -- "$@" --allow-sleep; [ "$WANT_AGENTS" = 0 ] || set -- "$@" --agents; "$SOURCE/macos/install.sh" "$@"; }
+source_install(){ if [ "${1:-0}" = 0 ]; then run_install; else GRAVEDECAY_MAC_BREW_TAG= run_install; fi; }
 if [ "$NO_BOOTSTRAP" = 0 ] && [ -n "$BREW_TAG" ] && [ -d "$SOURCE/.git" ] && [ "$DRY" = 0 ]; then
   [ "$(git -C "$SOURCE" remote get-url origin 2>/dev/null || true)" = "$ORIGIN" ] && [ -z "$(git -C "$SOURCE" status --porcelain)" ] || { echo "managed source is untrusted or dirty" >&2; exit 1; }
   [ "$(git -C "$SOURCE" describe --tags --exact-match HEAD 2>/dev/null || true)" = "$BREW_TAG" ] || {
@@ -64,8 +65,7 @@ if [ "$NO_BOOTSTRAP" = 0 ] && [ ! -d "$SOURCE/.git" ] && [ "$DRY" = 0 ]; then
     [ -z "$BOOT_TAG" ] || git -C "$BOOT" checkout -q "$BOOT_TAG"
   fi
   mv "$BOOT" "$SOURCE"
-  set -- --root "$ROOT" --no-bootstrap; [ "$WANT_DASH" = 1 ] && [ "$WANT_NET" = 0 ] && set -- "$@" --dashboard-only; [ "$WANT_NET" = 1 ] && [ "$WANT_DASH" = 0 ] && set -- "$@" --network-only; [ "$SERVE" = 0 ] && set -- "$@" --no-serve; [ "$KEEPAWAKE" = 0 ] && set -- "$@" --allow-sleep; [ "$WANT_AGENTS" = 0 ] || set -- "$@" --agents
-  exec "$SOURCE/macos/install.sh" "$@"
+  run_install --no-bootstrap; exit $?
 fi
 [ "$NO_BOOTSTRAP" = 1 ] || [ "$DRY" = 1 ] || [ ! -d "$SOURCE/.git" ] || {
   CURRENT=$(CDPATH= cd -- "$HERE/.." && pwd); [ "$CURRENT" = "$SOURCE" ] || {
@@ -157,6 +157,7 @@ APPS=""; [ "$WANT_NET" = 0 ] || APPS="📡 Network=/net/"
 # in front of the observability tiles, matching the Linux origin layout.
 [ "$WANT_AGENTS" = 0 ] || APPS="⌨️ T3 Code=/;🖥️ Terminal=/term/?arg=shell;🤖 Claude=/term/?arg=claude;🧠 Codex=/term/?arg=codex${APPS:+;$APPS}"
 render(){ template=$1; target=$2; if [ "$DRY" = 1 ]; then echo "dry-run: render $template -> $target"; else sed "s|@PYTHON@|$PYTHON|g;s|@ROOT@|$ROOT|g;s|@HOME@|$HOME_CANON|g;s|@APPS@|$APPS|g;s|@ALLOWED_USERS@|$ALLOWED_USERS|g;s|@AGENTS@|$WANT_AGENTS|g;s|@T3@|$T3_BIN|g;s|@TTYD@|$TTYD_BIN|g;s|@JAIL@|$JAIL|g;s|@AGENT_PATH@|$AGENT_PATH|g" "$template" > "$target"; plutil -lint "$target" >/dev/null; fi; }
+load(){ render "$HERE/LaunchAgents/$1.plist.tmpl" "$AGENTS/$1.plist"; run launchctl bootout "gui/$UID_NOW" "$AGENTS/$1.plist" 2>/dev/null || true; run launchctl bootstrap "gui/$UID_NOW" "$AGENTS/$1.plist"; }
 unload(){ label=$1; plist="$AGENTS/$label.plist"; [ -e "$plist" ] && run launchctl bootout "gui/$UID_NOW" "$plist" 2>/dev/null || true; run rm -f "$plist"; }
 serve_off(){ path=$1; [ -z "$TAILSCALE" ] || run "$TAILSCALE" serve --https=443 --set-path="$path" off; }
 [ "$DRY" = 1 ] || { run mkdir -p "$ROOT/scripts" "$ROOT/web/net" "$ROOT/logs" "$ROOT/config" "$ROOT/config/secrets" "$ROOT/repos" "$ROOT/staging" "$AGENTS"; run chmod 700 "$ROOT/config/secrets"; : > "$ROOT/.gravedecay-macos"; }
@@ -181,15 +182,11 @@ if [ "$WANT_DASH" = 1 ]; then
   run mkdir -p "$ROOT/scripts/dashboard-static"
   run cp "$HERE/../dashboard/static/"* "$ROOT/scripts/dashboard-static/"
   run cp "$HERE/../assets/gravedecay.png" "$ROOT/config/gravedecay.png"
-  render "$HERE/LaunchAgents/io.gravedecay.dashboard.plist.tmpl" "$AGENTS/io.gravedecay.dashboard.plist"
-  run launchctl bootout "gui/$UID_NOW" "$AGENTS/io.gravedecay.dashboard.plist" 2>/dev/null || true
-  run launchctl bootstrap "gui/$UID_NOW" "$AGENTS/io.gravedecay.dashboard.plist"
+  load io.gravedecay.dashboard
 else unload io.gravedecay.dashboard; serve_off /grave; fi
 if [ "$WANT_NET" = 1 ]; then
   run cp "$HERE/../dashboard/gravenet.py" "$ROOT/scripts/gravenet.py"; run cp "$HERE/../web/net/index.html" "$ROOT/web/net/index.html"
-  render "$HERE/LaunchAgents/io.gravedecay.network.plist.tmpl" "$AGENTS/io.gravedecay.network.plist"
-  run launchctl bootout "gui/$UID_NOW" "$AGENTS/io.gravedecay.network.plist" 2>/dev/null || true
-  run launchctl bootstrap "gui/$UID_NOW" "$AGENTS/io.gravedecay.network.plist"
+  load io.gravedecay.network
 else unload io.gravedecay.network; serve_off /net; fi
 if [ "$WANT_AGENTS" = 1 ]; then
   run mkdir -p "$ROOT/agents/t3code" "$ROOT/web/term" "$JAIL"
@@ -198,11 +195,7 @@ if [ "$WANT_AGENTS" = 1 ]; then
   # Same clipboard-capable ttyd frontend as the appliance (pure splice, no network).
   if [ "$DRY" = 1 ]; then echo "dry-run: build term frontend -> $ROOT/web/term/index.html"
   else "$PYTHON" "$HERE/../docker/portable/build-term.py" "$HERE/../web/term" "$ROOT/web/term/index.html"; fi
-  for label in io.gravedecay.t3 io.gravedecay.term; do
-    render "$HERE/LaunchAgents/$label.plist.tmpl" "$AGENTS/$label.plist"
-    run launchctl bootout "gui/$UID_NOW" "$AGENTS/$label.plist" 2>/dev/null || true
-    run launchctl bootstrap "gui/$UID_NOW" "$AGENTS/$label.plist"
-  done
+  load io.gravedecay.t3; load io.gravedecay.term
 elif [ "$OLD_AGENTS" = 1 ]; then
   # Converge-by-omission back to observability-only. Only tear down the Serve
   # mounts this installer created in agents mode — a '/' mount on a Mac that
@@ -216,22 +209,16 @@ elif [ "$OLD_AGENTS" = 1 ]; then
   fi
 fi
 if [ "$UPDATER" != 1 ]; then
-  render "$HERE/LaunchAgents/io.gravedecay.updater.plist.tmpl" "$AGENTS/io.gravedecay.updater.plist"
-  run launchctl bootout "gui/$UID_NOW" "$AGENTS/io.gravedecay.updater.plist" 2>/dev/null || true
-  run launchctl bootstrap "gui/$UID_NOW" "$AGENTS/io.gravedecay.updater.plist"
+  load io.gravedecay.updater
 fi
 # Serving Macs must not idle-sleep (the tailnet paths just go dark) — hold a
 # caffeinate assertion for as long as launchd runs. --allow-sleep opts out.
 if [ "$SERVE" = 1 ] && [ "$KEEPAWAKE" = 1 ]; then
-  render "$HERE/LaunchAgents/io.gravedecay.keepawake.plist.tmpl" "$AGENTS/io.gravedecay.keepawake.plist"
-  run launchctl bootout "gui/$UID_NOW" "$AGENTS/io.gravedecay.keepawake.plist" 2>/dev/null || true
-  run launchctl bootstrap "gui/$UID_NOW" "$AGENTS/io.gravedecay.keepawake.plist"
+  load io.gravedecay.keepawake
 else unload io.gravedecay.keepawake; fi
 # Periodic doctor-lite; a failing contract pages via `grave notify --event
 # doctor`, a silent no-op until an ntfy topic is configured.
-render "$HERE/LaunchAgents/io.gravedecay.doctor.plist.tmpl" "$AGENTS/io.gravedecay.doctor.plist"
-run launchctl bootout "gui/$UID_NOW" "$AGENTS/io.gravedecay.doctor.plist" 2>/dev/null || true
-run launchctl bootstrap "gui/$UID_NOW" "$AGENTS/io.gravedecay.doctor.plist"
+load io.gravedecay.doctor
 # Record the converged component set BEFORE the health gates: if a probe
 # below aborts, the metadata still says what is actually loaded, so doctor
 # enforces it, the updater restates it, and a rerun can converge it off —

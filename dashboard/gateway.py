@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Identity-aware gateway for Tailscale Serve."""
-import json, os, selectors, socket, socketserver, subprocess, threading, time
+import http, json, os, selectors, socket, socketserver, subprocess, threading, time
 from pathlib import Path
 
 ROOT=Path(os.environ.get("GRAVE_ROOT","/srv/dev"))
 REGISTRY=Path(os.environ.get("GRAVE_WORKSPACE_REGISTRY",ROOT/"config/workspaces.json"))
 HOST="127.0.0.1"; PORT=int(os.environ.get("GRAVE_GATEWAY_PORT","4710"))
 ADMIN_DASH_PORT=int(os.environ.get("GRAVE_ADMIN_DASH_PORT","4712"))
-TOKEN_FILE=Path(os.environ.get("GRAVE_GATEWAY_TOKEN_FILE",ROOT/"config/secrets/gateway-token"))
-ADMIN_TOKEN_FILE=Path(os.environ.get("GRAVE_ADMIN_TOKEN_FILE",ROOT/"config/secrets/admin-dashboard.env"))
-AUDIT=Path(os.environ.get("GRAVE_AUDIT_LOG",ROOT/"logs/audit.jsonl"))
+TOKEN_FILE=ROOT/"config/secrets/gateway-token"
+ADMIN_TOKEN_FILE=ROOT/"config/secrets/admin-dashboard.env"
+AUDIT=ROOT/"logs/audit.jsonl"
 MAX_HEADER=65536
 # Only the start of a body is buffered — enough to read the action out of a small
 # action POST; larger bodies (uploads) stream straight to the backend (see below).
@@ -38,26 +38,21 @@ def registry():
     if data.get("version") != 1: raise ValueError("unsupported registry")
     return data["workspaces"]
 
-def backend_token(w):
-    """Read the root-owned service environment instead of the owner-readable
-    registry.  Each backend accepts only its own token, injected below."""
-    env=ROOT/"config/workspace-services"/(w["slug"]+".env")
+def _token(path):
     try:
-        for line in env.read_text().splitlines():
+        for line in path.read_text().splitlines():
             if line.startswith("GRAVEDECAY_BACKEND_TOKEN="):
                 token=line.partition("=")[2].strip().strip('"')
                 if len(token) >= 32: return token
     except OSError: pass
     return ""
 
-def admin_token():
-    try:
-        for line in ADMIN_TOKEN_FILE.read_text().splitlines():
-            if line.startswith("GRAVEDECAY_BACKEND_TOKEN="):
-                token=line.partition("=")[2].strip().strip('"')
-                if len(token) >= 32: return token
-    except OSError: pass
-    return ""
+def backend_token(w):
+    """Read the root-owned service environment instead of the owner-readable
+    registry.  Each backend accepts only its own token, injected below."""
+    return _token(ROOT/"config/workspace-services"/(w["slug"]+".env"))
+
+def admin_token(): return _token(ADMIN_TOKEN_FILE)
 
 def resolve(headers):
     login=headers.get("tailscale-user-login","")
@@ -76,8 +71,8 @@ def resolve(headers):
     return w,"ok"
 
 def response(code,message):
-    body=(message+"\n").encode(); reason={400:"Bad Request",401:"Unauthorized",403:"Forbidden",502:"Bad Gateway"}.get(code,"Error")
-    return f"HTTP/1.1 {code} {reason}\r\nContent-Type: text/plain\r\nContent-Length: {len(body)}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n".encode()+body
+    body=(message+"\n").encode()
+    return f"HTTP/1.1 {code} {http.HTTPStatus(code).phrase}\r\nContent-Type: text/plain\r\nContent-Length: {len(body)}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n".encode()+body
 
 def read_head(sock):
     data=b""
@@ -152,9 +147,10 @@ class Handler(socketserver.BaseRequestHandler):
         if state != "ok":
             code=401 if state in ("unknown","malformed") else 403
             audit("access_denied",headers.get("tailscale-user-login"),None,state); self.request.sendall(response(code,state)); return
-        if admin_request(method,path,rest) and w["role"] != "admin":
+        admin=admin_request(method,path,rest)
+        if admin and w["role"] != "admin":
             audit("admin_denied",w["id"],w["slug"],"forbidden"); self.request.sendall(response(403,"administrator access required")); return
-        if admin_request(method,path,rest): audit("administrative_action",w["id"],w["slug"])
+        if admin: audit("administrative_action",w["id"],w["slug"])
         if action_of(path,rest)=="t3-pair": audit("pairing_created",w["id"],w["slug"])
         clean=path
         if path == "/grave": clean="/grave/"
@@ -165,7 +161,7 @@ class Handler(socketserver.BaseRequestHandler):
         # Appliance mutations execute in the legacy owner dashboard service,
         # whose Unix account alone has the scoped sudoers grant. Developers
         # are denied above; the admin workspace otherwise keeps private state.
-        owner_admin=kind=="dash" and admin_request(method,path,rest) and w["role"]=="admin"
+        owner_admin=kind=="dash" and admin
         port=ADMIN_DASH_PORT if owner_admin else w["ports"][kind]
         capability=admin_token() if owner_admin else backend_token(w)
         if not capability:

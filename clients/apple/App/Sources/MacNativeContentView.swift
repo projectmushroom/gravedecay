@@ -11,7 +11,6 @@ import GravedecayKit
 struct MacNativeContentView: View {
     @ObservedObject var graves: GraveMenuModel
     @ObservedObject var model: MacDashboardModel
-    @ObservedObject var host: MacNativeHost
     @Binding var selection: Section
 
     enum Section: Hashable { case graveyard, thisMac, work, network, terminal, settings }
@@ -36,7 +35,7 @@ struct MacNativeContentView: View {
                 case .work: WorkView(model: model)
                 case .network: NetworkView(model: model)
                 case .terminal: TerminalDestination(graves: graves)
-                case .settings: MacSettingsView(graves: graves, model: model, host: host)
+                case .settings: MacSettingsView(graves: graves, model: model)
                 }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }.background(GraveTheme.page)
@@ -46,56 +45,6 @@ struct MacNativeContentView: View {
         .frame(minWidth: 900, minHeight: 600).graveRoot().background(GraveTheme.page.ignoresSafeArea())
     }
     private var title: String { switch selection { case .graveyard: "GRAVEYARD // TAILNET"; case .thisMac: "THIS MAC // SYSTEM"; case .work: "THIS MAC // WORK"; case .network: "THIS MAC // NETWORK"; case .terminal: "TERMINAL // \(graves.selected?.candidate.name.uppercased() ?? "REMOTE")"; case .settings: "SETTINGS" } }
-}
-
-struct MacWelcomeView: View {
-    enum Choice { case connect, share }
-    let choose: (Choice) -> Void
-
-    var body: some View {
-        ZStack {
-            GraveTheme.page.ignoresSafeArea()
-            VStack(alignment: .leading, spacing: 24) {
-                HStack(spacing: 14) {
-                    GraveMark(color: GraveTheme.ink, size: 46)
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("GRAVEDECAY // TAILNET")
-                            .font(.system(size: 13, weight: .bold, design: .monospaced))
-                            .tracking(1.4)
-                        Text("NATIVE MACOS CLIENT")
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundStyle(GraveTheme.muted)
-                    }
-                }
-                Text("WHAT WILL THIS MAC DO FIRST?")
-                    .font(.system(size: 20, weight: .bold, design: .monospaced))
-                    .foregroundStyle(GraveTheme.ink)
-                HStack(alignment: .top, spacing: 14) {
-                    role("CONNECT TO GRAVES", "DISCOVER AND OPEN REMOTE GRAVES OVER TAILSCALE. THIS MAC WILL NOT HOST A SERVICE.", .connect)
-                    role("SHARE THIS MAC", "START THIS MAC'S OPT-IN LOOPBACK PUBLISHER. FINISH TAILSCALE PUBLICATION IN SETTINGS.", .share)
-                }
-                Text("YOU CAN DO BOTH LATER.")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundStyle(GraveTheme.amber)
-            }
-            .padding(34)
-            .frame(maxWidth: 800, alignment: .leading)
-        }
-        .frame(minWidth: 900, minHeight: 600)
-        .graveRoot()
-    }
-
-    private func role(_ title: String, _ detail: String, _ choice: Choice) -> some View {
-        Button { choose(choice) } label: {
-            VStack(alignment: .leading, spacing: 13) {
-                Text(title).font(.system(size: 13, weight: .bold, design: .monospaced)).foregroundStyle(GraveTheme.ink)
-                Text(detail).font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.muted).lineSpacing(3)
-                Text("[ SELECT ]").font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(GraveTheme.amber)
-            }
-            .padding(18).frame(maxWidth: .infinity, minHeight: 142, alignment: .leading)
-            .background(GraveTheme.surface).overlay(Rectangle().stroke(GraveTheme.ring))
-        }.buttonStyle(.plain)
-    }
 }
 
 private struct GraveTargetPicker: View {
@@ -199,22 +148,13 @@ private struct GraveyardView: View {
             if graves.graves.isEmpty { GravePanel("status") { TailscaleOnboardingView(model: graves) } }
             ForEach(graves.graves) { grave in
                 GravePanel(grave.candidate.name) { VStack(alignment: .leading, spacing: 7) {
-                    HStack { StatusSquare(good: grave.reachable); Image(systemName: icon(for: GravePresentation.condition(summary: grave.summary, reachable: grave.reachable))); Text(grave.candidate.name.uppercased()).fontWeight(.bold); if graves.selectedID == grave.id { Text("[ SELECTED ]").foregroundStyle(GraveTheme.amber) }; Spacer(); Text(grave.reachable ? "ONLINE" : "UNREACHABLE").foregroundStyle(grave.reachable ? GraveTheme.good : GraveTheme.muted) }.font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.ink)
+                    HStack { StatusSquare(good: grave.reachable); Image(systemName: GravePresentation.condition(summary: grave.summary, reachable: grave.reachable).icon); Text(grave.candidate.name.uppercased()).fontWeight(.bold); if graves.selectedID == grave.id { Text("[ SELECTED ]").foregroundStyle(GraveTheme.amber) }; Spacer(); Text(grave.reachable ? "ONLINE" : "UNREACHABLE").foregroundStyle(grave.reachable ? GraveTheme.good : GraveTheme.muted) }.font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.ink)
                     if let summary = grave.summary { Text("\(summary.node.platform.uppercased()) // CPU \(GravePresentation.percent(summary.resources.cpu_pct))").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.ink2) }
                     if let s = grave.summary { VStack(alignment: .leading, spacing: 5) { HStack { Text("MEM \(GravePresentation.percent(s.resources.memory_pct))"); Text("DISK \(GravePresentation.percent(s.resources.disk_pct))"); Spacer(); Text("UP \(GravePresentation.uptime(s.node.uptime_s))") }.foregroundStyle(GraveTheme.muted); HStack { Text("SESSIONS \(s.activity.sessions_live)"); Text("PROBLEMS \(s.problems)").foregroundStyle(s.problems > 0 ? GraveTheme.crit : GraveTheme.good) } }.font(.system(size: 9, design: .monospaced)) }
-                    HStack { CapabilityButton(title: "T3", host: grave.candidate.dns, path: grave.summary?.capabilities.t3); if grave.summary?.capabilities.terminal != nil { Button("TERMINAL") { graves.select(grave); selection = .terminal }.buttonStyle(GraveButton()) } }
+                    HStack { CapabilityButton(title: "T3", host: grave.candidate.dns, path: grave.summary?.t3); if grave.summary?.terminal != nil { Button("TERMINAL") { graves.select(grave); selection = .terminal }.buttonStyle(GraveButton()) } }
                 }}.contentShape(Rectangle()).onTapGesture { graves.select(grave); showingAll = false }
             }
         }.frame(maxWidth: 980).padding(24) }.background(GraveTheme.page)
-        }
-    }
-    private func icon(for condition: GravePresentation.Condition) -> String {
-        switch condition {
-        case .unreachable: return "wifi.slash"
-        case .warning: return "exclamationmark.triangle.fill"
-        case .active: return "bolt.circle.fill"
-        case .frozen: return "snowflake"
-        case .healthy: return "checkmark.circle.fill"
         }
     }
 }
@@ -242,7 +182,7 @@ private struct GraveDetailView: View {
                     HStack { Text("UP \(GravePresentation.uptime(summary.node.uptime_s))"); Spacer(); Text("\(summary.problems) PROBLEMS").foregroundStyle(summary.problems > 0 ? GraveTheme.crit : GraveTheme.good) }
                     HStack { Text("SESSIONS \(summary.activity.sessions_live) LIVE"); Text("\(summary.activity.sessions_frozen) FROZEN"); Spacer(); Text("SERVICES \(summary.health.services_failed) FAILED"); Text("CONTAINERS \(summary.health.containers_problem) PROBLEM") }
                 }.font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.ink2) }
-                HStack { CapabilityButton(title: "T3", host: grave.candidate.dns, path: summary.capabilities.t3); if summary.capabilities.terminal != nil { Button("TERMINAL") { graves.select(grave); selection = .terminal }.buttonStyle(GraveButton()) } }
+                HStack { CapabilityButton(title: "T3", host: grave.candidate.dns, path: summary.t3); if summary.terminal != nil { Button("TERMINAL") { graves.select(grave); selection = .terminal }.buttonStyle(GraveButton()) } }
             }
         }.frame(maxWidth: 980).padding(24) }.background(GraveTheme.page)
     }
@@ -290,9 +230,9 @@ private struct TerminalDestination: View {
     @ObservedObject var graves: GraveMenuModel
     @StateObject private var status = TerminalStatus()
     var body: some View {
-        if let grave = graves.selected, let box = BoxConfig(host: grave.candidate.dns, terminalPath: grave.summary?.capabilities.terminal) { VStack(spacing: 0) {
+        if let grave = graves.selected, grave.summary?.terminal != nil, let box = BoxConfig(input: grave.candidate.dns) { VStack(spacing: 0) {
             HStack { StatusSquare(good: status.state == .connected); VStack(alignment: .leading, spacing: 2) { Text("\(status.state.rawValue) // \(grave.candidate.name.uppercased())"); if status.lastCause != "NONE" && status.lastCause != "REMOTE CLOSED" { Text(status.lastCause).foregroundStyle(GraveTheme.crit) } }; Spacer(); Button("RETRY") { status.retry() }.buttonStyle(GraveButton()); Button("COPY DIAGNOSTICS") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(status.diagnostics, forType: .string) }.buttonStyle(GraveButton()) }.font(.system(size: 10, design: .monospaced)).padding(10).background(GraveTheme.surface)
-            TerminalPane(box: box, urlSession: .shared, status: status).id("\(grave.id)-\(status.retryID)").padding(1).background(GraveTheme.ring)
+            TerminalPane(box: box, status: status).id("\(grave.id)-\(status.retryID)").padding(1).background(GraveTheme.ring)
         }.padding(20).background(GraveTheme.page) }
         else if graves.selected != nil { ThemedEmpty(title: "TERMINAL NOT PUBLISHED BY THIS GRAVE", detail: "SELECT A GRAVE THAT ADVERTISES A SAFE TERMINAL LINK") .padding(24).frame(maxWidth: .infinity, maxHeight: .infinity).background(GraveTheme.page) }
         else { ThemedEmpty(title: "CHOOSE A GRAVE", detail: "SELECT A GRAVE IN GRAVEYARD AFTER TAILSCALE DISCOVERY") .padding(24).frame(maxWidth: .infinity, maxHeight: .infinity).background(GraveTheme.page) }
@@ -302,16 +242,12 @@ private struct TerminalDestination: View {
 struct MacSettingsView: View {
     @ObservedObject var graves: GraveMenuModel
     @ObservedObject var model: MacDashboardModel
-    @ObservedObject var host: MacNativeHost
-    @AppStorage("macWelcomeCompleted") private var macWelcomeCompleted = false
     @State private var root = ""; @State private var linearKey = ""
     var body: some View {
         ScrollView { VStack(spacing: 20) {
-            GravePanel("first action") { HStack { Text("CONNECT AND SHARE CAN BOTH BE USED.").foregroundStyle(GraveTheme.muted); Spacer(); Button("CHOOSE ROLE AGAIN") { macWelcomeCompleted = false }.buttonStyle(GraveButton()) } }
             GravePanel("tailnet access") { TailscaleOnboardingView(model: graves) }
             GravePanel("work root") { VStack(alignment: .leading, spacing: 9) { Text("LOCAL DIRECTORY SCANNED FOR GIT REPOSITORIES").foregroundStyle(GraveTheme.muted); TextField("Repository folder", text: $root).textFieldStyle(.plain).padding(8).background(GraveTheme.inset).overlay(Rectangle().stroke(GraveTheme.hairline)); Button("SAVE ROOT") { model.setWorkRoot(root) }.buttonStyle(GraveButton()); if let status = model.workRootStatus { Text(status).foregroundStyle(GraveTheme.crit) } } }
             GravePanel("linear // read-only") { VStack(alignment: .leading, spacing: 9) { Text("THE TOKEN STAYS IN THIS MAC'S KEYCHAIN").foregroundStyle(GraveTheme.muted); SecureField("lin_api_…", text: $linearKey).textFieldStyle(.plain).padding(8).background(GraveTheme.inset).overlay(Rectangle().stroke(GraveTheme.hairline)); HStack { Button("SAVE KEY") { model.saveLinearKey(linearKey); linearKey = "" }; Button("REMOVE KEY") { model.removeLinearKey() } }.buttonStyle(GraveButton()); Text(model.keychainStatus).foregroundStyle(GraveTheme.muted) } }
-            GravePanel("local host") { VStack(alignment: .leading, spacing: 9) { Text(host.detail).foregroundStyle(host.state == .hosted ? GraveTheme.good : GraveTheme.muted); HStack { Button(host.state == .existingCompanion ? "RETRY LOCAL HOST" : "START LOCAL HOST") { host.enable() }.buttonStyle(GraveButton()).disabled(host.state == .hosted || host.state == .starting); Button(host.state == .hosted ? "STOP LOCAL HOST" : "CANCEL HOST REQUEST") { host.disable() }.buttonStyle(GraveButton()).disabled(host.state != .hosted && !host.hostRequested); if host.state == .hosted { Button("COPY TAILSCALE PUBLISH COMMAND") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(host.manualServeCommand, forType: .string) }.buttonStyle(GraveButton()) } }; if host.state == .existingCompanion { Text("NATIVE HOSTING WAS NOT STARTED: LEGACY COMPANION OWNS 4712.").foregroundStyle(GraveTheme.crit) }; Text("DOES NOT CHANGE TAILSCALE. HOSTING STOPS WHEN THIS APP QUITS; ENABLE LAUNCH AT LOGIN TO KEEP THE APP AVAILABLE.").foregroundStyle(GraveTheme.muted) } }
             GravePanel("startup") { Toggle("LAUNCH AT LOGIN", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) })).toggleStyle(.switch).tint(GraveTheme.good); if let error = model.launchAtLoginError { Text(error).foregroundStyle(GraveTheme.crit) } }
             GravePanel("about") { Text("NATIVE REMOTE DASHBOARDS // T3 OPENS IN YOUR BROWSER").foregroundStyle(GraveTheme.muted) }
         }.font(.system(size: 10, design: .monospaced)).frame(maxWidth: 760).padding(24) }.background(GraveTheme.page).onAppear { root = model.workRoot }
@@ -355,13 +291,12 @@ final class MacDashboardModel: ObservableObject {
     @Published private(set) var launchAtLoginError: String?
     private let defaults = UserDefaults.standard
     private var refreshTask: Task<Void, Never>?
-    private weak var nativeHost: MacNativeHost?
     init() { workRoot = UserDefaults.standard.string(forKey: "macWorkRoot") ?? (FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Sites").path) }
     func refresh() {
         refreshTask?.cancel()
         let root = workRoot, key = Keychain.value(account: "linear-api-key"), deadline = Date().addingTimeInterval(8)
         refreshTask = Task.detached(priority: .utility) { [weak self] in
-            guard let result = MacCollector.collect(root: root, linearKey: key, deadline: deadline), !Task.isCancelled else { return }
+            guard let result = await MacCollector.collect(root: root, linearKey: key, deadline: deadline), !Task.isCancelled else { return }
             await MainActor.run { guard !Task.isCancelled else { return }; self?.apply(result) }
         }
     }
@@ -372,17 +307,16 @@ final class MacDashboardModel: ObservableObject {
         do { if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }; launchAtLogin = SMAppService.mainApp.status != .notRegistered; launchAtLoginError = SMAppService.mainApp.status == .requiresApproval ? "Launch at Login needs approval in System Settings." : nil }
         catch { launchAtLogin = SMAppService.mainApp.status != .notRegistered; launchAtLoginError = "Launch at Login: \(error.localizedDescription)" }
     }
-    func setNativeHost(_ host: MacNativeHost) { nativeHost = host; host.update(snapshot: snapshot) }
-    private func apply(_ result: CollectionResult) { snapshot = result.snapshot; nativeHost?.update(snapshot: result.snapshot); repositories = result.repositories; tailnetStatus = result.tailnetStatus; tailnetName = result.tailnetName; githubStatus = result.githubStatus; linearStatus = result.linearStatus; linearIssues = result.linearIssues; networkInterfaces = result.networkInterfaces }
+    private func apply(_ result: CollectionResult) { snapshot = result.snapshot; repositories = result.repositories; tailnetStatus = result.tailnetStatus; tailnetName = result.tailnetName; githubStatus = result.githubStatus; linearStatus = result.linearStatus; linearIssues = result.linearIssues; networkInterfaces = result.networkInterfaces }
 }
 
-private struct CollectionResult { let snapshot: MacSnapshot; let repositories: [MacRepository]; let tailnetStatus, tailnetName, githubStatus, linearStatus: String; let linearIssues: [LinearIssue]; let networkInterfaces: [NetworkInterface] }
-private enum MacCollector {
+struct CollectionResult { let snapshot: MacSnapshot; let repositories: [MacRepository]; let tailnetStatus, tailnetName, githubStatus, linearStatus: String; let linearIssues: [LinearIssue]; let networkInterfaces: [NetworkInterface] }
+enum MacCollector {
     @TaskLocal static var activeDeadline: Date?
-    static func collect(root: String, linearKey: String?, deadline: Date) -> CollectionResult? {
-        Self.$activeDeadline.withValue(deadline) { collectBounded(root: root, linearKey: linearKey, deadline: deadline) }
+    static func collect(root: String, linearKey: String?, deadline: Date) async -> CollectionResult? {
+        await Self.$activeDeadline.withValue(deadline) { await collectBounded(root: root, linearKey: linearKey, deadline: deadline) }
     }
-    private static func collectBounded(root: String, linearKey: String?, deadline: Date) -> CollectionResult? {
+    private static func collectBounded(root: String, linearKey: String?, deadline: Date) async -> CollectionResult? {
         guard !Task.isCancelled, Date() < deadline else { return nil }
         let os = ProcessInfo.processInfo.operatingSystemVersionString.replacingOccurrences(of: "Version ", with: "")
         let disk = (try? URL(fileURLWithPath: NSHomeDirectory()).resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeTotalCapacityKey]))
@@ -426,7 +360,7 @@ private enum MacCollector {
         let github = gh == nil ? "GitHub CLI not installed or not signed in" : "GitHub CLI authenticated (read-only PR/CI status)"
         let repos = repositories(at: root, ghAvailable: gh != nil, deadline: deadline)
         guard !Task.isCancelled, Date() < deadline else { return nil }
-        let linear = linearIssues(key: linearKey)
+        let linear = await linearIssues(key: linearKey)
         let network = NativeParsers.interfaceBytes(command("/usr/sbin/netstat", ["-ibn"]) ?? "").prefix(4).map { NetworkInterface(name: $0.0, received: $0.1, sent: $0.2) }
         return CollectionResult(snapshot: snapshot, repositories: repos, tailnetStatus: backend, tailnetName: name, githubStatus: github, linearStatus: linear.0, linearIssues: linear.1, networkInterfaces: Array(network))
     }
@@ -443,7 +377,7 @@ private enum MacCollector {
         return found.sorted().enumerated().compactMap { index, path in
             let branch = command("/usr/bin/git", ["-C", path, "branch", "--show-current"]) ?? "detached"
             let status = command("/usr/bin/git", ["-C", path, "status", "--porcelain"]) ?? ""
-            let dirty = !status.isEmpty; let detail = dirty ? "\(WorkStatus.changedFileCount(status)) changed file(s)" : "Clean"
+            let dirty = !status.isEmpty; let detail = dirty ? "\(status.split(whereSeparator: \.isNewline).count) changed file(s)" : "Clean"
             let remote = command("/usr/bin/git", ["-C", path, "remote", "get-url", "origin"])
             let enriched = ghAvailable && index < 4 && !Task.isCancelled && Date() < deadline
             let github = GitHubRemote.repository(remote).map { _ in "GitHub remote" }
@@ -465,19 +399,18 @@ private enum MacCollector {
         let output = command("/opt/homebrew/bin/gh", args) ?? command("/usr/local/bin/gh", args)
         return output.flatMap { NativeParsers.githubRun(Data($0.utf8)) }
     }
-    static func linearIssues(key: String?) -> (String, [LinearIssue]) {
+    static func linearIssues(key: String?) async -> (String, [LinearIssue]) {
         guard let key, !key.isEmpty else { return ("Linear not configured — add a key in Settings", []) }
         // This first native release preserves the read-only contract; the query stays bounded.
         let body = #"{"query":"query { viewer { assignedIssues(first: 10) { nodes { identifier title url } } } }"}"#
         guard let url = URL(string: "https://api.linear.app/graphql"), var request = Optional(URLRequest(url: url)) else { return ("Linear unavailable", []) }
         request.httpMethod = "POST"; request.httpBody = Data(body.utf8); request.setValue(key, forHTTPHeaderField: "Authorization"); request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.timeoutInterval = 3
-        guard let responseData = BoundedHTTP.post(request, deadline: activeDeadline ?? Date()),
+        guard case let (responseData, response)? = try? await URLSession.shared.data(for: request), (response as? HTTPURLResponse)?.statusCode == 200, responseData.count <= 65_536,
               let root = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any],
               let nodes = (((root["data"] as? [String: Any])?["viewer"] as? [String: Any])?["assignedIssues"] as? [String: Any])?["nodes"] as? [[String: Any]] else { return ("Linear configured, but unavailable", []) }
         return ("Linear assigned to me (read-only)", nodes.compactMap { guard let id = $0["identifier"] as? String, let title = $0["title"] as? String, let raw = $0["url"] as? String, let url = URL(string: raw), url.scheme == "https", url.host == "linear.app" else { return nil }; return LinearIssue(identifier: id, title: title, url: url) })
     }
-    static func command(_ executable: String, _ arguments: [String], environment: [String: String] = [:]) -> String? {
-        let deadline = activeDeadline ?? Date().addingTimeInterval(2)
+    static func command(_ executable: String, _ arguments: [String], environment: [String: String] = [:], deadline: Date = MacCollector.activeDeadline ?? Date().addingTimeInterval(2)) -> String? {
         guard !Task.isCancelled, Date() < deadline else { return nil }
         guard FileManager.default.isExecutableFile(atPath: executable) else { return nil }
         let process = Process(); process.executableURL = URL(fileURLWithPath: executable); process.arguments = arguments; process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
@@ -487,7 +420,7 @@ private enum MacCollector {
         let eof = DispatchSemaphore(value: 0)
         pipe.fileHandleForReading.readabilityHandler = { handle in
             let chunk = handle.availableData; guard !chunk.isEmpty else { eof.signal(); return }
-            lock.lock(); output.append(chunk); oversized = output.count > 65_536; lock.unlock()
+            lock.lock(); output.append(chunk); oversized = output.count > 1_048_576; lock.unlock()
             if oversized { process.terminate() }
         }
         process.terminationHandler = { _ in done.signal() }
@@ -500,30 +433,11 @@ private enum MacCollector {
         _ = eof.wait(timeout: .now() + min(0.05, max(0, deadline.timeIntervalSinceNow)))
         pipe.fileHandleForReading.readabilityHandler = nil
         guard !process.isRunning else { pipe.fileHandleForReading.closeFile(); return nil }
-        lock.lock(); let data = output; let valid = !oversized && data.count <= 65_536; lock.unlock()
+        lock.lock(); let data = output; let valid = !oversized; lock.unlock()
         pipe.fileHandleForReading.closeFile()
         guard process.terminationStatus == 0, valid else { return nil }
         return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     }
-}
-
-private final class BoundedHTTP: NSObject, URLSessionDataDelegate, URLSessionTaskDelegate {
-    private var data = Data(); private var valid = false; private let done = DispatchSemaphore(value: 0)
-    static func post(_ request: URLRequest, deadline: Date) -> Data? {
-        let collector = BoundedHTTP(); let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 3; config.timeoutIntervalForResource = 3
-        let session = URLSession(configuration: config, delegate: collector, delegateQueue: nil)
-        session.dataTask(with: request).resume()
-        guard !Task.isCancelled, deadline > Date(), collector.done.wait(timeout: .now() + deadline.timeIntervalSinceNow) == .success, collector.valid, collector.data.count <= 65_536 else { session.invalidateAndCancel(); return nil }
-        session.invalidateAndCancel(); return collector.data
-    }
-    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
-        guard let http = response as? HTTPURLResponse, response.url?.scheme == "https", response.url?.host == "api.linear.app", (200..<300).contains(http.statusCode), (http.value(forHTTPHeaderField: "Content-Length").flatMap(Int.init) ?? 0) <= 65_536 else { completionHandler(.cancel); return }
-        valid = true; completionHandler(.allow)
-    }
-    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) { self.data.append(data); if self.data.count > 65_536 { dataTask.cancel() } }
-    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) { if error != nil { valid = false }; done.signal() }
 }
 
 private enum Keychain {

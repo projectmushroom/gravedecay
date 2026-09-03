@@ -1,14 +1,11 @@
 #if canImport(Darwin)
 import Foundation
 
-/// URLSessionWebSocketTask-backed transport for TtydSession. The URLSession
-/// is injected so the caller can route it through an embedded-tailnet SOCKS
-/// proxy (URLSessionConfiguration.proxyConfigurations) or use a plain
-/// session when the Tailscale VPN app provides connectivity.
+/// URLSessionWebSocketTask-backed transport for TtydSession.
 ///
 /// Callbacks fire on URLSession's delegate queue — hop to your own
 /// queue/actor before touching UI or a TtydSession.
-public final class TtydWebSocket: NSObject, TtydConnection {
+public final class TtydWebSocket: NSObject {
     public var onOpen: (() -> Void)?
     public var onFrame: ((Data) -> Void)?
     public var onClose: ((Error?) -> Void)?
@@ -87,8 +84,7 @@ public enum TerminalToken {
             return TerminalTokenResponse.classify(data: data, statusCode: http.statusCode)
         } catch {
             let error = error as NSError
-            let domain = error.domain.prefix(64).filter { $0.isLetter || $0.isNumber || $0 == "." || $0 == "_" || $0 == "-" }
-            return .transport("\(domain)/\(error.code)")
+            return .transport("\(error.domain)/\(error.code)")
         }
     }
 }

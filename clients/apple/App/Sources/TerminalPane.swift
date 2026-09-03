@@ -42,14 +42,14 @@ final class TerminalStatus: ObservableObject {
     func remoteClosed() { lastCause = "REMOTE CLOSED" }
     func retry() { lastCause = "NONE"; retryID &+= 1; transition(.reconnecting) }
     func connected() { lastCause = "NONE"; transition(.connected) }
-    func input(_ count: Int) { inputEvents = inputEvents == Int.max ? Int.max : inputEvents + 1; inputBytes = inputBytes > Int.max - count ? Int.max : inputBytes + count }
-    func output(_ count: Int) { outputFrames = outputFrames == Int.max ? Int.max : outputFrames + 1; outputBytes = outputBytes > Int.max - count ? Int.max : outputBytes + count }
+    func input(_ count: Int) { inputEvents += 1; inputBytes += count }
+    func output(_ count: Int) { outputFrames += 1; outputBytes += count }
     var diagnostics: String { "TERMINAL STATE: \(state.rawValue)\nLAST CAUSE: \(lastCause)\nFAILURES: \(failureCount)\nRECONNECTS: \(reconnectCount)\nINPUT EVENTS: \(inputEvents)\nINPUT BYTES: \(inputBytes)\nOUTPUT FRAMES: \(outputFrames)\nOUTPUT BYTES: \(outputBytes)" }
 }
 
 /// Drives one SwiftTerm view against the box's web terminal: fetches the
-/// ttyd token, opens the websocket (through the tailnet-aware URLSession),
-/// and runs the TtydSession protocol state machine. Secret values and output
+/// ttyd token, opens the websocket, and runs the TtydSession protocol state
+/// machine. Secret values and output
 /// never leave the terminal path or diagnostics.
 ///
 /// Everything runs on the main thread: websocket callbacks hop to the main
@@ -57,7 +57,6 @@ final class TerminalStatus: ObservableObject {
 final class TerminalController: NSObject {
     private let box: BoxConfig
     private let arg: String?
-    private let urlSession: URLSession
     private let status: TerminalStatus
 
     private var socket: TtydWebSocket?
@@ -68,10 +67,9 @@ final class TerminalController: NSObject {
     private var reconnectTask: Task<Void, Never>?
     private(set) weak var terminalView: TerminalView?
 
-    init(box: BoxConfig, arg: String?, urlSession: URLSession, status: TerminalStatus = TerminalStatus()) {
+    init(box: BoxConfig, arg: String?, status: TerminalStatus = TerminalStatus()) {
         self.box = box
         self.arg = arg
-        self.urlSession = urlSession
         self.status = status
     }
 
@@ -96,7 +94,7 @@ final class TerminalController: NSObject {
         Task { @MainActor [weak self] in
             guard let self, self.terminalView != nil, self.generation == expectedGeneration else { return }
             self.status.transition(.fetchingToken)
-            let result = await TerminalToken.fetch(from: self.box.terminalTokenURL, session: self.urlSession)
+            let result = await TerminalToken.fetch(from: self.box.terminalTokenURL)
             guard self.generation == expectedGeneration, self.terminalView != nil else { return }
             switch result {
             case .token(let token): guard self.generation == expectedGeneration else { return }; self.open(token: token)
@@ -109,9 +107,13 @@ final class TerminalController: NSObject {
 
     private func open(token: String) {
         status.transition(.connecting)
-        let socket = TtydWebSocket(url: box.terminalWebSocketURL(arg: arg),
-                                   session: urlSession)
-        let session = TtydSession(connection: socket, delegate: self)
+        let socket = TtydWebSocket(url: box.terminalWebSocketURL(arg: arg))
+        let session = TtydSession(sendFrame: { [weak socket] in socket?.sendFrame($0) })
+        session.onOutput = { [weak self] output, done in
+            self?.status.output(output.count)
+            self?.terminalView?.feed(byteArray: ArraySlice([UInt8](output)))
+            done() // SwiftTerm parses synchronously
+        }
 
         socket.onOpen = { [weak self] in
             Task { @MainActor in
@@ -145,10 +147,8 @@ final class TerminalController: NSObject {
     }
 
     private func closed(_ error: Error?) {
-        if let error {
-            let error = error as NSError
-            let domain = error.domain.prefix(64).filter { $0.isLetter || $0.isNumber || $0 == "." || $0 == "_" || $0 == "-" }
-            failed("WEBSOCKET TRANSPORT \(domain)/\(error.code)")
+        if let error = error as NSError? {
+            failed("WEBSOCKET TRANSPORT \(error.domain)/\(error.code)")
             return
         }
         status.remoteClosed()
@@ -173,17 +173,6 @@ final class TerminalController: NSObject {
             self.connect()
         }
     }
-}
-
-extension TerminalController: TtydSessionDelegate {
-    func ttydSession(_ session: TtydSession, output: Data, done: @escaping () -> Void) {
-        status.output(output.count)
-        terminalView?.feed(byteArray: ArraySlice([UInt8](output)))
-        done() // SwiftTerm parses synchronously
-    }
-
-    func ttydSession(_ session: TtydSession, setTitle title: String) {}
-    func ttydSession(_ session: TtydSession, preferences: Data) {}
 }
 
 extension TerminalController: TerminalViewDelegate {
@@ -229,7 +218,6 @@ extension TerminalController: TerminalViewDelegate {
 
 struct TerminalPane {
     let box: BoxConfig
-    let urlSession: URLSession
     var arg: String? = nil
     var status: TerminalStatus? = nil
 
@@ -239,7 +227,7 @@ struct TerminalPane {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(controller: TerminalController(box: box, arg: arg, urlSession: urlSession, status: status ?? TerminalStatus()))
+        Coordinator(controller: TerminalController(box: box, arg: arg, status: status ?? TerminalStatus()))
     }
 
     private func makeView(_ coordinator: Coordinator) -> TerminalView {

@@ -4,9 +4,14 @@
 set -euo pipefail
 
 CONF="${GRAVE_CONF:-/etc/gravedecay/grave.conf}"
-[[ -r "$CONF" ]] || { echo "grave: config not found at $CONF (run raise.sh first)"; exit 1; }
-# shellcheck disable=SC1090
-source "$CONF"
+if [[ -r "$CONF" ]]; then
+  # shellcheck disable=SC1090
+  source "$CONF"
+elif [[ "${1:-}" == uninstall ]]; then
+  GRAVE_ROOT=/srv/dev; DEV_STACKS=()
+else
+  echo "grave: config not found at $CONF (run raise.sh first)"; exit 1
+fi
 
 # On a managed-toolchain host (Homebrew + rootless docker under $HOME) the tools
 # grave shells out to — docker, tailscale, tmux — aren't on a bare login PATH.
@@ -176,18 +181,18 @@ t3c_is() { # t3c_is <jq bool expr> <json> — predicate for doctor checks
   jq -e "$1" <<<"$2" >/dev/null 2>&1
 }
 
-t3_connect_restart() { # apply a link-state change to the running service
+t3_restart() { # apply a config change to the running service
   if systemctl is-active --quiet t3code; then
     need_root_helper
     sudo -n systemctl restart t3code
     # A new full link performs relay reconciliation before T3 is ready and can
     # take 10+ seconds. curl's --retry does not retry connection-refused unless
-    # explicitly requested, so the old single call failed immediately while
-    # the healthy service was still starting.
+    # explicitly requested, so a single call fails while the healthy service
+    # is still starting.
     local i
     for i in $(seq 1 30); do
       if curl -sf --max-time 2 -o /dev/null "http://127.0.0.1:$T3_PORT/"; then
-        ok "t3code restarted — Connect link state applies from this start"
+        ok "t3code restarted"
         return 0
       fi
       sleep 1
@@ -259,7 +264,7 @@ cmd_t3_connect() { # grave t3 connect [status|publish|full|off]
       # phone notifications are half the point of enabling Connect on this box.
       [[ "$want" == full ]] && t3 connect publish --base-dir "$T3_BASE_DIR"
       mkdir -p "$GRAVE_ROOT/config"; printf '%s\n' "$want" >"$T3_CONNECT_MODE_FILE"
-      t3_connect_restart
+      t3_restart
       log "t3 connect: mode $want"
       ok "T3 Connect mode: $want — 'grave doctor' now enforces it"
       ;;
@@ -269,7 +274,7 @@ cmd_t3_connect() { # grave t3 connect [status|publish|full|off]
       # `t3 connect logout --base-dir $T3_BASE_DIR` clears that too.
       t3 connect unlink --base-dir "$T3_BASE_DIR" || true
       mkdir -p "$GRAVE_ROOT/config"; printf 'off\n' >"$T3_CONNECT_MODE_FILE"
-      t3_connect_restart
+      t3_restart
       log "t3 connect: mode off"
       ok "T3 Connect disabled — the box is tailnet-only again"
       ;;
@@ -331,17 +336,8 @@ cmd_t3() { # grave t3 [status|update|connect …] — manage the stable T3 Code 
           ok "T3 workspace $slug answering after restart"
         done < <(jq -r '.workspaces[] | select(.enabled) | "\(.slug) \(.ports.t3)"' "$GRAVE_ROOT/config/workspaces.json")
         (( any )) || say "  workspace T3 services are stopped (gaming mode?) — they will use v$updated next start"
-      elif systemctl is-active --quiet t3code; then
-        sudo -n systemctl restart t3code
-        if curl -sf --retry 10 --retry-delay 1 -o /dev/null \
-            "http://127.0.0.1:$T3_PORT/"; then
-          ok "t3code answering after restart"
-        else
-          bad "t3code did not answer after restart"
-          exit 1
-        fi
       else
-        say "  t3code is stopped (gaming mode?) — it will use v$updated next start"
+        t3_restart
       fi
       log "t3: updated v$installed to v$updated"
       ok "T3 Code updated to v$updated"
@@ -487,8 +483,6 @@ cmd_gaming() { # cmd_gaming [--kill] [--for <timespan>]
     esac
     shift
   done
-  [[ -z "$duration" ]] || systemd-analyze timespan "$duration" >/dev/null 2>&1 \
-    || { bad "invalid --for duration '$duration' (examples: 30m, 2h, 1h30m)"; exit 1; }
   cancel_auto_thaw
   [[ -z "$duration" ]] || schedule_auto_thaw "$duration"
   local before after
@@ -582,9 +576,7 @@ cmd_docker() {
     up)    compose "${1:?stack name}" up -d ;;
     down)  compose "${1:?stack name}" down ;;
     logs)  dk logs --tail 100 -f "${1:?container name}" ;;
-    stacks) ls -1 "$GRAVE_ROOT/docker" ;;
-    disk)  dk system df ;;
-    *) say "usage: grave docker [ps|up <stack>|down <stack>|logs <container>|stacks|disk]"; exit 1 ;;
+    *) say "usage: grave docker [ps|up <stack>|down <stack>|logs <container>]"; exit 1 ;;
   esac
 }
 
@@ -598,7 +590,7 @@ cmd_docker() {
 # is `serve`, not `funnel` — nothing is exposed to the public internet).
 # Ports are confined to PREVIEW_RANGE so a preview can never shadow a platform
 # service (4711-4713) or anything outside the sandbox.
-tailnet_host() { local h; h=$(tailscale status --json 2>/dev/null | sed -n 's/.*"DNSName": *"\([^"]*\)\.".*/\1/p'); printf '%s\n' "${h%%$'\n'*}"; }
+tailnet_host() { tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // "" | rtrimstr(".")'; }
 
 preview_reserved() { # preview_reserved <port>  — a platform service sits on it
   local p="$1" r
@@ -697,10 +689,6 @@ cmd_update() {
       dnf)    sudo dnf -y upgrade ;;
       *)      say "${YLW}no known package manager — skipping system update${RST}" ;;
     esac
-    if ((${#NPM_GLOBAL_TOOLS[@]})); then
-      say "Updating npm-global tools..."
-      sudo npm update -g "${NPM_GLOBAL_TOOLS[@]}" 2>&1 | tail -1 || true
-    fi
   fi
   say "Checking T3 Code..."
   cmd_t3 update
@@ -811,20 +799,25 @@ push_ready() { # at least one PWA device is enrolled for Web Push
 
 notify_configured() { ntfy_ready || push_ready; }
 
-ntfy_send() { # ntfy_send <title> <body> <priority>
-  local title="$1" body="$2" priority="$3"
+ntfy_curl() { # ntfy_curl <url suffix> <curl args…> — auth + URL from notify.env
   # shellcheck disable=SC1090
   source "$NOTIFY_ENV"
   [[ "${NTFY_URL:-}" =~ ^https?:// ]] || return 1
+  local suffix="$1"; shift
+  local args=(-sf -m 10 -o /dev/null)
+  [[ -n "${NTFY_TOKEN:-}" ]] && args+=(-H "Authorization: Bearer ${NTFY_TOKEN//[$'\r\n']/}")
+  curl "${args[@]}" "$@" "$NTFY_URL$suffix"
+}
+
+ntfy_send() { # ntfy_send <title> <body> <priority>
   # Headers are a protocol boundary: a newline in an interpolated value (a tmux
   # session name reaches here) becomes header injection. Strip CR/LF and pin
   # the priority to ntfy's vocabulary. The body travels as --data-raw, never
   # -d/--data-binary, whose @ prefix would read local files into the request.
+  local title="$1" body="$2" priority="$3"
   title=${title//[$'\r\n']/ }
   [[ "$priority" =~ ^[a-z1-5]+$ ]] || priority=default
-  local args=(-sf -m 10 -o /dev/null -H "Title: $title" -H "Priority: $priority")
-  [[ -n "${NTFY_TOKEN:-}" ]] && args+=(-H "Authorization: Bearer ${NTFY_TOKEN//[$'\r\n']/}")
-  curl "${args[@]}" --data-raw "$body" "$NTFY_URL"
+  ntfy_curl "" -H "Title: $title" -H "Priority: $priority" --data-raw "$body"
 }
 
 PUSH_ERROR=""
@@ -875,12 +868,7 @@ notify_send() { # notify_send <title> <body> <priority> <link> <event> — ok if
 notify_reachable() {
   # Doctor probe without publishing: ntfy's poll endpoint returns the topic's
   # cached messages and exercises auth, so a doctor run never pages the phone.
-  # shellcheck disable=SC1090
-  source "$NOTIFY_ENV"
-  [[ "${NTFY_URL:-}" =~ ^https?:// ]] || return 1
-  local args=(-sf -m 10 -o /dev/null)
-  [[ -n "${NTFY_TOKEN:-}" ]] && args+=(-H "Authorization: Bearer ${NTFY_TOKEN//[$'\r\n']/}")
-  curl "${args[@]}" "$NTFY_URL/json?poll=1"
+  ntfy_curl "/json?poll=1"
 }
 
 claude_notify_hook_present() {
@@ -1100,20 +1088,20 @@ cmd_upgrade() { # grave upgrade [--edge|--release|--tag vX.Y.Z]
 
 # ------------------------------------------------------------------ logs ----
 cmd_logs() {
-  local target="${1:-grave}"
+  local target="${1:-grave}" units
   case "$target" in
-    t3|t3code)  sudo journalctl -u t3code -n 100 -f ;;
-    dash|gravedecay) sudo journalctl -u gravedecay -n 100 -f ;;
-    term)       sudo journalctl -u gravedecay-term -n 100 -f ;;
-    ssh|sshd)   sudo journalctl -u sshd -n 100 -f ;;
-    tailscale)  sudo journalctl -u tailscaled -n 100 -f ;;
-    system)     sudo journalctl -p warning -n 100 -f ;;
-    grave)      tail -n 50 -f "$LOG_FILE" ;;
-    agent)      tail -n 100 -f "$GRAVE_ROOT"/agents/"${2:?agent name}"/session-*.log ;;
-    workspace)  sudo journalctl -u "gravedecay-t3@${2:?workspace}" -u "gravedecay-term@${2}" -u "gravedecay-dashboard@${2}" -n 150 -f ;;
-    *)          dk logs --tail 100 -f "$target" 2>/dev/null || \
-                sudo journalctl -u "$target" -n 100 -f ;;
+    grave)      tail -n 50 -f "$LOG_FILE"; return ;;
+    agent)      tail -n 100 -f "$GRAVE_ROOT"/agents/"${2:?agent name}"/session-*.log; return ;;
+    system)     units=(-p warning) ;;
+    t3|t3code)  units=(-u t3code) ;;
+    dash|gravedecay) units=(-u gravedecay) ;;
+    term)       units=(-u gravedecay-term) ;;
+    ssh|sshd)   units=(-u sshd) ;;
+    tailscale)  units=(-u tailscaled) ;;
+    workspace)  units=(-u "gravedecay-t3@${2:?workspace}" -u "gravedecay-term@${2}" -u "gravedecay-dashboard@${2}") ;;
+    *)          dk logs --tail 100 -f "$target" 2>/dev/null && return; units=(-u "$target") ;;
   esac
+  sudo journalctl "${units[@]}" -n 100 -f
 }
 
 # ---------------------------------------------------------------- doctor ----
@@ -1331,39 +1319,19 @@ cmd_doctor() { # grave doctor [--no-page]
     say "  ${YLW}– a relay tunnel is running outside the appliance T3 instance (desktop app?) — the box is exposed beyond the declared Connect mode${RST}"
   fi
   if systemctl is-active --quiet gravedecay; then
-    if [[ "${MULTI_USER:-0}" == 1 ]]; then
-      check "gravedecay maintenance health" sudo -n "$0" __dashboard-health
-      check "dashboard summary API contract" dashboard_summary_ok
-      check "dashboard running installed build" dashboard_build_ok
-      check "dashboard serving installed shell" dashboard_shell_ok
-      check "dashboard self-updater installed" systemctl cat gravedecay-upgrade.service
-      check "selectable release updater installed" systemctl cat 'gravedecay-upgrade@.service'
-      check "dashboard PWA owns app origin" dashboard_manifest_ok
-      check "dashboard offline shell ready" dashboard_sw_ok
-      check "dashboard serving installed offline page" dashboard_offline_ok
-    else
-      check "gravedecay answering"         curl -sf -o /dev/null "http://127.0.0.1:$DASH_PORT/healthz"
-    check "dashboard summary API contract" bash -c \
-      "curl -sf 'http://127.0.0.1:$DASH_PORT/api/v1/summary' | jq -e '.product == \"gravedecay\" and .api_version == 1' >/dev/null"
-    check "dashboard running installed build" bash -c \
-      "test \"\$(sha256sum '$GRAVE_ROOT/scripts/gravedecay.py' | cut -d' ' -f1)\" = \"\$(curl -sf 'http://127.0.0.1:$DASH_PORT/healthz' | jq -r .build)\""
+    check "gravedecay answering"         dashboard_probe health
+    check "dashboard summary API contract" dashboard_summary_ok
+    check "dashboard running installed build" dashboard_build_ok
     # The PWA shell left the Python file; a stale index.html is the same
-    # class of bug as a stale gravedecay.py. Compare the on-disk asset
-    # (sha256sum) to the hash the running process reports for that file.
-    check "dashboard serving installed shell" bash -c \
-      "test \"\$(sha256sum '$GRAVE_ROOT/scripts/dashboard-static/index.html' | cut -d' ' -f1)\" = \"\$(curl -sf 'http://127.0.0.1:$DASH_PORT/healthz' | jq -r .shell)\""
+    # class of bug as a stale gravedecay.py.
+    check "dashboard serving installed shell" dashboard_shell_ok
     check "dashboard self-updater installed" systemctl cat gravedecay-upgrade.service
     check "selectable release updater installed" systemctl cat 'gravedecay-upgrade@.service'
-    check "dashboard PWA owns app origin" bash -c \
-      "curl -sf 'http://127.0.0.1:$DASH_PORT/manifest.webmanifest' | grep -q '\"scope\": \"/\"'"
-    check "dashboard offline shell ready" bash -c \
-      "curl -sf -D - -o /dev/null 'http://127.0.0.1:$DASH_PORT/sw.js' | grep -qi '^Service-Worker-Allowed: /'"
-    # The worker's cache name embeds a digest of offline.html (healthz.sw).
-    # A mismatch means installed PWAs are pinning an outdated offline page —
-    # the browser only re-installs a worker whose served bytes changed.
-    check "dashboard serving installed offline page" bash -c \
-      "test \"\$(sha256sum '$GRAVE_ROOT/scripts/dashboard-static/offline.html' | cut -d' ' -f1 | cut -c-12)\" = \"\$(curl -sf 'http://127.0.0.1:$DASH_PORT/healthz' | jq -r .sw)\""
-    fi
+    check "dashboard PWA owns app origin" dashboard_manifest_ok
+    check "dashboard offline shell ready" dashboard_sw_ok
+    # The worker's cache name embeds a digest of offline.html (healthz.sw); a
+    # mismatch means installed PWAs are pinning an outdated offline page.
+    check "dashboard serving installed offline page" dashboard_offline_ok
   else
     say "  ${YLW}– gravedecay stopped${RST}"
   fi
@@ -1470,14 +1438,8 @@ cmd_doctor() { # grave doctor [--no-page]
   if (( FAILURES == 0 )); then say "${GRN}${BLD}All checks passed.${RST}"; else say "${RED}${BLD}$FAILURES check(s) failed.${RST}"; exit 1; fi
 }
 
-cmd_dashboard_health() {
-  [[ $EUID == 0 ]] || { bad "internal dashboard health helper requires root"; exit 1; }
-  curl -sf -o /dev/null "http://127.0.0.1:$DASH_PORT/healthz"
-}
-
-cmd_dashboard_probe() {
-  [[ $EUID == 0 ]] || { bad "internal dashboard probe requires root"; exit 1; }
-  local path="$1" include=""
+cmd_dashboard_probe() { # cmd_dashboard_probe <health|summary|manifest|sw|push-key>
+  local path="$1" include="" token=""
   case "$path" in
     health) path=/healthz ;;
     summary) path=/api/v1/summary ;;
@@ -1486,17 +1448,21 @@ cmd_dashboard_probe() {
     push-key) path=/api/push-key ;;
     *) bad "unknown dashboard probe"; exit 2 ;;
   esac
-  local token
-  token=$(sed -n 's/^GRAVEDECAY_BACKEND_TOKEN=//p' "$GRAVE_ROOT/config/secrets/admin-dashboard.env" | head -1)
-  [[ "$path" == /healthz || ${#token} -ge 32 ]] || { bad "dashboard capability missing"; exit 1; }
+  if [[ "$MULTI_USER" == 1 ]]; then
+    [[ $EUID == 0 ]] || { bad "internal dashboard probe requires root"; exit 1; }
+    token=$(sed -n 's/^GRAVEDECAY_BACKEND_TOKEN=//p' "$GRAVE_ROOT/config/secrets/admin-dashboard.env" | head -1)
+    [[ "$path" == /healthz || ${#token} -ge 32 ]] || { bad "dashboard capability missing"; exit 1; }
+  fi
   {
     printf 'url = "http://127.0.0.1:%s%s"\nfail\nsilent\nshow-error\n' "$DASH_PORT" "$path"
     [[ -z "$include" ]] || printf 'include\n'
-    [[ "$path" != /healthz ]] && printf 'header = "X-Grave-Backend-Token: %s"\n' "$token"
+    [[ "$path" == /healthz || -z "$token" ]] || printf 'header = "X-Grave-Backend-Token: %s"\n' "$token"
   } | curl --config -
 }
 
-dashboard_probe() { sudo -n "$0" __dashboard-probe "$1"; }
+dashboard_probe() { # multi-user: the owner dashboard is behind the loopback boundary — probe as root
+  if [[ "$MULTI_USER" == 1 ]]; then sudo -n "$0" __dashboard-probe "$1"; else cmd_dashboard_probe "$1"; fi
+}
 dashboard_summary_ok() { dashboard_probe summary | jq -e '.product == "gravedecay" and .api_version == 1' >/dev/null; }
 dashboard_build_ok() { [[ "$(sha256sum "$GRAVE_ROOT/scripts/gravedecay.py" | cut -d' ' -f1)" == "$(dashboard_probe health | jq -r .build)" ]]; }
 dashboard_shell_ok() { [[ "$(sha256sum "$GRAVE_ROOT/scripts/dashboard-static/index.html" | cut -d' ' -f1)" == "$(dashboard_probe health | jq -r .shell)" ]]; }
@@ -1855,23 +1821,15 @@ uninstall_strip_agent_hooks() { # drop the grave-agent-notify hooks from agent C
     fi
   fi
   if [[ -f "$codex" ]] && grep -q 'grave-agent-notify' "$codex" 2>/dev/null; then
-    # Rewrite through a temp file rather than `sed -i`: the in-place flag takes
-    # an argument on BSD sed and none on GNU, and this runs on both.
     uninst_do "gravedecay notify line removed from $codex" \
       uninstall_drop_lines "$codex" 'grave-agent-notify'
   fi
 }
 
-uninstall_drop_lines() { # uninstall_drop_lines <file> <fixed-string> — delete matching lines
-  local file="$1" needle="$2" tmp
-  tmp=$(mktemp) || return 1
-  grep -vF -- "$needle" "$file" >"$tmp" || true   # grep exits 1 when nothing remains
-  cat "$tmp" >"$file" && rm -f "$tmp"             # preserve the original mode (600)
-}
+uninstall_drop_lines() { sed -i.bak "/$2/d" "$1" && rm -f "$1.bak"; } # .bak: BSD sed needs a suffix
 
 tailscale_backend_state() { # print tailscaled's BackendState; empty if unreachable
-  tailscale status --json 2>/dev/null \
-    | sed -n 's/.*"BackendState"[[:space:]]*:[[:space:]]*"\([A-Za-z]*\)".*/\1/p' | head -1
+  tailscale status --json 2>/dev/null | jq -r '.BackendState // ""'
 }
 
 tailscale_wait_running() { # bounded wait for a warming-up backend
@@ -2199,8 +2157,6 @@ grave — gravedecay appliance control 🪦
   grave gaming --kill        ☠️ same but destroy agent sessions (max free RAM)
   grave gaming --for 2h      ⏱️ torpor now, automatically restore after 2h
   grave developer            💻 thaw sessions + restore full development mode
-  grave start | stop         same as developer / gaming (without the banner)
-  grave restart              stop + start developer services
 
   grave agents               list agent tmux sessions
   grave agents new <n> [dir]    create persistent agent session
@@ -2210,7 +2166,7 @@ grave — gravedecay appliance control 🪦
                                 and resume ▶ from the dashboard too
   grave agents resume <n>       recreate a dead session in its old dir
 
-  grave docker [ps|up <stack>|down <stack>|logs <c>|stacks|disk]
+  grave docker [ps|up <stack>|down <stack>|logs <c>]
   grave logs [t3|dash|ssh|tailscale|system|grave|agent <n>|<container/unit>]
 
   grave preview <port>       expose a running dev server (e.g. :3000) to the
@@ -2259,7 +2215,6 @@ EOF
 
 # ------------------------------------------------------------------ main ----
 case "${1:-help}" in
-  __dashboard-health) cmd_dashboard_health ;;
   __dashboard-probe) shift; cmd_dashboard_probe "${1:-}" ;;
   __boundary-apply) cmd_boundary_apply ;;
   __boundary-status) cmd_boundary_status ;;
@@ -2270,9 +2225,6 @@ case "${1:-help}" in
   status)     cmd_status ;;
   gaming)     shift || true; cmd_gaming "$@" ;;
   developer)  cmd_developer ;;
-  start)      start_dev ;;
-  stop)       shift || true; stop_dev "$@" ;;
-  restart)    stop_dev; thaw_agents; start_dev ;;
   agents)     shift; cmd_agents "$@" ;;
   docker)     shift; cmd_docker "$@" ;;
   preview)    shift || true; cmd_preview "$@" ;;

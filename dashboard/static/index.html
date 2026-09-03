@@ -261,22 +261,6 @@ body.gaming #foot{display:none}
   #tmux td.num{text-align:right;width:auto}
   #tmux td:last-child{grid-column:3;width:auto}
 }
-/* Safari fallback: older installed PWAs can ignore container queries even
-   though the phone viewport is narrow.  Repeat the record reflow behind a
-   universally-supported viewport query so live usage/repo/session values can
-   never keep their desktop table width and paint past the panel edge. */
-@media(max-width:500px){
-  .panel table,.panel tbody,.panel tr,.panel td{display:block;width:100%}
-  .panel tr{padding:7px 0;border-top:1px dashed var(--hairline)}
-  .panel tr:first-child{border-top:0}
-  .panel td{padding:1px 0;border:0!important;white-space:normal!important}
-  .panel td.num{text-align:left}
-  .panel td:empty{display:none}
-  .panel #tmux tr{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:0 8px}
-  .panel #tmux td:first-child{grid-column:1/-1}
-  .panel #tmux td.num{text-align:right;width:auto}
-  .panel #tmux td:last-child{grid-column:3;width:auto}
-}
 .release-picker{margin-top:12px;padding-top:10px;border-top:1px dashed var(--hairline)}
 .release-picker label{color:var(--muted)}
 .release-picker select{background:var(--inset);color:var(--ink);border:1px solid var(--ring);
@@ -606,6 +590,7 @@ body.portable #sec-notify{display:none!important}
 <footer id="foot">🪦 gravedecay © <span id="footyear"></span> — <span id="epitaph"></span></footer>
 <script>
 const $=id=>document.getElementById(id);
+const post=async(url,body)=>(await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
 // one epitaph per visit
 $('footyear').textContent=new Date().getFullYear();
 $('epitaph').textContent=[
@@ -740,14 +725,13 @@ $('install-grave-release').onclick=async()=>{
   const button=$('install-grave-release'),status=$('grave-release-state');
   button.disabled=true;status.textContent=`queueing ${tag}…`;
   try{
-    const r=await fetch('api/admin/upgrade',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({tag})}),data=await r.json();
-    if(!r.ok)throw new Error(data.output||`HTTP ${r.status}`);
+    const data=await post('api/admin/upgrade',{tag});
+    if(!data.ok)throw new Error(data.output||'upgrade refused');
     status.textContent=`${tag} queued — reconnecting after raise…`; if(macosCompanion)macUpdateStatus();
   }catch(e){status.textContent=e.message;button.disabled=false;}
 };
 async function macUpdateStatus(retry=true){try{const r=await fetch('api/admin/update-status',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);const x=await r.json();if(x.state) $('grave-release-state').textContent=`update: ${x.state}${x.message?` — ${x.message}`:''}`;if(x.state==='queued'||x.state==='running')setTimeout(()=>macUpdateStatus(true),1500);}catch(_){if(retry)setTimeout(()=>macUpdateStatus(false),3000);}}
-$('update-macos-channel').onclick=async()=>{const status=$('grave-release-state'),button=$('update-macos-channel');button.disabled=true;try{const r=await fetch('api/admin/upgrade',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({channel:macUpdateChannel})}),data=await r.json();if(!r.ok)throw new Error(data.output||`HTTP ${r.status}`);status.textContent='configured update queued — reconnecting…';macUpdateStatus();}catch(e){status.textContent=e.message;}finally{button.disabled=false;}};
+$('update-macos-channel').onclick=async()=>{const status=$('grave-release-state'),button=$('update-macos-channel');button.disabled=true;try{const data=await post('api/admin/upgrade',{channel:macUpdateChannel});if(!data.ok)throw new Error(data.output||'upgrade refused');status.textContent='configured update queued — reconnecting…';macUpdateStatus();}catch(e){status.textContent=e.message;}finally{button.disabled=false;}};
 function render(s){
   // Replacing live regions above the viewport can make iOS WebKit discard its
   // document scroll anchor and jump to the top. Preserve the window position
@@ -757,7 +741,7 @@ function render(s){
   pollFailures=0;lastConnected=Date.now();paintConnection();
   envApps=s.apps||[];
   lastTmux=s.tmux||[];
-  if(s.boot_mode){bootMode=s.boot_mode;paintBoot();}
+  if(s.boot_mode)boot.paint(s.boot_mode==='developer');
   if(s.gamewatch){applyGamewatch(s.gamewatch);}
   if(s.keepalive){applyKeepalive(s.keepalive);}
   if(s.t3_connect){t3cInfo=s.t3_connect;paintT3Connect();}
@@ -1014,12 +998,16 @@ addEventListener('online',poll);addEventListener('offline',paintConnection);
 // EventSource a 403 and a dead box look identical) and there is no browser
 // auto-retry that could silently re-trigger a mode switch.
 let streaming=false,aborter=null,runId=0;
-function closeConsole(){
-  // closing only detaches the console — the action always finishes on the box
-  if(aborter){aborter.abort();aborter=null;}
-  $('console').style.display='none';
-  unlockBody();
+// close any overlay by id; the console detaches its stream (the action
+// always finishes on the box) and the app iframe is blanked
+function closeOverlay(id){
+  if(id==='console'&&aborter){aborter.abort();aborter=null;}
+  if(id==='appframe')$('appframe-if').src='about:blank';
+  $(id).style.display='none';unlockBody();
 }
+const closeConsole=()=>closeOverlay('console');
+document.addEventListener('click',e=>{if(e.target.classList.contains('overlay'))closeOverlay(e.target.id);});
+document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelectorAll('.overlay').forEach(o=>closeOverlay(o.id));});
 async function runStream(act,title){
   if(streaming)return;
   streaming=true;
@@ -1105,16 +1093,7 @@ $('console-out').addEventListener('click',async e=>{
   catch(_){e.target.textContent='copy failed';}
 });
 $('console-x').onclick=closeConsole;
-$('console').addEventListener('click',e=>{if(e.target.id==='console')closeConsole();});
-$('game-confirm').addEventListener('click',e=>{
-  if(e.target.id==='game-confirm'){e.currentTarget.style.display='none';unlockBody();}});
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){
-  closeConsole();$('game-confirm').style.display='none';
-  $('settings-panel').style.display='none';$('kill-dlg').style.display='none';
-  $('throttle-dlg').style.display='none';$('capture-dlg').style.display='none';
-  closeFiles();closeAppModal();
-  unlockBody();}});
-$('console-close').onclick=()=>{$('console').style.display='none'};
+$('console-close').onclick=closeConsole;
 // ---------- gaming confirm dialog ----------
 function openGameConfirm(){
   $('gc-sessions').innerHTML=lastTmux.length
@@ -1125,7 +1104,7 @@ function openGameConfirm(){
 }
 $('gc-freeze').onclick=()=>runStream('gaming','burial sequence — freeze');
 $('gc-kill').onclick=()=>runStream('gaming-kill','burial sequence — full kill');
-$('gc-cancel').onclick=()=>{$('game-confirm').style.display='none';unlockBody();};
+$('gc-cancel').onclick=()=>closeOverlay('game-confirm');
 $('wake').onclick=()=>runStream('developer','startup sequence');
 document.querySelectorAll('button[data-act]').forEach(b=>b.onclick=()=>{
   const act=b.dataset.act;
@@ -1143,15 +1122,11 @@ async function openCapture(name){
   $('capture-msg').textContent='';
   $('capture-dlg').style.display='block';lockBody();
   try{
-    const r=await fetch('api/session-capture',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
-    const j=await r.json();
+    const j=await post('api/session-capture',{name});
     $('capture-ta').value=j.ok?j.output:(j.output||'capture failed');
   }catch(err){$('capture-ta').value='capture failed: '+err;}
 }
-function closeCapture(){$('capture-dlg').style.display='none';unlockBody();}
-$('capture-x').onclick=closeCapture;
-$('capture-dlg').addEventListener('click',e=>{if(e.target.id==='capture-dlg')closeCapture();});
+$('capture-x').onclick=()=>closeOverlay('capture-dlg');
 $('capture-copy').onclick=async()=>{
   const ta=$('capture-ta');
   try{await navigator.clipboard.writeText(ta.value);$('capture-msg').textContent='✓ copied';}
@@ -1168,12 +1143,7 @@ $('tmux').addEventListener('click',async e=>{
   if(!n)return;
   e.preventDefault();
   if(!confirm(`Kill session "${n}"? Anything running in it dies.`))return;
-  try{
-    const r=await fetch('api/session-kill',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});
-    const j=await r.json();
-    if(!j.ok)alert(j.output||'kill failed');
-  }catch(err){alert('kill failed: '+err);}
+  if(!await killSession(n))alert('kill failed');
   poll();
 });
 // linear quick-create
@@ -1182,9 +1152,7 @@ $('add-linear').onclick=async()=>{
   if(!t)return;
   $('add-linear').disabled=true;
   try{
-    const r=await fetch('api/linear-issue',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify({title:t})});
-    const j=await r.json();
+    const j=await post('api/linear-issue',{title:t});
     if(j.ok){$('new-linear').value='';poll();}
     else alert(j.output||'create failed');
   }catch(err){alert('create failed: '+err);}
@@ -1300,10 +1268,7 @@ function buildNotify(){
           if(sub)await sub.unsubscribe();}catch(e){}
         localStorage.removeItem('grave-push-id');
       }
-      const r=await fetch('api/push-unsubscribe',{method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({id:b.dataset.pushDel})});
-      if((await r.json()).ok){
+      if((await post('api/push-unsubscribe',{id:b.dataset.pushDel})).ok){
         notifyInfo.push.devices=notifyInfo.push.devices.filter(d=>d.id!==b.dataset.pushDel);
         buildNotify();notifyMsg('device removed');
       }
@@ -1327,9 +1292,7 @@ $('push-enable').onclick=async()=>{
       {userVisibleOnly:true,applicationServerKey:b64ToU8(kj.key)});
     const label=((navigator.userAgentData&&navigator.userAgentData.platform)
       ||navigator.platform||'device')+(navigator.maxTouchPoints>1?' (touch)':'');
-    const j=await(await fetch('api/push-subscribe',{method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({subscription:sub.toJSON(),label})})).json();
+    const j=await post('api/push-subscribe',{subscription:sub.toJSON(),label});
     if(!j.ok){notifyMsg(j.output||'enroll failed');return;}
     localStorage.setItem('grave-push-id',j.id);
     notifyMsg('🔔 this device is enrolled — try 📣 send test');
@@ -1343,9 +1306,7 @@ $('push-enable').onclick=async()=>{
 $('ntfy-clear').onclick=async()=>{
   if(!confirm('Remove the ntfy channel from the box?'))return;
   try{
-    const j=await(await fetch('api/settings',{method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({ntfy_clear:true})})).json();
+    const j=await post('api/settings',{ntfy_clear:true});
     if(j.ok){if(j.notify)notifyInfo=j.notify;buildNotify();notifyMsg('ntfy channel removed');}
     else notifyMsg(j.output||'clear failed');
   }catch(e){notifyMsg('clear failed: '+e);}
@@ -1353,8 +1314,7 @@ $('ntfy-clear').onclick=async()=>{
 $('notify-test').onclick=async()=>{
   notifyMsg('sending…');
   try{
-    const j=await(await fetch('api/notify-test',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:'{}'})).json();
+    const j=await post('api/notify-test',{});
     notifyMsg(j.ok?'📣 sent — check your devices':(j.output||'send failed'));
   }catch(e){notifyMsg('send failed: '+e);}
 };
@@ -1386,7 +1346,7 @@ document.querySelectorAll('.sec-toggle').forEach(h=>h.onclick=()=>{
   sec.style.display=open?'none':'block';
   h.textContent=(open?'▸':'▾')+h.textContent.slice(1);
 });
-function closeSettings(){$('settings-panel').style.display='none';unlockBody();}
+const closeSettings=()=>closeOverlay('settings-panel');
 $('gear').onclick=()=>{
   const p=$('settings-panel');
   if(p.style.display==='block'){closeSettings();return;}
@@ -1401,8 +1361,6 @@ $('gear').onclick=()=>{
 };
 $('close-set').onclick=closeSettings;
 $('settings-x').onclick=closeSettings;
-$('settings-panel').addEventListener('click',e=>{
-  if(e.target.id==='settings-panel')closeSettings();});
 // ---------- session history: transcript viewer + resume ----------
 async function openLog(name,file){
   $('log-title').textContent=`📜 ${name} — ${file}`;
@@ -1413,15 +1371,13 @@ async function openLog(name,file){
     $('log-text').textContent=r.ok?(r.text||'(empty log)'):r.output;
   }catch(e){$('log-text').textContent='failed to load: '+e;}
 }
-$('log-x').onclick=()=>{$('log-dlg').style.display='none';unlockBody();};
+$('log-x').onclick=()=>closeOverlay('log-dlg');
 document.addEventListener('click',async e=>{
   const v=e.target.closest('a.viewlog');
   if(v){e.preventDefault();openLog(v.dataset.log,v.dataset.file);return;}
   const r=e.target.closest('a.resume');
   if(r){e.preventDefault();r.textContent='…';
-    const res=await fetch('api/session-resume',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify({name:r.dataset.resume})});
-    if(!(await res.json()).ok)r.textContent='✗';  // next poll redraws either way
+    if(!(await post('api/session-resume',{name:r.dataset.resume})).ok)r.textContent='✗';  // next poll redraws either way
   }
 });
 // ---------- kill-sessions dialog ----------
@@ -1433,14 +1389,11 @@ function buildKillList(){
   :'<div class="setrow dim2">no sessions running</div>';
 }
 async function killSession(n){
-  const r=await fetch('api/session-kill',{method:'POST',
-    headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});
-  return (await r.json()).ok;
+  try{return (await post('api/session-kill',{name:n})).ok;}catch(_){return false;}
 }
 $('kill-open').onclick=()=>{buildKillList();$('kill-msg').textContent='';$('kill-dlg').style.display='block';lockBody();};
-$('kill-x').onclick=()=>{$('kill-dlg').style.display='none';unlockBody();};
+$('kill-x').onclick=()=>closeOverlay('kill-dlg');
 $('kill-dlg').addEventListener('click',async e=>{
-  if(e.target.id==='kill-dlg'){e.currentTarget.style.display='none';unlockBody();return;}
   const n=e.target.dataset&&e.target.dataset.killOne;
   if(!n)return;
   e.target.disabled=true;
@@ -1471,34 +1424,27 @@ function paintT3Connect(){
   el.textContent=s;
 }
 $('t3c-off').onclick=()=>runStream('t3connect-off','disabling T3 Connect — box returns to tailnet-only');
-// boot mode toggle (quick POST, not a console stream)
-let bootMode=null;
-function paintBoot(){
-  $('boot-dev').classList.toggle('activebtn',bootMode==='developer');
-  $('boot-game').classList.toggle('activebtn',bootMode==='gaming');
+// two-button on/off toggles (quick POST, not a console stream):
+// paint(v) highlights a side, set(v) POSTs the matching grave action
+function toggle(prefix,onId,offId,onAction,offAction,after){
+  const t={paint(v){$(onId).classList.toggle('activebtn',v===true);$(offId).classList.toggle('activebtn',v===false);},
+    async set(on){
+      $(prefix+'-state').textContent='saving…';
+      try{
+        const j=await post('api/action',{action:on?onAction:offAction});
+        $(prefix+'-state').textContent=j.ok?'saved ✓':(j.output||'failed');
+        if(j.ok){t.paint(on);if(after)after(on);}
+      }catch(e){$(prefix+'-state').textContent='failed: '+e;}
+    }};
+  $(onId).onclick=()=>t.set(true);$(offId).onclick=()=>t.set(false);
+  return t;
 }
-async function setBoot(m){
-  $('boot-state').textContent='saving…';
-  try{
-    const r=await fetch('api/action',{method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({action:'bootmode-'+m})});
-    const j=await r.json();
-    $('boot-state').textContent=j.ok?'saved ✓':(j.output||'failed');
-    if(j.ok){bootMode=m;paintBoot();}
-  }catch(e){$('boot-state').textContent='failed: '+e;}
-}
-$('boot-dev').onclick=()=>setBoot('developer');
-$('boot-game').onclick=()=>setBoot('gaming');
+const boot=toggle('boot','boot-dev','boot-game','bootmode-developer','bootmode-gaming');
 // Gamewatch is also the dashboard's gaming-feature switch. With it off, the
 // appliance presents as a dev-only box: the one enable control remains in
 // Settings, while mode/boot/action controls disappear. If the stack is already
 // buried, the game banner still provides the emergency developer-mode wake.
-let throttleOn=null,gamingFeatures=false;
-function paintThrottle(){
-  $('throttle-on').classList.toggle('activebtn',throttleOn===true);
-  $('throttle-off').classList.toggle('activebtn',throttleOn===false);
-}
+let gamingFeatures=false;
 function paintGamingControls(){
   $('mode').style.display=gamingFeatures?'':'none';
   $('boot-mode-head').style.display=gamingFeatures?'':'none';
@@ -1513,52 +1459,23 @@ function applyGamewatch(g){
   $('throttle-head').style.display=show?'':'none';
   $('throttle-row').style.display=show?'':'none';
   gamingFeatures=show&&!!g.on;paintGamingControls();
-  if(show){throttleOn=!!g.on;paintThrottle();
+  if(show){throttle.paint(!!g.on);
     if(g.on&&!g.running)$('throttle-state').textContent='on (watcher stopped?)';}
 }
-async function setThrottle(on){
-  $('throttle-state').textContent='saving…';
-  try{
-    const r=await fetch('api/action',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({action:on?'gamewatch-on':'gamewatch-off'})});
-    const j=await r.json();
-    $('throttle-state').textContent=j.ok?'saved ✓':(j.output||'failed');
-    if(j.ok){throttleOn=on;gamingFeatures=on;paintThrottle();paintGamingControls();}
-  }catch(e){$('throttle-state').textContent='failed: '+e;}
-}
-$('throttle-on').onclick=()=>setThrottle(true);
-$('throttle-off').onclick=()=>setThrottle(false);
+const throttle=toggle('throttle','throttle-on','throttle-off','gamewatch-on','gamewatch-off',
+  on=>{gamingFeatures=on;paintGamingControls();});
 // "always alive": tailnet keepalive on/off toggle (installed on every box, so
 // the row shows whenever /api/state reports the unit is present).
-let keepaliveOn=null;
-function paintKeepalive(){
-  $('keepalive-on').classList.toggle('activebtn',keepaliveOn===true);
-  $('keepalive-off').classList.toggle('activebtn',keepaliveOn===false);
-}
+const keepalive=toggle('keepalive','keepalive-on','keepalive-off','keepalive-on','keepalive-off');
 function applyKeepalive(g){
   const show=!!g.installed;
   $('keepalive-head').style.display=show?'':'none';
   $('keepalive-row').style.display=show?'':'none';
-  if(show){keepaliveOn=g.on;paintKeepalive();
+  if(show){keepalive.paint(g.on);
     $('keepalive-state').textContent=(g.on&&!g.running)?'on (service stopped?)':'';}
 }
-async function setKeepalive(on){
-  $('keepalive-state').textContent='saving…';
-  try{
-    const r=await fetch('api/action',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({action:on?'keepalive-on':'keepalive-off'})});
-    const j=await r.json();
-    $('keepalive-state').textContent=j.ok?'saved ✓':(j.output||'failed');
-    if(j.ok){keepaliveOn=on;paintKeepalive();}
-  }catch(e){$('keepalive-state').textContent='failed: '+e;}
-}
-$('keepalive-on').onclick=()=>setKeepalive(true);
-$('keepalive-off').onclick=()=>setKeepalive(false);
-function closeThrottle(){$('throttle-dlg').style.display='none';unlockBody();}
 $('throttle-info').onclick=()=>{$('throttle-dlg').style.display='block';lockBody();};
-$('throttle-x').onclick=closeThrottle;
-$('throttle-close').onclick=closeThrottle;
-$('throttle-dlg').addEventListener('click',e=>{if(e.target.id==='throttle-dlg')closeThrottle();});
+$('throttle-x').onclick=$('throttle-close').onclick=()=>closeOverlay('throttle-dlg');
 $('add-app').onclick=()=>{
   const n=$('new-app-name').value.trim(),u=$('new-app-url').value.trim();
   if(!u){$('set-msg').textContent='tile needs a URL';return;}
@@ -1582,9 +1499,7 @@ $('save-set').onclick=async()=>{
   }
   $('set-msg').textContent='saving…';
   try{
-    const r=await fetch('api/settings',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    const j=await r.json();
+    const j=await post('api/settings',payload);
     if(j.ok){cfg=j.settings;cfgSrv=JSON.stringify(j.settings);layoutKey='';schedule();
       linearConfigured=!!j.linear_configured;
       $('set-linear').value='';
@@ -1606,12 +1521,7 @@ $('apps').addEventListener('click',e=>{
 function fmtSize(n){return n<1024?n+' B':n<1048576?(n/1024).toFixed(0)+' K':(n/1048576).toFixed(1)+' M';}
 function joinPath(a,b){return a?a+'/'+b:b;}
 function openFiles(){$('files-dlg').style.display='block';lockBody();loadFiles('');}
-function closeFiles(){$('files-dlg').style.display='none';unlockBody();}
-async function fsOp(body){
-  const r=await fetch('api/fs',{method:'POST',
-    headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  return r.json();
-}
+const fsOp=body=>post('api/fs',body);
 async function loadFiles(path){
   $('files-msg').textContent='';
   let j;
@@ -1675,8 +1585,7 @@ async function uploadFiles(list){
 }
 $('files-upload').addEventListener('change',e=>{
   if(e.target.files.length)uploadFiles(e.target.files);e.target.value='';});
-$('files-x').onclick=closeFiles;
-$('files-dlg').addEventListener('click',e=>{if(e.target.id==='files-dlg')closeFiles();});
+$('files-x').onclick=()=>closeOverlay('files-dlg');
 {const drop=$('files-drop');
  ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{
    e.preventDefault();drop.classList.add('drag');}));
@@ -1691,10 +1600,7 @@ function openAppModal(url,name){
   $('appframe-if').src=full;
   $('appframe').style.display='block';lockBody();
 }
-function closeAppModal(){
-  $('appframe').style.display='none';$('appframe-if').src='about:blank';unlockBody();}
-$('appframe-x').onclick=closeAppModal;
-$('appframe').addEventListener('click',e=>{if(e.target.id==='appframe')closeAppModal();});
+$('appframe-x').onclick=()=>closeOverlay('appframe');
 // ---------- boot ----------
 let timer=null;
 function schedule(){clearInterval(timer);
