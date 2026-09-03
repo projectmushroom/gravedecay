@@ -282,6 +282,17 @@ elif command -v pacman >/dev/null; then
     sudo pacman -S --needed --noconfirm "${PACMAN_PKGS[@]}"
   fi
   ok "packages present"
+elif command -v zypper >/dev/null; then
+  # openSUSE Leap 15.x: /usr/bin/python3 is still 3.6 (grave needs 3.8+) and
+  # plain `nodejs` is too old for T3 Code, so pull the versioned packages and
+  # point PYTHON_BIN at the 3.11 interpreter below. ttyd is fetched after.
+  # Check zypper before apt-get: older Leap releases can ship an apt-get
+  # compatibility frontend which is not Debian's package manager.
+  sudo zypper --non-interactive install --no-recommends git tmux curl jq \
+    python311 python311-Pillow python311-cryptography docker docker-compose \
+    nodejs22 npm22 nftables sensors \
+    || skip "some packages failed — fix names for your distro and rerun"
+  ok "packages present"
 elif command -v apt-get >/dev/null; then
   # non-fatal: headless re-raise (#89) has no password for out-of-scope sudo,
   # and the install below already tolerates failure the same way
@@ -348,15 +359,6 @@ elif command -v dnf >/dev/null; then
     fi
   fi
 
-  ok "packages present"
-elif command -v zypper >/dev/null; then
-  # openSUSE Leap 15.x: /usr/bin/python3 is still 3.6 (grave needs 3.8+) and
-  # plain `nodejs` is too old for T3 Code, so pull the versioned packages and
-  # point PYTHON_BIN at the 3.11 interpreter below. ttyd is fetched after.
-  sudo zypper --non-interactive install --no-recommends git tmux curl jq \
-    python311 python311-Pillow python311-cryptography docker docker-compose \
-    nodejs22 npm22 nftables sensors \
-    || skip "some packages failed — fix names for your distro and rerun"
   ok "packages present"
 else
   skip "unknown package manager — install git tmux curl jq python3 docker nodejs npm manually"
