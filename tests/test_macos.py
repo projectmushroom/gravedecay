@@ -391,6 +391,8 @@ class MacosContractTests(unittest.TestCase):
             env = dict(os.environ, HOME=str(tmp_path), PATH=f"{fake}:/usr/bin:/bin", GRAVE_ROOT=str(root))
             src = root / "repos/gravedecay"; (src / ".git").mkdir(parents=True); (src / "dashboard").mkdir()
             (src / "dashboard/gravedecay.py").write_text("code"); (root / "scripts/gravedecay.py").write_text("code")
+            shutil.copy(ROOT / "dashboard/benchmark.py", root / "scripts/benchmark.py")
+            shutil.copy(ROOT / "dashboard/benchmark.py", src / "dashboard/benchmark.py")
             shutil.copy(ROOT / "macos/grave", root / "scripts/grave"); (root / "scripts/grave").chmod(0o700)
             (root / "config/components").write_text("dashboard=1\nnetwork=0\nserve=1\nkeepawake=1\n")
             run_status = lambda *extra: subprocess.run(

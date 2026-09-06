@@ -32,6 +32,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -55,11 +56,11 @@ MACOS_AGENTS = MACOS and os.environ.get("GRAVEDECAY_MACOS_AGENTS") == "1"
 # POST still passes the exact-LoginName ALLOWED_USERS gate in do_POST.
 MACOS_GETS = frozenset((
     "/", "/healthz", "/api/state", "/api/t3-activity", "/api/v1/summary", "/api/admin/releases",
-    "/api/admin/update-status", "/manifest.webmanifest", "/sw.js",
+    "/api/admin/update-status", "/api/admin/benchmark", "/manifest.webmanifest", "/sw.js",
     "/offline.html", "/apple-touch-icon.png", "/icon-180.png",
     "/icon-192.png", "/icon-512.png",
 ) + (("/api/action-stream",) if MACOS_AGENTS else ()))
-MACOS_POSTS = frozenset(("/api/settings", "/api/admin/upgrade")
+MACOS_POSTS = frozenset(("/api/settings", "/api/admin/upgrade", "/api/admin/benchmark")
                         + (("/api/action", "/api/session-kill", "/api/session-capture")
                            if MACOS_AGENTS else ()))
 PORTABLE = PLATFORM in ("container", "portable")
@@ -116,7 +117,7 @@ SETTINGS_PATH = os.path.join(GRAVE_ROOT, "config", "gravedecay-settings.json")
 DEFAULT_SETTINGS = {
     "panel_order": ["prs", "linear", "ci", "t3activity", "tmux", "sessions", "usage",
                     "inbox", "repos",
-                    "stats", "actions", "services", "docker", "journal"],
+                    "stats", "benchmark", "actions", "services", "docker", "journal"],
     "hidden_panels": [],   # panel ids to hide
     "hidden_apps": [],     # launcher tile names to hide
     "newtab_apps": [],     # tile names that open in a new tab instead of in-PWA
@@ -248,6 +249,21 @@ def macos_repo_root(value=None):
 
 GRAVE = os.environ.get("GRAVEDECAY_GRAVE", "/usr/local/bin/grave")
 MACOS_GRAVE = os.path.join(GRAVE_ROOT, "scripts", "grave")
+
+
+def benchmark(command, mode="quick"):
+    """One runner shared by the CLI and dashboard; no shell or supplied paths."""
+    args = [sys.executable, os.path.join(os.path.dirname(__file__), "benchmark.py"),
+            "--root", GRAVE_ROOT, command, "--mode", mode]
+    try:
+        p = subprocess.run(args, capture_output=True, text=True, timeout=5)
+        if p.returncode:
+            return 409, {"ok": False, "output": p.stderr.strip() or "Benchmark unavailable"}
+        return 200, json.loads(p.stdout)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return 503, {"ok": False, "output": "Benchmark runner unavailable; update gravedecay"}
+
+
 # On a managed-toolchain host (SteamOS) t3 shares grave's durable bin dir
 # (~/.local/bin), but package hosts diverge: grave installs to /usr/local/bin
 # while npm puts t3 in /usr/bin, so grave's sibling alone is not enough.
@@ -2449,6 +2465,14 @@ class Handler(BaseHTTPRequestHandler):
             }))
         elif p == "/api/state":
             self._send(200, json.dumps(state(self.headers)))
+        elif p == "/api/admin/benchmark":
+            if PORTABLE:
+                self._send(404, '{"error":"unavailable in portable workspace"}')
+                return
+            if self._forbidden():
+                return
+            code, result = benchmark("status")
+            self._send(code, json.dumps(result))
         elif p == "/api/t3-activity":
             if self._activity_forbidden():
                 return
@@ -2570,6 +2594,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not isinstance(data, dict):
             self._send(400, json.dumps({"ok": False, "output": "JSON object required"}))
+            return
+        if p == "/api/admin/benchmark":
+            if PORTABLE:
+                self._send(404, '{"error":"unavailable in portable workspace"}')
+                return
+            if data not in ({"action": "cancel"}, *({"action": "start", "mode": m}
+                                                    for m in ("quick", "capacity", "sustained"))):
+                self._send(400, '{"output":"Choose quick, capacity or sustained, or cancel"}')
+                return
+            code, result = benchmark(data["action"], data.get("mode", "quick"))
+            self._send(code, json.dumps(result))
             return
         if p == "/api/fs":
             self._send(200, json.dumps(fs_op(data)))

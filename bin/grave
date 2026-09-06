@@ -1232,6 +1232,7 @@ cmd_doctor() { # grave doctor [--no-page]
   [[ "${1:-}" == "--no-page" ]] && no_page=1
   FAILURES=0
   hdr "grave doctor"
+  check "development benchmark ready" python3 "$GRAVE_ROOT/scripts/benchmark.py" --root "$GRAVE_ROOT" check
   if [[ -f "$GRAVE_ROOT/config/leap42-compat" ]]; then
     check "Leap 42.3 compatibility runtime" "$GRAVE_ROOT/scripts/leap42-check"
   fi
@@ -2275,6 +2276,7 @@ grave — gravedecay appliance control 🪦
 
   grave status               overview: services, containers, agents, system
   grave doctor               verify every platform invariant
+  grave bench [quick|capacity|sustained|status|cancel]  benchmark this dev box
   grave users [status|list|add|inspect|disable|remove]
   grave projects [list|grant|revoke|git-config]
   grave integrations [status|github-login|github-logout|linear-set|linear-logout]
@@ -2373,6 +2375,7 @@ case "${1:-help}" in
   logs)       shift; cmd_logs "$@" ;;
   notify)     shift || true; cmd_notify "$@" ;;
   digest)     shift || true; cmd_digest "$@" ;;
+  bench)      shift; exec python3 "$GRAVE_ROOT/scripts/benchmark.py" --root "$GRAVE_ROOT" "$@" ;;
   doctor)     shift || true; cmd_doctor "$@" ;;
   users)      shift || true; exec sudo -n "$0" __users "$@" ;;
   projects)
