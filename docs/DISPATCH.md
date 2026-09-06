@@ -5,6 +5,8 @@ Linear issue, and tap **Work on this**. Choose a repository and either Codex
 or Claude, then **Start work**. The selected CLI must already be installed
 and authenticated as the appliance owner. Configure the Linear API key in
 settings first. Re-run `raise.sh` after upgrading to install the task runner.
+The dashboard receives the owner's HOME and includes `~/.local/bin` in its
+service PATH, matching the agent tools used by T3.
 
 The dashboard fetches the issue title, description, and URL from Linear and
 starts an interactive agent in a new Git worktree. The source checkout's

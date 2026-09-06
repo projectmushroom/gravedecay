@@ -19,7 +19,8 @@ Environment=GRAVEDECAY_PORT=@DASH_PORT@
 # The dashboard shells out to docker/sensors/tmux/git — systemd gives a service
 # a minimal PATH, so prepend the durable toolchain (@TOOLPATH@ = Homebrew +
 # rootless-docker bins under $HOME; empty on package-manager hosts).
-Environment=PATH=@TOOLPATH@/usr/local/bin:/usr/bin:/bin
+Environment=PATH=@TOOLPATH@@HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=@HOME@
 # Rootless Docker lives on a per-user socket; empty on a system-docker host.
 Environment=DOCKER_HOST=@DOCKER_HOST@
 # Which systemd units the System tab reports. Rootless docker is a --user unit,

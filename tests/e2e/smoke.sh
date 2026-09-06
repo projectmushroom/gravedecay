@@ -67,6 +67,8 @@ echo "=== phase 1: first raise (human-at-keyboard sudo) ==="
 # bootstrap.sh pre-provisions the account and temporary CI sudo entitlement.
 docker exec -w /repo "$CTR" bash -c './raise.sh --profile generic --user mole </dev/null'
 docker exec "$CTR" grep -qx mole /srv/dev/config/owner
+docker exec "$CTR" bash -c 'systemctl show -p Environment gravedecay | grep -q "PATH=[^ ]*/home/mole/.local/bin:"'
+docker exec "$CTR" bash -c 'systemctl show -p Environment gravedecay | grep -q "HOME=/home/mole"'
 if docker exec -w /repo "$CTR" bash -c './raise.sh --user grave </dev/null'; then
   echo "FATAL: re-raise accepted a different owner without migration"
   exit 1
