@@ -38,7 +38,10 @@ async function renderLongMobileRecords(page) {
   await page.evaluate(async () => {
     const state = await (await fetch('api/state')).json();
     state.tmux = [
-      { name: 'claude-yolo-with-a-deliberately-long-session-name', windows: 12, attached: 'detached' },
+      { name: 'claude-yolo-with-a-deliberately-long-session-name', windows: 12, attached: 'detached',
+        worktree: { repo: 'a-deliberately-long-repository-name',
+          branch: 'agent/a-deliberately-long-isolated-feature-branch',
+          dir: '/srv/dev/worktrees/a-deliberately-long-repository-name/session' } },
     ];
     state.repos = [
       { name: 'wecollect4you-with-a-long-name', branch: 'codex/aggregate-wec-68-prs-95-104', dirty: 1,

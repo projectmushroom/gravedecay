@@ -545,6 +545,22 @@ def collect_docker():
     return cached("macos-docker", 15, fetch) if MACOS else fetch()
 
 
+def agent_worktree_metadata(name):
+    """Owner/workspace session metadata; never included in the public summary."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,50}", name):
+        return {}
+    try:
+        with open(os.path.join(GRAVE_ROOT, "agents", name, "meta.json")) as f:
+            meta = json.load(f)
+        if not isinstance(meta, dict) or meta.get("worktree") is not True:
+            return {}
+        if not all(isinstance(meta.get(key), str) for key in ("repo", "branch", "dir")):
+            return {}
+        return {"worktree": {key: meta.get(key) for key in ("repo", "branch", "dir", "pruned")}}
+    except (OSError, ValueError):
+        return {}
+
+
 def collect_tmux():
     rc, out, _ = sh(["tmux", "-L", TMUX_SOCKET, "list-sessions", "-F",
                      "#{session_name}\t#{session_windows}\t#{?session_attached,attached,detached}\t#{t:session_activity}"])
@@ -1949,6 +1965,15 @@ def t3_activity():
 
 
 def state(headers):
+    result = _state(headers)
+    viewer = headers.get("Tailscale-User-Login")
+    if viewer is None or viewer in ALLOWED_USERS:
+        for row in result.get("tmux", []) + result.get("agent_history", []):
+            row.update(agent_worktree_metadata(row["name"]))
+    return result
+
+
+def _state(headers):
     if MACOS:
         # No T3, terminal, Docker management, privileged controls, or Linux
         # data on Mac.

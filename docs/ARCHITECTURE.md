@@ -23,6 +23,43 @@ The macOS companion is separate and user-scoped: its fixed
 reruns `macos/install.sh`, never `raise.sh`; it preserves its two loopback
 agents/Serve selection and does not include T3 or the Linux control plane.
 
+## Isolated agent checkouts
+
+On the Linux appliance, `grave agents new <name> --worktree --repo <repo>
+[--branch <new-branch>]` creates a branch from the source checkout's committed
+HEAD and starts a persistent shell in `$GRAVE_ROOT/worktrees/<repo>/<name>`.
+`--repo` implies `--worktree`; the default branch is `agent/<name>`. The repo
+must be a primary checkout at `$GRAVE_ROOT/repos/<repo>` with at least one
+commit. Existing branches, session histories, and worktree paths are refused.
+Uncommitted source-checkout changes are not copied. The existing
+`grave agents new <name> [dir]` form still starts a shared-directory session.
+
+Session metadata records the source repo, starting commit, initial branch,
+and checkout path. The dashboard's live sessions and archive show that repo
+and initial branch, with the path available on hover. This metadata follows
+the existing owner/workspace authorization and is absent from the public
+summary. A manually changed branch can differ from the recorded initial branch.
+
+`grave agents kill <name>` stops exactly that session and retains its worktree.
+`grave agents resume <name>` reuses the recorded worktree and metadata; a missing
+or invalid worktree fails instead of falling back to the shared repository.
+Lifecycle commands serialize through a per-root lock. They run as the invoking
+Unix identity and introduce no root helper or shared collaborator checkout.
+The macOS companion's separate CLI does not implement these commands.
+
+`grave agents prune` is an explicit sweep. It retains live sessions, directories
+used by other panes on the agent socket, modified/staged/untracked/ignored files,
+and commits not merged into the source checkout's current HEAD or not reachable
+from a locally known remote ref. No fetch is performed. An unchanged checkout
+at its recorded starting commit is also eligible. Removal uses Git's non-forced
+`worktree remove` (Git 2.17+); older Git retains the checkout with an explanation.
+Branches and session history always remain. Pruned sessions cannot be resumed;
+use a new session name. There is no automatic deletion on a timer or session kill.
+
+`grave doctor` checks managed worktree storage is writable and each unpruned
+session points to a worktree belonging to its recorded repository. Backups also
+save worktree files and session metadata; see [RECOVERY.md](RECOVERY.md).
+
 ## Portable Docker work-plane
 
 `docker/portable` runs T3, Claude/Codex CLIs, ttyd/tmux, and the dashboard as
@@ -70,6 +107,7 @@ Everything lives under `$GRAVE_ROOT` (default `/srv/dev`):
 
 ```
 repos/     all git checkouts (~/Projects symlinks here)
+worktrees/ isolated per-agent checkouts; branches share their source repo's Git objects
 agents/    per-agent state: t3code server state, tmux session logs + meta.json
            (dir a session lived in — outlive the session for history/resume)
 docker/    compose stacks (core, browsers, yours)
