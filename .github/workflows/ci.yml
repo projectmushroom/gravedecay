@@ -38,9 +38,10 @@ jobs:
       - name: Verify Connect credentials across Unix users
         run: sudo "$(command -v python)" -m unittest discover -s tests -p test_connect_runtime.py -v
       - run: docker compose -f docker/portable/compose.yaml config --quiet
-      - run: python -m py_compile dashboard/gravedecay.py dashboard/gateway.py bin/grave-workspaces
+      - run: python -m py_compile dashboard/gravedecay.py dashboard/gateway.py bin/grave-workspaces libexec/agent-task.py
       - run: bash -n raise.sh
       - run: bash -n bin/grave
+      - run: bash -n bin/webterm
       - name: Validate legacy bootstrap scripts
         run: |
           bash -n compat/leap42/install.sh

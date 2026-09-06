@@ -651,6 +651,18 @@ agent_worktrees_prune() {
   done
 }
 
+agent_tasks_check() {
+  local meta task_file
+  for meta in "$GRAVE_ROOT"/agents/*/meta.json; do
+    [[ -f "$meta" ]] || continue
+    jq -e '.dispatch != null' "$meta" >/dev/null || continue
+    task_file="$(dirname "$meta")/task.json"
+    python3 "$GRAVE_ROOT/scripts/agent-task.py" check "$task_file" || return 1
+    jq -e --slurpfile task "$task_file" \
+      '.dispatch == {agent:$task[0].agent,issue:($task[0].issue | {id,title,url})}' "$meta" >/dev/null || return 1
+  done
+}
+
 cmd_agents() {
   case "${1:-list}" in
     new|kill|resume|prune)
@@ -675,12 +687,13 @@ cmd_agents_unlocked() {
       [[ "$name" =~ ^[A-Za-z0-9_-]+$ ]] || { bad "session name must be letters, digits, '-' or '_'"; exit 1; }
       [[ "$name" != t3code && ${#name} -le 50 ]] || { bad "session name is reserved or longer than 50 characters"; return 1; }
       shift
-      local dir="" repo="" branch="" worktree=0 base="" meta tmp
+      local dir="" repo="" branch="" worktree=0 base="" meta tmp task=""
       while (($#)); do
         case "$1" in
           --worktree) worktree=1 ;;
           --repo) shift; repo="${1:?--repo requires a repository name}"; worktree=1 ;;
           --branch) shift; branch="${1:?--branch requires a new branch name}" ;;
+          --task) shift; task="${1:?--task requires a private issue task JSON file}" ;;
           -*) bad "unknown agents new option: $1"; return 1 ;;
           *) [[ -z "$dir" ]] || { bad "only one working directory is allowed"; return 1; }; dir="$1" ;;
         esac
@@ -688,6 +701,12 @@ cmd_agents_unlocked() {
       done
       [[ ! -L "$GRAVE_ROOT/agents" && ! -L "$GRAVE_ROOT/agents/$name" ]] || { bad "session directory must not be a symlink"; return 1; }
       meta="$GRAVE_ROOT/agents/$name/meta.json"
+      if [[ -n "$task" ]]; then
+        [[ $worktree == 1 && -n "$repo" && ! -e "$GRAVE_ROOT/agents/$name" ]] || {
+          bad "--task requires --repo and a new session name"; return 1;
+        }
+        python3 "$GRAVE_ROOT/scripts/agent-task.py" validate "$task" || return 1
+      fi
       if tmuxa has-session -t "=$name" 2>/dev/null; then bad "session '$name' already exists"; return 1; fi
       if (( worktree )); then
         [[ -z "$dir" && "$repo" =~ ^[A-Za-z0-9_-][A-Za-z0-9_.-]*$ ]] || {
@@ -725,7 +744,16 @@ cmd_agents_unlocked() {
           '{dir:$dir,repo:$repo,branch:$branch,base:$base,created:$created,worktree:true}' >"$tmp"
         mv "$tmp" "$meta"
       fi
-      tmuxa -f "$TMUX_CONF" new-session -d -s "$name" -c "$dir"
+      if [[ -n "$task" ]]; then
+        chmod 700 "$GRAVE_ROOT/agents/$name"
+        install -m 600 "$task" "$GRAVE_ROOT/agents/$name/task.json"
+        tmp=$(mktemp "$meta.XXXXXX")
+        jq --slurpfile task "$GRAVE_ROOT/agents/$name/task.json" \
+          '.dispatch = {agent:$task[0].agent,issue:($task[0].issue | {id,title,url})}' "$meta" >"$tmp"
+        mv "$tmp" "$meta"
+      fi
+      local pane
+      pane=$(tmuxa -f "$TMUX_CONF" new-session -d -P -F '#{pane_id}' -s "$name" -c "$dir")
       # Record the working dir so `agents resume` (and the dashboard's ▶
       # button) can bring a dead session back where it lived (#110).
       if ! jq -e '.worktree == true' "$meta" >/dev/null 2>&1; then
@@ -736,7 +764,15 @@ cmd_agents_unlocked() {
       # double-escaped the percents and logged a literal filename, never a date.
       local logfile="$GRAVE_ROOT/agents/$name/session-$(date +%Y%m%d).log"
       local quoted_log; printf -v quoted_log '%q' "$logfile"
-      tmuxa pipe-pane -t "=$name" -o "cat >> $quoted_log" 2>/dev/null || true
+      tmuxa pipe-pane -t "$pane" -o "cat >> $quoted_log" 2>/dev/null || true
+      if [[ -n "$task" ]]; then
+        # Respawn directly instead of typing issue text into a shell. Python
+        # reads the private JSON and passes one literal prompt argument.
+        local runner
+        runner=$(python3 -c 'import shlex,sys; print(" ".join(map(shlex.quote,sys.argv[1:])))' \
+          python3 "$GRAVE_ROOT/scripts/agent-task.py" run "$GRAVE_ROOT/agents/$name/task.json")
+        tmuxa respawn-pane -k -t "$pane" "$runner; exec bash -l"
+      fi
       ok "session '$name' created in $dir (attach: grave agents attach $name)" ;;
     attach)
       exec tmux -L "$TMUX_SOCKET" attach -t "${1:?usage: grave agents attach <name>}" ;;
@@ -1399,6 +1435,8 @@ cmd_doctor() { # grave doctor [--no-page]
   FAILURES=0
   hdr "grave doctor"
   check "managed agent worktrees valid and writable" agent_worktrees_check
+  check "issue agent task runner installed" test -r "$GRAVE_ROOT/scripts/agent-task.py"
+  check "issue tasks private and consistent with session metadata" agent_tasks_check
   check "development benchmark ready" python3 "$GRAVE_ROOT/scripts/benchmark.py" --root "$GRAVE_ROOT" check
   if [[ -f "$GRAVE_ROOT/config/leap42-compat" ]]; then
     check "Leap 42.3 compatibility runtime" "$GRAVE_ROOT/scripts/leap42-check"
@@ -2507,6 +2545,7 @@ grave — gravedecay appliance control 🪦
   grave agents               list agent tmux sessions
   grave agents new <n> [dir]    create persistent agent session
   grave agents new <n> --repo <r> [--branch <b>]  start in an isolated worktree
+  grave agents new <n> --repo <r> --task <json>  start Codex/Claude on a saved issue
   grave agents prune           remove clean, idle, merged/pushed worktrees
   grave agents attach <n>       attach (detach: Ctrl-b d)
   grave agents kill <n>         kill session

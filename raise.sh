@@ -655,6 +655,7 @@ fi
 step "gravedecay"
 install -m 755 "$REPO_DIR/dashboard/gravedecay.py" "$GRAVE_ROOT/scripts/gravedecay.py"
 install -m 755 "$REPO_DIR/dashboard/benchmark.py" "$GRAVE_ROOT/scripts/benchmark.py"
+install -m 755 "$REPO_DIR/libexec/agent-task.py" "$GRAVE_ROOT/scripts/agent-task.py"
 install -m 755 "$REPO_DIR/dashboard/gateway.py" "$GRAVE_ROOT/scripts/gateway.py"
 install -m 755 "$REPO_DIR/libexec/t3-connect-diagnose.py" "$GRAVE_ROOT/scripts/t3-connect-diagnose.py"
 install -d -m 755 "$GRAVE_ROOT/scripts/dashboard-static"
@@ -662,6 +663,7 @@ install -m 644 "$REPO_DIR/dashboard/static/"* "$GRAVE_ROOT/scripts/dashboard-sta
 install -m 644 "$REPO_DIR/assets/gravedecay.png" "$GRAVE_ROOT/config/gravedecay.png"
 sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
     -e "s|@DASH_PORT@|$DASH_PORT|g" -e "s|@ALLOWED_USERS@|$ALLOWED_USERS|g" \
+    -e "s|@HOME@|$HOME_DIR|g" \
     -e "s|@TOOLPATH@|$TOOLPATH|g" -e "s|@DOCKER_HOST@|$DOCKER_HOSTV|g" \
     -e "s|@UNITS@|$UNITS|g" -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" \
     -e "s|@PYTHON@|$PYTHON_BIN|g" -e "s|@T3@|$T3_BIN|g" \

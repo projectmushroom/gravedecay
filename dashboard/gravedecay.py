@@ -34,6 +34,7 @@ import socket
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -556,7 +557,22 @@ def agent_worktree_metadata(name):
             return {}
         if not all(isinstance(meta.get(key), str) for key in ("repo", "branch", "dir")):
             return {}
-        return {"worktree": {key: meta.get(key) for key in ("repo", "branch", "dir", "pruned")}}
+        result = {"worktree": {key: meta.get(key) for key in ("repo", "branch", "dir", "pruned")}}
+        dispatch = meta.get("dispatch")
+        if isinstance(dispatch, dict) and isinstance(dispatch.get("issue"), dict):
+            issue = dispatch["issue"]
+            if all(isinstance(issue.get(k), str) for k in ("id", "title", "url")) \
+                    and re.fullmatch(r"https://linear\.app/[^\s\x00-\x1f]+", issue["url"]):
+                result["dispatch"] = {"agent": dispatch.get("agent"), "issue": issue,
+                                      "status": "session created"}
+                try:
+                    with open(os.path.join(GRAVE_ROOT, "agents", name, "task-result.json")) as f:
+                        status = json.load(f)
+                    if status.get("status") in ("running", "exited"):
+                        result["dispatch"].update({k: status.get(k) for k in ("status", "exit_code")})
+                except (OSError, ValueError, AttributeError):
+                    pass
+        return result
     except (OSError, ValueError):
         return {}
 
@@ -1257,7 +1273,125 @@ def linear_gql(payload):
         "https://api.linear.app/graphql", data=json.dumps(payload).encode(),
         headers={"Authorization": linear_key() or "", "Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=10) as r:
-        return json.load(r)["data"]
+        response = json.load(r)
+    if response.get("errors") or not isinstance(response.get("data"), dict):
+        raise ValueError("Linear query failed")
+    return response["data"]
+
+
+DISPATCH_LOCK = threading.Lock()
+
+
+def dispatch_supported():
+    # Workspace backends must never invoke the owner's global grave.conf.
+    return not (MACOS or PORTABLE or REQUIRE_BACKEND_TOKEN or TMUX_SOCKET != "agents")
+
+
+def dispatch_capabilities():
+    return {"available": dispatch_supported() and os.path.isfile(os.path.join(GRAVE_ROOT, "scripts", "agent-task.py")),
+            "agents": [a for a in ("codex", "claude") if shutil.which(a)]}
+
+
+def dispatch_repo(name):
+    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9_.-]{0,99}", name):
+        raise ValueError("choose a repository from this appliance")
+    path = os.path.join(GRAVE_ROOT, "repos", name)
+    if os.path.realpath(path) != path or not os.path.isdir(os.path.join(path, ".git")) \
+            or os.path.islink(os.path.join(path, ".git")):
+        raise ValueError("repository must be a primary checkout under this appliance's repos directory")
+    return path
+
+
+def dispatch_linear(data):
+    if not dispatch_supported():
+        return 404, {"ok": False, "output": "dispatch is available on the single-owner Linux appliance"}
+    identifier, repo, agent = (data.get(k) for k in ("issue", "repo", "agent"))
+    if set(data) != {"issue", "repo", "agent"} or not isinstance(identifier, str) \
+            or not re.fullmatch(r"[A-Z][A-Z0-9]{0,15}-[1-9][0-9]{0,9}", identifier) \
+            or agent not in ("codex", "claude"):
+        return 400, {"ok": False, "output": "choose a Linear issue, repository, and agent"}
+    try:
+        dispatch_repo(repo)
+    except ValueError as error:
+        return 400, {"ok": False, "output": str(error)}
+    if not DISPATCH_LOCK.acquire(blocking=False):
+        return 409, {"ok": False, "output": "another issue is being started; try again shortly"}
+    try:
+        if not linear_key():
+            return 409, {"ok": False, "output": "configure Linear in settings first"}
+        # Fetch trusted API data; the browser cannot supply a prompt or command.
+        try:
+            issue = linear_gql({"query": """query($id: String!) {
+                issue(id: $id) { id identifier title description url }
+            }""", "variables": {"id": identifier}}).get("issue")
+            if not isinstance(issue, dict) or issue.get("identifier") != identifier \
+                    or not isinstance(issue.get("id"), str):
+                raise ValueError("missing issue")
+        except Exception:
+            return 502, {"ok": False, "output": "could not fetch this issue from Linear; nothing started"}
+        suffix = hashlib.sha256((issue["id"] + ":" + repo).encode()).hexdigest()[:10]
+        name = "linear-" + identifier.lower() + "-" + suffix
+        session = {"name": name, "url": "/term/?arg=" + name}
+        directory = os.path.join(GRAVE_ROOT, "agents", name)
+        if os.path.lexists(directory):
+            meta = agent_worktree_metadata(name)
+            if meta.get("dispatch", {}).get("issue", {}).get("id") == identifier \
+                    and meta.get("worktree", {}).get("repo") == repo:
+                if meta["worktree"].get("pruned"):
+                    return 409, {"ok": False, "output": "this session's checkout was pruned; recover it or start a new named task from the terminal"}
+                return 200, {"ok": True, "existing": True, "session": session,
+                             "output": "session already recorded; its work is retained"}
+            return 409, {"ok": False, "output": "session path already exists; inspect it before retrying"}
+        caps = dispatch_capabilities()
+        if not caps["available"] or agent not in caps["agents"]:
+            return 409, {"ok": False, "output": "install the task runner and selected CLI, then sign in as the appliance owner"}
+        task = {"agent": agent, "issue": {"id": identifier, "title": issue.get("title"),
+                "description": issue.get("description") or "", "url": issue.get("url")}}
+        # A private file keeps issue content out of the command string. grave
+        # validates it before creating any worktree and copies it into the session.
+        with tempfile.TemporaryDirectory(prefix="grave-dispatch-") as tmp:
+            task_path = os.path.join(tmp, "task.json")
+            with open(task_path, "w") as f:
+                json.dump(task, f)
+            os.chmod(task_path, 0o600)
+            rc, out, err = sh([GRAVE, "agents", "new", name, "--repo", repo,
+                               "--task", task_path], timeout=30)
+        if rc:
+            return 502, {"ok": False, "output": "agent launch failed; any created worktree is retained. "
+                         + ANSI.sub("", out + err).strip()[:1500]}
+        return 201, {"ok": True, "existing": False, "session": session,
+                     "output": "session started; open it for login or permission prompts"}
+    except OSError:
+        return 500, {"ok": False, "output": "could not save the issue task; check appliance storage"}
+    finally:
+        DISPATCH_LOCK.release()
+
+
+def dispatch_pr(name):
+    meta = agent_worktree_metadata(name)
+    if "dispatch" not in meta:
+        return None
+    worktree = meta["worktree"]
+    try:
+        path = dispatch_repo(worktree["repo"])
+    except ValueError:
+        return None
+    def fetch():
+        rc, origin, _ = sh(["git", "-C", path, "remote", "get-url", "origin"], timeout=3)
+        slug = github_remote(origin) if not rc else None
+        if not slug:
+            return None
+        rc, out, _ = sh(["gh", "pr", "list", "--repo", slug, "--head", worktree["branch"],
+                         "--state", "all", "--limit", "1", "--json", "number,url,state"], timeout=5)
+        try:
+            rows = json.loads(out) if not rc else []
+            pr = rows[0] if rows else None
+            if pr and re.fullmatch(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[0-9]+", pr.get("url", "")):
+                return pr
+        except (ValueError, TypeError, KeyError):
+            pass
+        return None
+    return cached("dispatch-pr:" + name, 120, fetch)
 
 
 def linear_meta():
@@ -1968,6 +2102,7 @@ def state(headers):
     result = _state(headers)
     viewer = headers.get("Tailscale-User-Login")
     if viewer is None or viewer in ALLOWED_USERS:
+        result["dispatch"] = dispatch_capabilities()
         for row in result.get("tmux", []) + result.get("agent_history", []):
             row.update(agent_worktree_metadata(row["name"]))
     return result
@@ -2502,6 +2637,17 @@ class Handler(BaseHTTPRequestHandler):
             if self._activity_forbidden():
                 return
             self._send(200, json.dumps(t3_activity()))
+        elif p == "/api/dispatch-pr":
+            if self._forbidden():
+                return
+            if not dispatch_supported():
+                self._send(404, '{"error":"dispatch unavailable"}')
+                return
+            name = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("name", [""])[0]
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,50}", name):
+                self._send(400, '{"error":"invalid session"}')
+                return
+            self._send(200, json.dumps({"pr": dispatch_pr(name)}))
         elif p == "/api/v1/summary":
             self._send(200, json.dumps(summary()))
         elif p == "/api/admin/releases":
@@ -2613,6 +2759,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get("Content-Length", 0))
+            if p == "/api/linear-dispatch" and not 0 <= length <= 2048:
+                self._send(413, '{"output":"dispatch request too large"}')
+                return
             data = json.loads(self.rfile.read(length)) if length else {}
         except ValueError:
             self._send(400, json.dumps({"ok": False, "output": "bad payload"}))
@@ -2679,6 +2828,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, json.dumps({"ok": False, "output": "title required"}))
                 return
             self._send(200, json.dumps(linear_create(title)))
+        elif p == "/api/linear-dispatch":
+            code, result = dispatch_linear(data)
+            self._send(code, json.dumps(result))
         elif p == "/api/push-subscribe":
             self._send(200, json.dumps(push_subscribe(data)))
         elif p == "/api/push-unsubscribe":
