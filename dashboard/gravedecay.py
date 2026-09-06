@@ -11,7 +11,7 @@
 #   GRAVEDECAY_PORT            default 4712
 #   GRAVEDECAY_ALLOWED_USERS   comma-separated Tailscale logins allowed to POST
 #                             actions (empty = tailnet viewers are read-only;
-#                             localhost is always trusted)
+#                             local maintenance requires a private token)
 #   GRAVEDECAY_UNITS           comma-separated systemd units to display
 #   GRAVEDECAY_APPS            launcher tiles, "label=url;label=url".
 #                             gravedecay is the appliance's single entry point:
@@ -31,6 +31,7 @@ import os
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import threading
@@ -56,7 +57,7 @@ MACOS_AGENTS = MACOS and os.environ.get("GRAVEDECAY_MACOS_AGENTS") == "1"
 # t3-pair), and session kill/scrollback for the tmux -L agents panel — every
 # POST still passes the exact-LoginName ALLOWED_USERS gate in do_POST.
 MACOS_GETS = frozenset((
-    "/", "/healthz", "/api/state", "/api/t3-activity", "/api/v1/summary", "/api/admin/releases",
+    "/", "/healthz", "/api/auth-check", "/api/state", "/api/t3-activity", "/api/v1/summary", "/api/admin/releases",
     "/api/admin/update-status", "/api/admin/benchmark", "/manifest.webmanifest", "/sw.js",
     "/offline.html", "/apple-touch-icon.png", "/icon-180.png",
     "/icon-192.png", "/icon-512.png",
@@ -96,14 +97,52 @@ FILES_ROOT = os.path.realpath(GRAVE_ROOT)
 FILES_DENY = (os.path.join(FILES_ROOT, "config", "secrets"),)
 MAX_UPLOAD = 2 * 1024 * 1024 * 1024   # 2 GiB per uploaded file
 # Tailscale serve injects Tailscale-User-Login for tailnet requests; POSTs
-# (actions) are restricted to these identities. Requests with no header can
-# only come from localhost (127.0.0.1 bind) and are trusted.
+# (actions) are restricted to these identities. Tagged devices have no login
+# header, so absence is never proof of a local request.
 ALLOWED_USERS = set(filter(None, os.environ.get("GRAVEDECAY_ALLOWED_USERS", "").split(",")))
 # Set only on multi-user backends by root-owned EnvironmentFile= entries.  A
 # loopback TCP client cannot forge this header; /healthz remains the sole
 # unauthenticated maintenance endpoint.
 BACKEND_TOKEN = os.environ.get("GRAVEDECAY_BACKEND_TOKEN", "")
 REQUIRE_BACKEND_TOKEN = os.environ.get("GRAVEDECAY_REQUIRE_BACKEND_TOKEN") == "1"
+
+LOCAL_TOKEN_PATH = os.path.join(GRAVE_ROOT, "config", "secrets", "dashboard-local-token")
+
+
+def local_token(create=False):
+    """Private capability shared with owner maintenance commands, never the UI."""
+    if create:
+        os.makedirs(os.path.dirname(LOCAL_TOKEN_PATH), mode=0o700, exist_ok=True)
+        try:
+            fd = os.open(LOCAL_TOKEN_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            with os.fdopen(fd, "w") as stream:
+                stream.write(os.urandom(32).hex() + "\n")
+    fd = os.open(LOCAL_TOKEN_PATH, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd) as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise ValueError("dashboard local token must be an owner-private regular file")
+        value = stream.read(66).strip()
+    if not re.fullmatch(r"[0-9a-f]{64}", value):
+        raise ValueError("invalid dashboard local token")
+    return value
+
+
+def owner_request(headers):
+    login = headers.get("Tailscale-User-Login")
+    if login:
+        return login in ALLOWED_USERS
+    supplied = headers.get("X-Grave-Local-Token", "")
+    if not re.fullmatch(r"[0-9a-f]{64}", supplied):
+        return False
+    try:
+        return hmac.compare_digest(supplied, local_token())
+    except (OSError, ValueError):
+        return False
+
 UNITS = [u for u in os.environ.get(
     "GRAVEDECAY_UNITS", "t3code,gravedecay,gravedecay-term,tailscaled,sshd,docker").split(",") if u]
 APPS = [{"name": name.strip(), "url": url.strip()}
@@ -2100,8 +2139,7 @@ def t3_activity():
 
 def state(headers):
     result = _state(headers)
-    viewer = headers.get("Tailscale-User-Login")
-    if viewer is None or viewer in ALLOWED_USERS:
+    if owner_request(headers):
         result["dispatch"] = dispatch_capabilities()
         for row in result.get("tmux", []) + result.get("agent_history", []):
             row.update(agent_worktree_metadata(row["name"]))
@@ -2113,10 +2151,10 @@ def _state(headers):
         # No T3, terminal, Docker management, privileged controls, or Linux
         # data on Mac.
         # Unlike machine vitals, project names, commit subjects and integration
-        # data are owner-private.  Localhost is trusted; a Serve viewer must
+        # data are owner-private. A Serve viewer must
         # exactly match the installer-configured local Tailscale login.
         viewer = headers.get("Tailscale-User-Login")
-        owner = viewer is None or viewer in ALLOWED_USERS
+        owner = owner_request(headers)
         settings = load_settings()
         if not owner:
             # A configured path is part of the local project topology too.
@@ -2153,7 +2191,7 @@ def _state(headers):
         # Deliberately work-plane only: do not read systemd, the host Docker
         # daemon, journald, cgroups, or host hardware from a container.
         viewer = headers.get("Tailscale-User-Login")
-        restricted = viewer is not None and viewer not in ALLOWED_USERS
+        restricted = not owner_request(headers)
         private = {"github": {"login": None, "prs": [], "error": "restricted"},
                    "linear": {"configured": False, "issues": [], "error": "restricted"},
                    "ci": {"rows": [], "error": "restricted"}, "usage": None,
@@ -2170,7 +2208,7 @@ def _state(headers):
                 "github": private["github"], "linear": private["linear"], "ci": private["ci"],
                 "usage": private["usage"], "services": [],
                 "docker": {"error": "not managed by portable workspace", "containers": []},
-                "tmux": collect_tmux(), "torpor": 0, "repos": private["repos"], "journal": [],
+                "tmux": [] if restricted else collect_tmux(), "torpor": 0, "repos": private["repos"], "journal": [],
                 "system": {"uptime_s": 0, "temps": {"cpu": None, "gpu": None,
                            "gpu_mhz": None, "gpu_state": None, "fans": []},
                            "cpu": {"pct": None, "cores": []}, "load": [0, 0, 0], "ncpu": 0,
@@ -2185,6 +2223,29 @@ def _state(headers):
             frozen = f.read().strip() == "1"
     except OSError:
         frozen = False
+    viewer = headers.get("Tailscale-User-Login")
+    if not owner_request(headers):
+        # Read-only tailnet viewer (not in ALLOWED_USERS): serve operational
+        # vitals but withhold owner-private data — open PR titles, the Linear
+        # backlog, agent spend, repo names/commit subjects, CI detail, and journal
+        # error lines are not "status". The file manager and actions are already
+        # gated by _forbidden; this closes the same gap on /api/state (and / boot).
+        return {
+            "host": HOST, "now": time.strftime("%H:%M:%S"), "viewer": viewer,
+            "mode": mode, "boot_mode": boot_mode(), "gamewatch": gamewatch_state(),
+            "keepalive": keepalive_state(),
+            "apps": list(APPS), "settings": load_settings(),
+            "github": {"login": None, "prs": [], "error": "restricted"},
+            "linear": {"configured": False, "issues": [], "error": None},
+            "ci": {"rows": []}, "usage": None,
+            "services": collect_services(), "docker": collect_docker(),
+            "tmux": [], "torpor": len(tmux) if frozen else 0,
+            "repos": [], "journal": [], "system": collect_system(),
+            "backups": {"count": 0, "latest": None},
+            # Delivered pages and session transcripts are owner-private, same
+            # reasoning as the journal/repos withholding above.
+            "inbox": [], "agent_history": [],
+        }
     if mode == "gaming":
         # Minimal footprint while gaming: no remote API calls, no git walks —
         # just vitals. The client also slows its poll to 30 s.
@@ -2202,29 +2263,6 @@ def _state(headers):
             "docker": {"error": "docker stopped (gaming)", "containers": []},
             "journal": [], "backups": {"count": 0, "latest": None},
             "inbox": collect_inbox(), "agent_history": collect_agent_history(),
-        }
-    viewer = headers.get("Tailscale-User-Login")
-    if viewer is not None and viewer not in ALLOWED_USERS:
-        # Read-only tailnet viewer (not in ALLOWED_USERS): serve operational
-        # vitals but withhold owner-private data — open PR titles, the Linear
-        # backlog, agent spend, repo names/commit subjects, CI detail, and journal
-        # error lines are not "status". The file manager and actions are already
-        # gated by _forbidden; this closes the same gap on /api/state (and / boot).
-        return {
-            "host": HOST, "now": time.strftime("%H:%M:%S"), "viewer": viewer,
-            "mode": mode, "boot_mode": boot_mode(), "gamewatch": gamewatch_state(),
-            "keepalive": keepalive_state(),
-            "apps": list(APPS), "settings": load_settings(),
-            "github": {"login": None, "prs": [], "error": "restricted"},
-            "linear": {"configured": False, "issues": [], "error": None},
-            "ci": {"rows": []}, "usage": None,
-            "services": collect_services(), "docker": collect_docker(),
-            "tmux": tmux, "torpor": len(tmux) if frozen else 0,
-            "repos": [], "journal": [], "system": collect_system(),
-            "backups": collect_backups(),
-            # Delivered pages and session transcripts are owner-private, same
-            # reasoning as the journal/repos withholding above.
-            "inbox": [], "agent_history": [],
         }
     gh = collect_github()
     apps = list(APPS)
@@ -2355,12 +2393,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _forbidden(self):
-        """True (and a 403 already sent) if the tailnet viewer isn't allowed.
-        Localhost has no header and is always trusted. Used to gate the file
-        manager's GET reads too — listing the filesystem is sensitive, unlike
-        the read-only status GETs which any tailnet viewer may see."""
+        """Gate owner-private reads and writes, including headerless traffic."""
         viewer = self.headers.get("Tailscale-User-Login")
-        if viewer is not None and viewer not in ALLOWED_USERS:
+        if not owner_request(self.headers):
             self._send(403, json.dumps({
                 "ok": False,
                 "output": f"forbidden for {viewer} — add to GRAVEDECAY_ALLOWED_USERS"}))
@@ -2527,7 +2562,7 @@ class Handler(BaseHTTPRequestHandler):
         """SSE boot console: runs a grave action and streams its output live
         (data: <json line> events, then event: done with the exit code)."""
         viewer = self.headers.get("Tailscale-User-Login")
-        if viewer is not None and viewer not in ALLOWED_USERS:
+        if not owner_request(self.headers):
             self._send(403, json.dumps({"ok": False, "output": f"forbidden for {viewer}"}))
             return
         if self._cross_site():   # actions run on a GET, so <img src=…?action=reboot> is CSRF
@@ -2623,6 +2658,10 @@ class Handler(BaseHTTPRequestHandler):
                 "shell": SHELL_ID,
                 "sw": SW_ID,
             }))
+        elif p == "/api/auth-check":
+            if self._forbidden():
+                return
+            self._send(200, '{"ok":true}')
         elif p == "/api/state":
             self._send(200, json.dumps(state(self.headers)))
         elif p == "/api/admin/benchmark":
@@ -2696,7 +2735,7 @@ class Handler(BaseHTTPRequestHandler):
                                         "text": text}))
         elif p == "/api/push-key":
             # The VAPID public key a device needs to subscribe. Gated like the
-            # file manager: only allowed viewers (and localhost) may enroll.
+            # file manager: only allowed viewers (and authenticated local maintenance) may enroll.
             if self._forbidden():
                 return
             key = vapid_public_b64()
@@ -2745,7 +2784,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, '{"error":"unavailable in macOS companion"}')
             return
         viewer = self.headers.get("Tailscale-User-Login")
-        if viewer is not None and viewer not in ALLOWED_USERS:
+        if not owner_request(self.headers):
             self._send(403, json.dumps({
                 "ok": False,
                 "output": f"forbidden for {viewer} — add to GRAVEDECAY_ALLOWED_USERS"}))
@@ -2923,5 +2962,39 @@ class Handler(BaseHTTPRequestHandler):
 
 
 
+def maintenance_request(path, data=None, authenticated=True):
+    headers = {"Content-Type": "application/json"}
+    if authenticated:
+        headers["X-Grave-Local-Token"] = local_token()
+    if BACKEND_TOKEN:
+        headers["X-Grave-Backend-Token"] = BACKEND_TOKEN
+    request = urllib.request.Request(f"http://127.0.0.1:{PORT}{path}", data=data, headers=headers)
+    return urllib.request.urlopen(request, timeout=15)
+
+
 if __name__ == "__main__":
-    ThreadingHTTPServer((BIND_HOST, PORT), Handler).serve_forever()
+    if sys.argv[1:] == ["--check-auth"]:
+        local_token()
+        try:
+            maintenance_request("/api/auth-check", authenticated=False)
+        except urllib.error.HTTPError as error:
+            if error.code != 403:
+                raise
+        else:
+            sys.exit("headerless dashboard request unexpectedly authorized")
+        with maintenance_request("/api/auth-check") as response:
+            assert response.status == 200
+    elif sys.argv[1:] in (["--local-request", "/api/state"], ["--local-request", "/api/push-send"], ["--local-request", "/api/push-key"]):
+        path = sys.argv[2]
+        data = sys.stdin.buffer.read(65537) if path == "/api/push-send" else None
+        try:
+            with maintenance_request(path, data) as response:
+                sys.stdout.buffer.write(response.read())
+        except urllib.error.HTTPError as error:
+            sys.stdout.buffer.write(error.read())
+            sys.exit(1)
+    elif sys.argv[1:]:
+        sys.exit("unknown dashboard command")
+    else:
+        local_token(create=True)
+        ThreadingHTTPServer((BIND_HOST, PORT), Handler).serve_forever()

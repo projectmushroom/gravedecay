@@ -203,8 +203,11 @@ class PushEndpointTests(unittest.TestCase):
         os.makedirs(os.path.join(cls.tmp.name, "config", "secrets"))
         cls.dash = load_dashboard({
             "GRAVE_ROOT": cls.tmp.name,
+            "GRAVEDECAY_ALLOWED_USERS": "owner@example.test",
             "GRAVE_CONF": os.path.join(cls.tmp.name, "grave.conf"),
         })
+        cls.dash.unit_state = lambda _: {"active": "inactive"}
+        cls.dash.collect_system = lambda: {}
         cls.server = cls.dash.ThreadingHTTPServer(("127.0.0.1", 0), cls.dash.Handler)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -220,11 +223,11 @@ class PushEndpointTests(unittest.TestCase):
     def post(self, path, data):
         return urllib.request.urlopen(urllib.request.Request(
             self.origin + path, data=json.dumps(data).encode(),
-            headers={"Content-Type": "application/json"}, method="POST"), timeout=5)
+            headers={"Content-Type": "application/json", "Tailscale-User-Login": "owner@example.test"}, method="POST"), timeout=5)
 
     @unittest.skipUnless(HAVE_CRYPTO, "python3-cryptography not installed")
     def test_push_key_endpoint_serves_vapid_public(self):
-        with urllib.request.urlopen(self.origin + "/api/push-key", timeout=5) as r:
+        with urllib.request.urlopen(urllib.request.Request(self.origin + "/api/push-key", headers={"Tailscale-User-Login": "owner@example.test"}), timeout=5) as r:
             j = json.load(r)
         self.assertTrue(j["ok"])
         self.assertEqual(len(b64u(j["key"])), 65)
@@ -234,17 +237,17 @@ class PushEndpointTests(unittest.TestCase):
                        {"subscription": VALID_SUB, "label": "test tablet"}) as r:
             j = json.load(r)
         self.assertTrue(j["ok"])
-        with urllib.request.urlopen(self.origin + "/api/state", timeout=5) as r:
+        with urllib.request.urlopen(urllib.request.Request(self.origin + "/api/state", headers={"Tailscale-User-Login": "owner@example.test"}), timeout=15) as r:
             devices = json.load(r)["notify"]["push"]["devices"]
         self.assertEqual([d["label"] for d in devices], ["test tablet"])
         self.assertNotIn("endpoint", devices[0])  # capability URL never leaves the box
         with self.post("/api/push-unsubscribe", {"id": j["id"]}) as r:
             self.assertTrue(json.load(r)["ok"])
-        with urllib.request.urlopen(self.origin + "/api/state", timeout=5) as r:
+        with urllib.request.urlopen(urllib.request.Request(self.origin + "/api/state", headers={"Tailscale-User-Login": "owner@example.test"}), timeout=15) as r:
             self.assertEqual(json.load(r)["notify"]["push"]["devices"], [])
 
     def test_push_send_with_no_devices_is_502(self):
-        # grave's push leg relies on curl -f seeing a non-2xx for "nothing sent"
+        # The local maintenance client preserves non-2xx delivery failures.
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             self.post("/api/push-send", {"title": "t", "body": "b"})
         self.assertEqual(ctx.exception.code, 502)

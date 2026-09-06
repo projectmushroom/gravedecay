@@ -194,7 +194,7 @@ class MacosContractTests(unittest.TestCase):
             try:
                 def post(data, headers=None):
                     request = urllib.request.Request(origin + "/api/settings", data=json.dumps(data).encode(),
-                        headers={"Content-Type": "application/json", **(headers or {})}, method="POST")
+                        headers={"Content-Type": "application/json", "Tailscale-User-Login": "owner@example.test", **(headers or {})}, method="POST")
                     return urllib.request.urlopen(request, timeout=2)
                 with self.assertRaises(urllib.error.HTTPError) as bad:
                     post({"repo_root": "relative"})
@@ -390,7 +390,7 @@ class MacosContractTests(unittest.TestCase):
                 p = fake / name; p.write_text("#!/bin/sh\n" + body + "\n"); p.chmod(0o755)
             env = dict(os.environ, HOME=str(tmp_path), PATH=f"{fake}:/usr/bin:/bin", GRAVE_ROOT=str(root))
             src = root / "repos/gravedecay"; (src / ".git").mkdir(parents=True); (src / "dashboard").mkdir()
-            (src / "dashboard/gravedecay.py").write_text("code"); (root / "scripts/gravedecay.py").write_text("code")
+            (src / "dashboard/gravedecay.py").write_text('import sys\nassert sys.argv[1:] == ["--check-auth"]\n'); (root / "scripts/gravedecay.py").write_text('import sys\nassert sys.argv[1:] == ["--check-auth"]\n')
             shutil.copy(ROOT / "dashboard/benchmark.py", root / "scripts/benchmark.py")
             shutil.copy(ROOT / "dashboard/benchmark.py", src / "dashboard/benchmark.py")
             shutil.copy(ROOT / "macos/grave", root / "scripts/grave"); (root / "scripts/grave").chmod(0o700)
@@ -404,7 +404,7 @@ class MacosContractTests(unittest.TestCase):
             (root / "scripts/gravedecay.py").write_text("stale")
             drifted = run_status()
             self.assertNotEqual(drifted.returncode, 0); self.assertIn("drifted", drifted.stdout)
-            (root / "scripts/gravedecay.py").write_text("code")
+            (root / "scripts/gravedecay.py").write_text('import sys\nassert sys.argv[1:] == ["--check-auth"]\n')
             # Opting out of keep-awake is honored; pre-keepawake metadata on a
             # serving Mac is enforced (fails loudly when the agent is missing).
             (root / "config/components").write_text("dashboard=1\nnetwork=0\nserve=1\nkeepawake=0\n")
@@ -633,8 +633,8 @@ class MacosContractTests(unittest.TestCase):
                 return 0,"queued",""
             dash.sh=fake; server=dash.ThreadingHTTPServer(("127.0.0.1",0),dash.Handler); thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start(); origin=f"http://127.0.0.1:{server.server_port}"
             try:
-                def get(path, headers={}): return urllib.request.urlopen(urllib.request.Request(origin+path,headers=headers),timeout=2)
-                def post(path, data, headers={}): return urllib.request.urlopen(urllib.request.Request(origin+path,data=json.dumps(data).encode(),headers={"Content-Type":"application/json",**headers},method="POST"),timeout=2)
+                def get(path, headers={}): return urllib.request.urlopen(urllib.request.Request(origin+path,headers={"Tailscale-User-Login":"owner@example.test",**headers}),timeout=2)
+                def post(path, data, headers={}): return urllib.request.urlopen(urllib.request.Request(origin+path,data=json.dumps(data).encode(),headers={"Content-Type":"application/json","Tailscale-User-Login":"owner@example.test",**headers},method="POST"),timeout=2)
                 self.assertEqual(get("/api/admin/releases").status,200); self.assertEqual(get("/api/admin/releases",{"Tailscale-User-Login":"owner@example.test"}).status,200); self.assertEqual(get("/api/admin/update-status").status,200)
                 with self.assertRaises(urllib.error.HTTPError) as denied: get("/api/admin/releases",{"Tailscale-User-Login":"other@example.test"})
                 self.assertEqual(denied.exception.code,403)
@@ -691,7 +691,7 @@ class MacosContractTests(unittest.TestCase):
             def post(path, data, headers={}):
                 return urllib.request.urlopen(urllib.request.Request(
                     origin + path, data=json.dumps(data).encode(),
-                    headers={"Content-Type": "application/json", "Sec-Fetch-Site": "same-origin", **headers},
+                    headers={"Content-Type": "application/json", "Sec-Fetch-Site": "same-origin", "Tailscale-User-Login": "owner@example.test", **headers},
                     method="POST"), timeout=2)
             self.assertEqual(post("/api/session-kill", {"name": "claude"}).status, 200)
             self.assertEqual(kills[-1][:4], ["tmux", "-L", "agents", "kill-session"])
@@ -705,7 +705,7 @@ class MacosContractTests(unittest.TestCase):
                 post("/api/action", {"action": "reboot"})
             self.assertEqual(unknown.exception.code, 400)
             with self.assertRaises(urllib.error.HTTPError) as stream:
-                urllib.request.urlopen(origin + "/api/action-stream?action=nope", timeout=2)
+                urllib.request.urlopen(urllib.request.Request(origin + "/api/action-stream?action=nope", headers={"Tailscale-User-Login": "owner@example.test"}), timeout=2)
             self.assertEqual(stream.exception.code, 400)
         finally:
             server.shutdown(); server.server_close(); thread.join(timeout=2)
@@ -853,7 +853,7 @@ exit 0
                 self.assertIn('"platform": "macos"', body)
                 with self.assertRaises(urllib.error.HTTPError) as denied:
                     urllib.request.urlopen(f"http://127.0.0.1:{dash_port}/api/admin/releases", timeout=1)
-                self.assertEqual(denied.exception.code, 502)  # installed helper is absent in this source-only smoke
+                self.assertEqual(denied.exception.code, 403)  # localhost without a capability is read-only
                 time.sleep(.2)
                 with urllib.request.urlopen(f"http://127.0.0.1:{net_port}/events", timeout=2) as stream:
                     event = stream.readline().decode() + stream.readline().decode()

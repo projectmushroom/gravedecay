@@ -37,5 +37,5 @@ ENV HOME=/home/grave GRAVE_ROOT=/workspace T3_BASE_DIR=/workspace/agents/t3code 
     GRAVEDECAY_BASE=/grave \
     GRAVEDECAY_APPS="⌨️ T3 Code=/;🖥️ Terminal=/term/?arg=shell;🤖 Claude=/term/?arg=claude;🧠 Codex=/term/?arg=codex"
 
-HEALTHCHECK --interval=15s --timeout=3s --retries=5 CMD curl -fsS http://127.0.0.1:4711/ >/dev/null && curl -fsS http://127.0.0.1:4712/healthz >/dev/null && curl -fsS http://127.0.0.1:4713/term/ >/dev/null || exit 1
+HEALTHCHECK --interval=15s --timeout=3s --retries=5 CMD curl -fsS http://127.0.0.1:4711/ >/dev/null && python3 /opt/gravedecay/gravedecay.py --check-auth && curl -fsS http://127.0.0.1:4713/term/ >/dev/null || exit 1
 ENTRYPOINT ["/opt/gravedecay/start.sh"]

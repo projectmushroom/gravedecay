@@ -111,7 +111,7 @@ class PortableDockerContractTests(unittest.TestCase):
         start = (ROOT / "docker/portable/start.sh").read_text()
         self.assertIn("-I /opt/gravedecay/web/term/index.html", start)
         self.assertIn("http://127.0.0.1:4711/", dockerfile)
-        self.assertIn("http://127.0.0.1:4712/healthz", dockerfile)
+        self.assertIn("python3 /opt/gravedecay/gravedecay.py --check-auth", dockerfile)
         self.assertIn("http://127.0.0.1:4713/term/", dockerfile)
         self.assertEqual(load_dashboard({"GRAVEDECAY_PLATFORM": "container"}).BIND_HOST, "0.0.0.0")
         self.assertEqual(load_dashboard({"GRAVEDECAY_PLATFORM": "linux"}).BIND_HOST, "127.0.0.1")

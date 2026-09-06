@@ -29,6 +29,11 @@ check(){ label=$1 port=$2 enabled=$3 path=${4:-/healthz}; [ "$enabled" = 1 ] || 
   if launchctl print "gui/$uid/$label" >/dev/null 2>&1; then echo "$label: loaded"; else echo "$label: not loaded"; rc=1; fi
   if curl -fsS --max-time 5 "http://127.0.0.1:$port$path" >/dev/null 2>&1; then echo ":$port health: ok"; else echo ":$port health: failed"; rc=1; fi; }
 check io.gravedecay.dashboard 4712 "$dash"; check io.gravedecay.network 4714 "$net"
+if [ "$dash" = 1 ]; then
+  if GRAVE_ROOT="$ROOT" "$PYTHON" "$ROOT/scripts/gravedecay.py" --check-auth >/dev/null 2>&1; then
+    echo "dashboard identity boundary: ok"
+  else echo "dashboard identity boundary: failed"; rc=1; fi
+fi
 # t3/ttyd have no /healthz; their answering root page is the liveness signal.
 check io.gravedecay.t3 4711 "$agentsmode" /; check io.gravedecay.term 4713 "$agentsmode" /
 if [ -n "$PYTHON" ] && [ -f "$ROOT/config/release.json" ]; then

@@ -112,7 +112,7 @@ class NotifyContractTests(unittest.TestCase):
         self.assertIn('"$NTFY_URL/json?poll=1"', GRAVE)
         self.assertIn("if push_ready; then", GRAVE)
         self.assertIn('check "web push sender ready"', GRAVE)
-        self.assertIn("/api/push-key' | jq -e .ok", GRAVE)
+        self.assertIn("--local-request /api/push-key | jq -e .ok", GRAVE)
         self.assertIn("systemctl cat 'gravedecay-notify@.service'", GRAVE)
         self.assertIn('check "agent notify helper installed"', GRAVE)
         self.assertIn('check "Claude notify hooks installed"', GRAVE)
