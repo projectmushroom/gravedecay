@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # raise.sh — the gravedecay ritual. Idempotent bootstrap: run as your normal
-# user (sudo is used where needed), rerun freely after fixing any failure.
+# administrator (sudo is used where needed); choose the appliance owner once.
 #
-#   ./raise.sh [--profile <generic|aws|t2-macbook|steam-machine|...>] [--root <dir>]
+#   ./raise.sh [--profile <profile>] [--root <dir>] [--user grave|current|<name>]
 #
 # Designed to be agent-supervised: it does the deterministic 90 %, prints
 # clearly what it skipped, and leaves distro oddities to you/your agent.
@@ -11,9 +11,7 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GRAVE_ROOT="/srv/dev"
 PROFILE=""
-RUN_USER="${SUDO_USER:-$USER}"
-HOME_DIR=$(getent passwd "$RUN_USER" | cut -d: -f6)
-RUN_GROUP=$(id -gn "$RUN_USER")
+OWNER_REQUEST=""
 T3_PORT=4711
 DASH_PORT=4712
 TERM_PORT=4713
@@ -23,10 +21,50 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --profile) PROFILE="$2"; shift 2 ;;
     --root)    GRAVE_ROOT="$2"; shift 2 ;;
+    --user)    OWNER_REQUEST="${2:?--user requires grave, current, or a username}"; shift 2 ;;
     -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
     *) echo "unknown arg: $1"; exit 1 ;;
   esac
 done
+
+# Decide identity before package installs, service rendering, or tree claims.
+# Existing appliances retain their owner even when an administrator reruns us.
+source "$REPO_DIR/libexec/install-owner.sh"
+INSTALL_CALLER=$(id -un)
+OWNER_IMMUTABLE=0
+if { command -v steamos-readonly >/dev/null 2>&1 && steamos-readonly status 2>/dev/null | grep -qx enabled; } \
+   || findmnt -no OPTIONS / | grep -qw ro; then
+  OWNER_IMMUTABLE=1
+  [[ "$GRAVE_ROOT" != /srv/dev ]] || GRAVE_ROOT="$HOME/gravedecay"
+fi
+EXISTING_OWNER=$(owner_existing "$GRAVE_ROOT")
+owner_choose "$OWNER_REQUEST" "$INSTALL_CALLER" "$EXISTING_OWNER" "$OWNER_IMMUTABLE"
+RUN_USER="$OWNER_SELECTED"
+printf 'Appliance owner: %s%s\n' "$RUN_USER" "$([[ -n "$EXISTING_OWNER" ]] && echo ' (existing installation)' || true)"
+if [[ "$RUN_USER" != "$INSTALL_CALLER" ]]; then
+  command -v sudo >/dev/null || { owner_error "install sudo before provisioning the appliance owner"; exit 1; }
+  owner_repo="$REPO_DIR"
+  if [[ -z "$EXISTING_OWNER" ]]; then
+    if [[ $EUID == 0 ]]; then
+      bash "$REPO_DIR/libexec/install-owner.sh" prepare "$RUN_USER" "$GRAVE_ROOT" "$REPO_DIR"
+    else
+      sudo bash "$REPO_DIR/libexec/install-owner.sh" prepare "$RUN_USER" "$GRAVE_ROOT" "$REPO_DIR"
+    fi
+    owner_repo="$GRAVE_ROOT/repos/gravedecay"
+  fi
+  sudo -u "$RUN_USER" test -r "$owner_repo/raise.sh" || {
+    owner_error "$RUN_USER cannot read this checkout; rerun from that owner's checkout"; exit 1;
+  }
+  owner_args=(--root "$GRAVE_ROOT" --user "$RUN_USER")
+  [[ -z "$PROFILE" ]] || owner_args+=(--profile "$PROFILE")
+  # sudo's login mode selects the account's real HOME and normal PATH. Do not
+  # carry the administrator's provider tokens, GitHub config, or XDG paths in.
+  exec sudo -iu "$RUN_USER" env -u SUDO_USER -u SUDO_UID -u SUDO_GID \
+    bash "$owner_repo/raise.sh" "${owner_args[@]}"
+fi
+HOME_DIR=$(getent passwd "$RUN_USER" | cut -d: -f6)
+RUN_GROUP=$(id -gn "$RUN_USER")
+[[ "$HOME" == "$HOME_DIR" ]] || { owner_error "HOME does not match $RUN_USER; start a login shell for the appliance owner"; exit 1; }
 
 GRN=$'\e[32m'; YLW=$'\e[33m'; BLD=$'\e[1m'; RST=$'\e[0m'
 step() { printf '\n%b🪦 %s%b\n' "$BLD" "$*" "$RST"; }
@@ -441,6 +479,8 @@ else
     -o -exec chown "$RUN_USER:$RUN_GROUP" {} +
 fi
 chmod 700 "$GRAVE_ROOT/config/secrets"
+printf '%s\n' "$RUN_USER" >"$GRAVE_ROOT/config/owner"
+chmod 644 "$GRAVE_ROOT/config/owner"
 if [[ ! -e "$HOME_DIR/Projects" ]]; then
   ln -s "$GRAVE_ROOT/repos" "$HOME_DIR/Projects"
   ok "~/Projects → $GRAVE_ROOT/repos"
@@ -1075,3 +1115,4 @@ step "Doctor"
 grave doctor || skip "doctor has failures — fix and rerun 'grave doctor'"
 
 printf '\n%b🪦 The box is raised.%b Next: pair a device (t3 auth pairing), add secrets (docs/SECRETS.md).\n' "$BLD" "$RST"
+printf 'Appliance account: %s. For GitHub and agent logins: sudo -iu %s\n' "$RUN_USER" "$RUN_USER"

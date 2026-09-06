@@ -1224,6 +1224,23 @@ service_accounts_ok() {
   done
 }
 
+appliance_owner_ok() {
+  local owner entry home unit properties actual
+  [[ ! -L "$GRAVE_ROOT/config/owner" ]] || return 1
+  owner=$(cat "$GRAVE_ROOT/config/owner") || return 1
+  [[ "$owner" =~ ^[a-z_][a-z0-9_-]{0,31}$ && "$owner" != root ]] || return 1
+  entry=$(getent passwd "$owner") || return 1
+  [[ "$(cut -d: -f3 <<<"$entry")" != 0 ]] || return 1
+  home=$(cut -d: -f6 <<<"$entry")
+  [[ -d "$home" && "$(stat -c %U "$GRAVE_ROOT")" == "$owner" && "$(stat -c %U "$home")" == "$owner" ]] || return 1
+  for unit in gravedecay t3code gravedecay-term gravedecay-net gravedecay-upgrade gravedecay-backup; do
+    properties=$(systemctl show -p LoadState -p User "$unit") || return 1
+    grep -qx 'LoadState=loaded' <<<"$properties" || continue
+    actual=$(sed -n 's/^User=//p' <<<"$properties")
+    [[ "$actual" == "$owner" ]] || return 1
+  done
+}
+
 cmd_doctor() { # grave doctor [--no-page]
   # --no-page suppresses the failure notification: `grave digest` embeds the
   # doctor verdict in its own single morning page, and two pages about one
@@ -1237,6 +1254,11 @@ cmd_doctor() { # grave doctor [--no-page]
     check "Leap 42.3 compatibility runtime" "$GRAVE_ROOT/scripts/leap42-check"
   fi
   check "service users and groups resolve" service_accounts_ok
+  if [[ -e "$GRAVE_ROOT/config/owner" ]]; then
+    check "appliance owner matches data, home, and services" appliance_owner_ok
+  else
+    say "  ${YLW}– appliance owner not recorded yet — re-run raise.sh${RST}"
+  fi
   check "tailscaled running"            systemctl is-active --quiet tailscaled
   # A Type=simple tailscaled races the localapi ExecStartPost against socket
   # creation and crash-loops (see raise.sh). notify is the invariant that keeps
@@ -2247,6 +2269,10 @@ cmd_uninstall() { # grave uninstall [--purge] [--yes] [--dry-run]
   # Unlinking the running script is safe: the kernel keeps the inode alive for
   # the shell's open fd until this process exits.
   uninst_do "$grave_bin removed" "${rm_cmd[@]}" "$grave_bin"
+  # Remove the dedicated owner's password-authenticated administrator rule
+  # only after the last privileged operation. The Unix account/home remain.
+  uninst_do "owner administrator rule removed (account retained)" \
+    sudo rm -f /etc/sudoers.d/40-gravedecay-owner
 
   # ---- 9. what is still here ----
   hdr "Left on this box (by design)"

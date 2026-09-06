@@ -123,6 +123,18 @@ cd gravedecay
 grave doctor                      # verify every invariant
 ```
 
+Fresh Linux installs ask which Unix account should own the appliance:
+**`grave` (recommended)**, a custom username, or your current user. A new
+account gets its own home and a local sudo password. Services, repositories,
+GitHub login, and agent logins then use that account. Root can launch setup;
+the installer switches into the selected account before raising services.
+
+For scripted installs, choose explicitly with `--user grave`, `--user devbox`,
+or `--user current`. Creating an account requires a terminal for its password;
+unattended runs must use an account already provisioned with sudo access.
+Existing appliances keep their owner on re-raise, and immutable hosts retain
+their existing login/toolchain account. [Owner setup details](docs/INSTALL.md).
+
 `raise.sh` is idempotent, so updating *is* re-raising: config is never
 clobbered, services and dashboard refresh, doctor verifies the result.
 

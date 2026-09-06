@@ -23,6 +23,15 @@ running `./raise.sh` and fixing what breaks over doing steps by hand.
 ./raise.sh --profile <generic|aws|t2-macbook|steam-machine>
 ```
 
+Fresh mutable-host installs ask for the appliance Unix account: `grave`
+(recommended), a custom name, or the current user. For headless runs, pass
+`--user grave|<name>|current` explicitly; a new account needs the human to set
+its sudo password, so unattended runs use a pre-provisioned account. Root can
+launch setup, which switches to the selected owner's login context. Perform
+GitHub and provider logins as that owner, never root. Re-raises preserve the
+recorded owner; `--user` does not migrate an existing appliance. Immutable
+hosts keep their current login/toolchain account. See `docs/INSTALL.md`.
+
 It is idempotent — rerun after fixing any failure. Typical distro quirks you
 are expected to solve yourself: package name differences (`docker` vs
 `docker.io`), missing `ufw` on Fedora (use firewalld: default-deny, allow ssh

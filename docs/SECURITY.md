@@ -136,6 +136,15 @@ See [upstream remote-access documentation](https://github.com/pingdotgg/t3code/b
 
 ## The sudoers file
 
+Fresh installs offer a dedicated `grave` owner, a custom account, or the current
+user. This is a trusted appliance administrator, not an isolation boundary.
+A dedicated account selected from another administrator gets the validated
+password-required rule `/etc/sudoers.d/40-gravedecay-owner` for initial setup
+and manual maintenance. Its GitHub/provider credentials stay in its own home;
+administrator credentials are never copied. The installer enters the owner's
+login context before provisioning. Existing owner changes require a separate
+migration. See [INSTALL.md](INSTALL.md).
+
 `raise.sh` installs `/etc/sudoers.d/50-gravedecay`: NOPASSWD for your user on
 `systemctl`, `docker`, `grave`, `journalctl`, `ufw`, `snapper`, `sshd -T`, and
 the fixed-logic firewall wrappers `/usr/libexec/gravedecay/firewall-harden`
