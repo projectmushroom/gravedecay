@@ -281,19 +281,20 @@ test.describe('issue dispatch API fixtures', () => {
 // These tests mock API traffic. A controlling PWA worker can bypass page.route
 // after reload; service-worker behavior is covered by the other browser tests.
 test.use({ serviceWorkers: 'block' });
+// Drain outstanding mocks before Playwright disposes the request context.
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: 'wait' });
+});
 
 test('Linear dispatch chooses a repository and opens the created session', async ({ page }) => {
   let body;
-  await page.route('**/api/state', async route => {
-    const response = await route.fetch();
-    const s = await response.json();
+  const s = await page.evaluate(async () => (await fetch('api/state')).json());
     s.dispatch = { available: true, agents: ['codex', 'claude'] };
     s.mode = 'developer';
     s.repos = [{ name: 'a-long-project-name-for-a-phone', branch: 'master', dirty: 0 }];
     s.linear = { configured: true, issues: [{ id: 'GRV-108', title: '<script>literal issue title</script>',
       url: 'https://linear.app/grave/issue/GRV-108/fix', state: 'Todo' }] };
-    await route.fulfill({ json: s });
-  });
+  await page.route('**/api/state', route => route.fulfill({ json: s }));
   await page.route('**/api/linear-dispatch', async route => {
     body = route.request().postDataJSON();
     await route.fulfill({ status: 201, json: { ok: true, output: 'Session started.',
@@ -317,9 +318,7 @@ test('Linear dispatch chooses a repository and opens the created session', async
 });
 
 test('dispatch failures remain actionable and PR links appear beside issue sessions', async ({ page }) => {
-  await page.route('**/api/state', async route => {
-    const response = await route.fetch();
-    const s = await response.json();
+  const s = await page.evaluate(async () => (await fetch('api/state')).json());
     s.dispatch = { available: true, agents: ['codex'] };
     s.mode = 'developer';
     s.repos = [{ name: 'project', branch: 'master', dirty: 0 }];
@@ -328,8 +327,7 @@ test('dispatch failures remain actionable and PR links appear beside issue sessi
     s.tmux = [{ name: 'linear-grv-108-abcdef', windows: 1, attached: 'detached',
       worktree: { repo: 'project', branch: 'agent/linear-grv-108-abcdef' },
       dispatch: { agent: 'codex', issue: { id: 'GRV-108', url: 'https://linear.app/grave/issue/GRV-108/fix' }, status: 'exited', exit_code: 0 } }];
-    await route.fulfill({ json: s });
-  });
+  await page.route('**/api/state', route => route.fulfill({ json: s }));
   await page.route('**/api/dispatch-pr?*', route => route.fulfill({ json: {
     pr: { number: 19, url: 'https://github.com/acme/project/pull/19', state: 'OPEN' } } }));
   await page.route('**/api/linear-dispatch', route => route.fulfill({ status: 502,
