@@ -204,3 +204,14 @@ hash (`index.html` under `scripts/dashboard-static/`). `grave doctor`
 compares both with the installed files, making a stale process — or a
 raise that updated the Python but not the shell — a visible contract
 failure instead of silently serving an old UI.
+
+### Issue-to-agent dispatch
+
+The single-owner Linux dashboard's Linear widget can launch a saved issue
+through `grave agents new --repo <repo> --task <private-json>`. The existing
+lifecycle lock protects worktree/session creation. A private task runner
+passes the fetched issue to Codex or Claude as a literal argument, records
+process status, and retains the pane as a shell on exit. Deterministic session
+names prevent duplicate dispatch, while Work links the issue, session, branch,
+and any matching GitHub PR. See [DISPATCH.md](DISPATCH.md) for authorization,
+platform scope, retry behavior, and recovery.

@@ -39,6 +39,22 @@ case "$name" in
   *)      cmd=() ;;         # plain login shell
 esac
 
+# Managed sessions must return to their recorded checkout after tmux death.
+# Validate missing/pruned worktrees before attach-or-create could create a
+# same-named shell in the terminal service's working directory.
+meta="$GRAVE_ROOT/agents/$name/meta.json"
+if ! tmux -L "$TMUX_SOCKET" has-session -t "=$name" 2>/dev/null \
+   && [[ -e "$meta" || -L "$meta" ]]; then
+  if [[ -L "$meta" || -L "$GRAVE_ROOT/agents/$name" ]] \
+     || ! jq -e 'type == "object" and (.dir | type == "string")' "$meta" >/dev/null; then
+    echo "Invalid session metadata; repair it before opening this session." >&2
+    exit 1
+  fi
+  if jq -e '.worktree == true' "$meta" >/dev/null; then
+    grave agents resume "$name"
+  fi
+fi
+
 # -A: attach if the session exists, create it if not.
 # ${cmd[@]+...}: plain-shell sessions leave cmd empty, and bash 3.2 (the
 # macOS /bin/bash the agents layer may run under) treats expanding an empty

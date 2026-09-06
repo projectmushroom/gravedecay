@@ -157,6 +157,9 @@ pre{background:var(--inset);border:1px solid var(--hairline);padding:10px;
 .kill:hover{background:var(--crit);color:#000}
 .capture{cursor:pointer;padding:0 6px}
 .capture:hover{background:var(--accent-soft);color:#000}
+.dispatch-detail{font-size:11px;white-space:normal;overflow-wrap:anywhere}
+#linear .dispatch-button{display:block;margin-top:4px;white-space:normal}
+#dispatch-dlg select{width:100%}
 #capture-ta{width:100%;height:52vh;background:var(--page);color:var(--ink-2);
   border:1px solid var(--hairline);padding:8px;font:12px/1.5 ui-monospace,monospace;
   white-space:pre;resize:vertical;margin-bottom:8px}
@@ -468,6 +471,18 @@ body.portable #sec-notify{display:none!important}
     <button id="close-set">Close</button><span id="set-msg" class="setlabel"></span></div>
  </div>
 </div>
+<div class="overlay" id="dispatch-dlg" style="display:none">
+ <div class="dlg" role="dialog" aria-modal="true" aria-labelledby="dispatch-title">
+  <button class="mini xbtn" id="dispatch-x" aria-label="Close dispatch" style="position:absolute;top:10px;right:10px">✕</button>
+  <h2 id="dispatch-title" style="font-size:15px;padding-right:32px">Work on issue</h2>
+  <p id="dispatch-issue" style="margin:12px 0;overflow-wrap:anywhere"></p>
+  <div class="setrow"><label for="dispatch-repo">Repository</label><select id="dispatch-repo"></select></div>
+  <div class="setrow"><label for="dispatch-agent">Agent</label><select id="dispatch-agent"></select></div>
+  <p class="dim2" style="font-size:12px;margin:12px 0">Starts in a separate Git worktree. Open the session to answer login or permission prompts.</p>
+  <button id="dispatch-start">Start work</button>
+  <p id="dispatch-message" role="status" aria-live="polite" style="margin-top:12px;overflow-wrap:anywhere"></p>
+ </div>
+</div>
 <div class="overlay" id="log-dlg" style="display:none">
  <div class="dlg">
   <button class="mini xbtn" id="log-x" style="position:absolute;top:10px;right:10px;z-index:2">✕</button>
@@ -705,6 +720,35 @@ const PANEL_TABS={prs:'work',ci:'work',linear:'work',usage:'work',
   tmux:'work',t3activity:'work',repos:'work',sessions:'work',inbox:'work',
   stats:'system',benchmark:'system',actions:'system',services:'system',docker:'system',journal:'system'};
 let linearConfigured=false,lastMode=null,lastTmux=[];
+let dispatchCaps={},dispatchRepos=[],dispatchIssues=[],dispatchIssue=null,dispatchBusy=false;
+const dispatchPRs=new Map();
+function dispatchDetail(x){
+  if(!x.dispatch)return '';
+  const d=x.dispatch,i=d.issue||{};
+  const issueURL=/^https:\/\/linear\.app\/[^\s]+$/.test(i.url||'')?i.url:'#';
+  const pr=dispatchPRs.get(x.name)?.pr;
+  return `<div class="dispatch-detail"><a href="${esc(issueURL)}" target="_blank" rel="noopener">${esc(i.id||'issue')}</a> · ${esc(d.agent||'agent')} · ${d.status==='exited'?`exited (${esc(d.exit_code)})`:esc(d.status||'session created')}
+    <span data-dispatch-pr="${esc(x.name)}">${pr?` · <a href="${esc(pr.url)}" target="_blank" rel="noopener">PR #${esc(pr.number)} · ${esc(pr.state)}</a>`:''}</span></div>`;
+}
+async function refreshDispatchPRs(){
+  if(!dispatchCaps.available)return;
+  const names=[...new Set([...document.querySelectorAll('[data-dispatch-pr]')].map(el=>el.dataset.dispatchPr))].slice(0,5);
+  for(const name of names){
+    if(Date.now()-(dispatchPRs.get(name)?.at||0)<120000)continue;
+    dispatchPRs.set(name,{at:Date.now(),pr:null});
+    try{
+      const r=await fetch('api/dispatch-pr?name='+encodeURIComponent(name));
+      if(!r.ok)continue;
+      const {pr}=await r.json();
+      if(pr&&/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+$/.test(pr.url||'')){
+        dispatchPRs.set(name,{at:Date.now(),pr});
+        document.querySelectorAll('[data-dispatch-pr]').forEach(el=>{
+          if(el.dataset.dispatchPr===name)el.innerHTML=` · <a href="${esc(pr.url)}" target="_blank" rel="noopener">PR #${esc(pr.number)} · ${esc(pr.state)}</a>`;
+        });
+      }
+    }catch(_){}
+  }
+}
 let cfg=null,cfgSrv='',envApps=[],layoutKey='';
 let graveReleasesLoaded=false,macUpdateChannel='release',macUpdateSeen=false;
 let pollFailures=0,lastConnected=0;
@@ -838,6 +882,9 @@ function render(s){
   pollFailures=0;lastConnected=Date.now();paintConnection();
   envApps=s.apps||[];
   lastTmux=s.tmux||[];
+  dispatchCaps=s.dispatch||{};
+  dispatchRepos=s.repos||[];
+  dispatchIssues=s.linear?.issues||[];
   if(s.boot_mode){bootMode=s.boot_mode;paintBoot();}
   if(s.gamewatch){applyGamewatch(s.gamewatch);}
   if(s.keepalive){applyKeepalive(s.keepalive);}
@@ -948,14 +995,14 @@ function render(s){
         <td>${statusDot(c.state==='running'?'active':'failed')}${esc(c.name)}</td>
         <td class="dim">${esc(c.status)}</td></tr>`).join('')||'<tr><td class="dim">no containers</td></tr>');
   $('tmux').innerHTML=s.tmux.length?s.tmux.map(x=>`<tr>
-      <td>${statusDot('active')}<a href="${esc(appUrl('/term/?arg='+encodeURIComponent(x.name)))}">${esc(x.name)}</a>${x.worktree?`<div class="dim" title="${esc(x.worktree.dir||'')}">${esc(x.worktree.repo||'')} · ${esc(x.worktree.branch||'')}</div>`:''}</td>
+      <td>${statusDot('active')}<a href="${esc(appUrl('/term/?arg='+encodeURIComponent(x.name)))}">${esc(x.name)}</a>${x.worktree?`<div class="dim" title="${esc(x.worktree.dir||'')}">${esc(x.worktree.repo||'')} · ${esc(x.worktree.branch||'')}</div>`:''}${dispatchDetail(x)}</td>
       <td class="num">${esc(x.windows)} win</td>
       <td class="dim">${esc(x.attached)}</td>
       <td class="num"><a class="capture" data-capture="${esc(x.name)}" title="copy session output">📋</a><a class="kill" data-kill="${esc(x.name)}" title="kill session">✕</a></td></tr>`).join('')
     :'<tr><td class="dim">no agent sessions — use the Terminal/Claude/Codex tiles</td></tr>';
   $('sessions').innerHTML=(s.agent_history||[]).length?s.agent_history.map(h=>{
     const live=s.tmux.some(x=>x.name===h.name);
-    return `<tr><td>${statusDot(live?'active':'inactive')}${esc(h.name)}${h.worktree?`<div class="dim" title="${esc(h.worktree.dir||'')}">${esc(h.worktree.repo||'')} · ${esc(h.worktree.branch||'')}${h.worktree.pruned?' · checkout removed':''}</div>`:''}</td>
+    return `<tr><td>${statusDot(live?'active':'inactive')}${esc(h.name)}${h.worktree?`<div class="dim" title="${esc(h.worktree.dir||'')}">${esc(h.worktree.repo||'')} · ${esc(h.worktree.branch||'')}${h.worktree.pruned?' · checkout removed':''}</div>`:''}${dispatchDetail(h)}</td>
       <td class="dim">${esc(h.last_when)}</td>
       <td class="num dim">${esc(String(h.size_kb))}K</td>
       <td class="num"><a class="viewlog" href="#" data-log="${esc(h.name)}" data-file="${esc(h.logs[0])}" title="view transcript">📜</a>
@@ -1046,10 +1093,11 @@ function render(s){
     : li.error?`<tr><td class="dim">${esc(li.error)}</td></tr>`
     : ((li.issues||[]).slice(0,5).map(i=>`<tr>
         <td><a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.id)}</a></td>
-        <td class="dim">${esc(i.title)}</td>
+        <td class="dim">${esc(i.title)}${dispatchCaps.available?`<button class="mini dispatch-button" data-dispatch="${esc(i.id)}">Work on this</button>`:''}</td>
         <td class="dim">${esc(i.state)}</td></tr>`).join('')
        +moreRow(5,(li.issues||[]).length,li.more_url)
        ||'<tr><td class="dim">nothing assigned 🎉</td></tr>');
+  refreshDispatchPRs();
   if(window.scrollX!==scrollX||window.scrollY!==scrollY)
     window.scrollTo(scrollX,scrollY);
   requestAnimationFrame(()=>{
@@ -1193,6 +1241,7 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'){
   closeConsole();$('game-confirm').style.display='none';
   $('settings-panel').style.display='none';$('kill-dlg').style.display='none';
   $('throttle-dlg').style.display='none';$('capture-dlg').style.display='none';
+  closeDispatch();
   closeFiles();closeAppModal();
   unlockBody();}});
 $('console-close').onclick=()=>{$('console').style.display='none'};
@@ -1257,6 +1306,43 @@ $('tmux').addEventListener('click',async e=>{
   }catch(err){alert('kill failed: '+err);}
   poll();
 });
+// Linear issue dispatch: only identifiers and explicit choices cross the API.
+function closeDispatch(){
+  if(dispatchBusy)return;
+  $('dispatch-dlg').style.display='none';unlockBody();
+}
+$('dispatch-x').onclick=closeDispatch;
+$('dispatch-dlg').onclick=e=>{if(e.target.id==='dispatch-dlg')closeDispatch();};
+$('linear').addEventListener('click',e=>{
+  const id=e.target.closest('[data-dispatch]')?.dataset.dispatch;
+  if(!id||dispatchBusy)return;
+  dispatchIssue=dispatchIssues.find(i=>i.id===id);
+  if(!dispatchIssue)return;
+  $('dispatch-issue').textContent=id+' — '+dispatchIssue.title;
+  $('dispatch-repo').innerHTML='<option value="">Choose a repository…</option>'+dispatchRepos.map(r=>`<option value="${esc(r.name)}">${esc(r.name)}</option>`).join('');
+  $('dispatch-agent').innerHTML=(dispatchCaps.agents||[]).map(a=>`<option value="${esc(a)}">${a==='codex'?'Codex':'Claude'}</option>`).join('');
+  $('dispatch-message').textContent=!dispatchRepos.length?'Add a repository to this appliance first.':!(dispatchCaps.agents||[]).length?'Install and sign in to Codex or Claude as the appliance owner.':'';
+  $('dispatch-start').disabled=!dispatchRepos.length||!(dispatchCaps.agents||[]).length;
+  $('dispatch-dlg').style.display='block';lockBody();$('dispatch-repo').focus();
+});
+$('dispatch-start').onclick=async()=>{
+  if(dispatchBusy||!dispatchIssue)return;
+  const repo=$('dispatch-repo').value,agent=$('dispatch-agent').value;
+  if(!repo||!agent){$('dispatch-message').textContent='Choose a repository and agent.';return;}
+  dispatchBusy=true;$('dispatch-start').disabled=true;$('dispatch-x').disabled=true;
+  $('dispatch-message').textContent='Starting work…';
+  try{
+    const r=await fetch('api/linear-dispatch',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({issue:dispatchIssue.id,repo,agent})});
+    const j=await r.json();
+    $('dispatch-message').textContent=j.output||(j.ok?'Session created.':'Could not start work.');
+    if(j.ok&&/^[A-Za-z0-9_-]{1,50}$/.test(j.session?.name||'')){
+      const a=document.createElement('a');a.textContent=' Open session';a.href=appUrl('/term/?arg='+encodeURIComponent(j.session.name));
+      $('dispatch-message').append(a);poll();
+    }
+  }catch(_){$('dispatch-message').textContent='Connection interrupted. Retry to find the same session.';}
+  dispatchBusy=false;$('dispatch-start').disabled=false;$('dispatch-x').disabled=false;
+};
 // linear quick-create
 $('add-linear').onclick=async()=>{
   const t=$('new-linear').value.trim();

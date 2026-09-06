@@ -276,3 +276,63 @@ test('PWA contract spans the appliance origin', async ({ request, baseURL }) => 
   const worker = await request.get(new URL('sw.js', baseURL).href);
   expect(worker.headers()['service-worker-allowed']).toBe('/');
 });
+
+test('Linear dispatch chooses a repository and opens the created session', async ({ page }) => {
+  let body;
+  await page.route('**/api/state', async route => {
+    const response = await route.fetch();
+    const s = await response.json();
+    s.dispatch = { available: true, agents: ['codex', 'claude'] };
+    s.repos = [{ name: 'a-long-project-name-for-a-phone', branch: 'master', dirty: 0 }];
+    s.linear = { configured: true, issues: [{ id: 'GRV-108', title: '<script>literal issue title</script>',
+      url: 'https://linear.app/grave/issue/GRV-108/fix', state: 'Todo' }] };
+    await route.fulfill({ json: s });
+  });
+  await page.route('**/api/linear-dispatch', async route => {
+    body = route.request().postDataJSON();
+    await route.fulfill({ status: 201, json: { ok: true, output: 'Session started.',
+      session: { name: 'linear-grv-108-abcdef', url: '/term/?arg=linear-grv-108-abcdef' } } });
+  });
+  await page.reload();
+  await page.getByRole('button', { name: 'Work on this', exact: true }).click();
+  await expect(page.locator('#dispatch-issue')).toHaveText('GRV-108 — <script>literal issue title</script>');
+  await expect(page.locator('#dispatch-issue script')).toHaveCount(0);
+  await page.locator('#dispatch-start').click();
+  await expect(page.locator('#dispatch-message')).toHaveText('Choose a repository and agent.');
+  await page.locator('#dispatch-repo').selectOption('a-long-project-name-for-a-phone');
+  await page.locator('#dispatch-agent').selectOption('claude');
+  await expectNoHorizontalOverflow(page, 'dispatch dialog');
+  await page.locator('#dispatch-start').click();
+  await expect(page.locator('#dispatch-message a')).toHaveAttribute('href', /\/term\/\?arg=linear-grv-108-abcdef$/);
+  expect(body).toEqual({ issue: 'GRV-108', repo: 'a-long-project-name-for-a-phone', agent: 'claude' });
+  await page.locator('#dispatch-x').click();
+  await expect(page.locator('#dispatch-dlg')).toBeHidden();
+});
+
+test('dispatch failures remain actionable and PR links appear beside issue sessions', async ({ page }) => {
+  await page.route('**/api/state', async route => {
+    const response = await route.fetch();
+    const s = await response.json();
+    s.dispatch = { available: true, agents: ['codex'] };
+    s.repos = [{ name: 'project', branch: 'master', dirty: 0 }];
+    s.linear = { configured: true, issues: [{ id: 'GRV-108', title: 'Fix the issue',
+      url: 'https://linear.app/grave/issue/GRV-108/fix', state: 'Todo' }] };
+    s.tmux = [{ name: 'linear-grv-108-abcdef', windows: 1, attached: 'detached',
+      worktree: { repo: 'project', branch: 'agent/linear-grv-108-abcdef' },
+      dispatch: { agent: 'codex', issue: { id: 'GRV-108', url: 'https://linear.app/grave/issue/GRV-108/fix' }, status: 'exited', exit_code: 0 } }];
+    await route.fulfill({ json: s });
+  });
+  await page.route('**/api/dispatch-pr?*', route => route.fulfill({ json: {
+    pr: { number: 19, url: 'https://github.com/acme/project/pull/19', state: 'OPEN' } } }));
+  await page.route('**/api/linear-dispatch', route => route.fulfill({ status: 502,
+    json: { ok: false, output: 'Could not fetch this issue from Linear; nothing started.' } }));
+  await page.reload();
+  await expect(page.locator('#tmux').getByRole('link', { name: /PR #19/ })).toBeVisible();
+  await expect(page.locator('#tmux')).toContainText('exited (0)');
+  await expectPanelsContainContent(page, 'dispatch session and PR fit');
+  await page.getByRole('button', { name: 'Work on this', exact: true }).click();
+  await page.locator('#dispatch-repo').selectOption('project');
+  await page.locator('#dispatch-start').click();
+  await expect(page.locator('#dispatch-message')).toContainText('nothing started');
+  await expect(page.locator('#dispatch-start')).toBeEnabled();
+});

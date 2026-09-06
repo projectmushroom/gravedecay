@@ -251,3 +251,11 @@ human users, or a wider tailnet, leave it off.
 
 Remote access (tailscaled, sshd), the firewall, and gravedecay stay up in
 gaming mode. You can always get back in.
+
+Issue-to-agent dispatch uses the same owner and cross-site gates as dashboard
+mutations. It accepts identifiers and allowlisted choices, retrieves issue
+content from Linear, and passes it as task data to the selected CLI without
+permission-bypass flags. Task files are owner-private and included in agent
+worktree backups. Workspace, portable, and macOS backends reject this launch
+path; it never crosses into the appliance owner's identity. See
+[DISPATCH.md](DISPATCH.md).
