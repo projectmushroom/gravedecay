@@ -108,7 +108,8 @@ def next_due(value, after):
 def read_job(name):
     path = job_dir(name)
     value = json.loads(read_private(path / "job.json"))
-    if not isinstance(value, dict) or value.get("name") != name or value.get("agent") not in ("codex", "claude"):
+    required = {"name", "agent", "repo", "schedule", "timeout", "enabled", "next_due"}
+    if not isinstance(value, dict) or not required <= value.keys() or value.get("name") != name or value.get("agent") not in ("codex", "claude"):
         raise ValueError("invalid job metadata")
     repo_path(value.get("repo"))
     calendar(value.get("schedule"))
@@ -323,6 +324,7 @@ def worker(name):
                     record["exit_code"] = proc.returncode
                     if record["status"] == "running":
                         record["status"] = "succeeded" if proc.returncode == 0 else "failed"
+                    proc = None  # Process group has already been reaped.
         except Exception as error:
             record.update(status="failed", reason=str(error)[:500])
         finally:
@@ -341,6 +343,8 @@ def recover(name):
         with locked(path / ".run.lock", blocking=False):
             for target in (path / "runs").glob("*.json"):
                 value = json.loads(read_private(target))
+                if not isinstance(value, dict):
+                    raise ValueError("invalid run record")
                 if value.get("status") == "running":
                     value.update(status="interrupted", reason="previous worker ended without a result", finished=time.time())
                     write_json(target, value)
@@ -388,6 +392,8 @@ def check():
             with locked(job_dir(name) / ".run.lock", blocking=False):
                 for path in (job_dir(name) / "runs").glob("*.json"):
                     record = json.loads(read_private(path))
+                    if not isinstance(record, dict):
+                        raise ValueError("invalid run record")
                     if record.get("status") == "running":
                         raise ValueError(name + ": abandoned run; restart gravedecay-agents to reconcile it")
         except BlockingIOError:
@@ -416,7 +422,8 @@ def main():
     owner = ROOT / "config/owner"
     if owner.exists() and owner.read_text().strip() != pwd.getpwuid(os.getuid()).pw_name:
         raise ValueError("run this command as the recorded appliance owner")
-    signal.signal(signal.SIGTERM, stopped); signal.signal(signal.SIGINT, stopped)
+    if args.action in ("worker", "scheduler"):
+        signal.signal(signal.SIGTERM, stopped); signal.signal(signal.SIGINT, stopped)
     if args.action == "run":
         if not 60 <= args.timeout <= 86400:
             raise ValueError("--timeout must be 60–86400 seconds")
