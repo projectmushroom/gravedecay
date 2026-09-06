@@ -13,6 +13,7 @@ GRAVE_ROOT="/srv/dev"
 PROFILE=""
 RUN_USER="${SUDO_USER:-$USER}"
 HOME_DIR=$(getent passwd "$RUN_USER" | cut -d: -f6)
+RUN_GROUP=$(id -gn "$RUN_USER")
 T3_PORT=4711
 DASH_PORT=4712
 TERM_PORT=4713
@@ -192,6 +193,7 @@ export PATH="$HOME_DIR/.local/bin:$TOOLPATH$PATH"
 
 TTYD_BIN="$(command -v ttyd 2>/dev/null || echo /usr/bin/ttyd)"
 T3_BIN="$(command -v t3 2>/dev/null || echo /usr/bin/t3)"
+DOCKER_BIN="$(command -v docker 2>/dev/null || echo /usr/bin/docker)"
 # The interpreter that runs the dashboard/gateway units AND receives the Web
 # Push crypto dependency — one resolution for both, or they drift (#92: probe
 # said cryptography present in brew python while the unit ran /usr/bin/python3,
@@ -282,6 +284,23 @@ elif command -v pacman >/dev/null; then
     sudo pacman -S --needed --noconfirm "${PACMAN_PKGS[@]}"
   fi
   ok "packages present"
+elif command -v zypper >/dev/null; then
+  # openSUSE Leap 15.x: /usr/bin/python3 is still 3.6 (grave needs 3.8+) and
+  # plain `nodejs` is too old for T3 Code, so pull the versioned packages and
+  # point PYTHON_BIN at the 3.11 interpreter below. ttyd is fetched after.
+  # Check zypper before apt-get: older Leap releases can ship an apt-get
+  # compatibility frontend which is not Debian's package manager.
+  ZYPPER_PKGS=(git tmux curl jq docker nftables sensors)
+  if [[ -f "$GRAVE_ROOT/config/leap42-compat" ]]; then
+    # The explicit legacy bootstrap supplies these runtimes; Leap 42.3 has
+    # no python311/nodejs22 packages. Do not undo its pinned toolchain.
+    skip "using opt-in Leap 42.3 compatibility runtime"
+  else
+    ZYPPER_PKGS+=(python311 python311-Pillow python311-cryptography docker-compose nodejs22 npm22)
+  fi
+  sudo zypper --non-interactive install --no-recommends "${ZYPPER_PKGS[@]}" \
+    || skip "some packages failed — fix names for your distro and rerun"
+  ok "packages present"
 elif command -v apt-get >/dev/null; then
   # non-fatal: headless re-raise (#89) has no password for out-of-scope sudo,
   # and the install below already tolerates failure the same way
@@ -348,15 +367,6 @@ elif command -v dnf >/dev/null; then
     fi
   fi
 
-  ok "packages present"
-elif command -v zypper >/dev/null; then
-  # openSUSE Leap 15.x: /usr/bin/python3 is still 3.6 (grave needs 3.8+) and
-  # plain `nodejs` is too old for T3 Code, so pull the versioned packages and
-  # point PYTHON_BIN at the 3.11 interpreter below. ttyd is fetched after.
-  sudo zypper --non-interactive install --no-recommends git tmux curl jq \
-    python311 python311-Pillow python311-cryptography docker docker-compose \
-    nodejs22 npm22 nftables sensors \
-    || skip "some packages failed — fix names for your distro and rerun"
   ok "packages present"
 else
   skip "unknown package manager — install git tmux curl jq python3 docker nodejs npm manually"
@@ -425,10 +435,10 @@ else
   # non-root env, and the @-units run as grave-%i). A blanket `chown -R $GRAVE_ROOT`
   # on re-raise stole both and crash-looped every workspace. On a fresh/single-user
   # box these paths don't exist yet, so the prune is a no-op.
-  sudo chown "$RUN_USER:$RUN_USER" "$GRAVE_ROOT"
+  sudo chown "$RUN_USER:$RUN_GROUP" "$GRAVE_ROOT"
   sudo find "$GRAVE_ROOT" -mindepth 1 \
     \( -path "$GRAVE_ROOT/workspaces" -o -path "$GRAVE_ROOT/config/workspace-services" \) -prune \
-    -o -exec chown "$RUN_USER:$RUN_USER" {} +
+    -o -exec chown "$RUN_USER:$RUN_GROUP" {} +
 fi
 chmod 700 "$GRAVE_ROOT/config/secrets"
 if [[ ! -e "$HOME_DIR/Projects" ]]; then
@@ -469,6 +479,9 @@ if [[ "$IMMUTABLE" != 1 ]]; then
   done
 fi
 install -m 755 "$REPO_DIR/bin/grave-agent-notify" "$GRAVE_AGENT_NOTIFY"
+if [[ -f "$GRAVE_ROOT/config/leap42-compat" ]]; then
+  install -m 755 "$REPO_DIR/compat/leap42/check.sh" "$GRAVE_ROOT/scripts/leap42-check"
+fi
 provision_agent_hooks "$HOME_DIR" "$GRAVE_AGENT_NOTIFY"
 [[ -d /etc/gravedecay ]] || sudo mkdir -p /etc/gravedecay
 if [[ ! -f /etc/gravedecay/grave.conf ]]; then
@@ -554,7 +567,7 @@ if [[ -z "$SUDOERS_FILE" ]]; then
   fi
 fi
 sudoers_content="# gravedecay: let $RUN_USER (and gravedecay action buttons) drive the platform
-$RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker, $GRAVE_BIN, /usr/bin/journalctl, /usr/bin/ufw, /usr/sbin/ufw, /usr/libexec/gravedecay/firewall-harden, /usr/libexec/gravedecay/firewall-status, /usr/bin/snapper, /usr/sbin/sshd -T, /usr/bin/sshd -T, /usr/sbin/sshd -t, /usr/bin/sshd -t, /usr/bin/ssh-keygen -A, /usr/bin/tee /etc/ssh/sshd_config.d/50-gravedecay.conf, /usr/bin/tee /etc/systemd/system/*, /usr/bin/tee /sys/fs/cgroup/grave-torpor/*, /usr/bin/mkdir -p /sys/fs/cgroup/grave-torpor, /usr/bin/npm update -g *"
+$RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/docker, $DOCKER_BIN, $GRAVE_BIN, /usr/bin/journalctl, /usr/bin/ufw, /usr/sbin/ufw, /usr/libexec/gravedecay/firewall-harden, /usr/libexec/gravedecay/firewall-status, /usr/bin/snapper, /usr/sbin/sshd -T, /usr/bin/sshd -T, /usr/sbin/sshd -t, /usr/bin/sshd -t, /usr/bin/ssh-keygen -A, /usr/bin/tee /etc/ssh/sshd_config.d/50-gravedecay.conf, /usr/bin/tee /etc/systemd/system/*, /usr/bin/tee /sys/fs/cgroup/grave-torpor/*, /usr/bin/mkdir -p /sys/fs/cgroup/grave-torpor, /usr/bin/npm update -g *"
 # /etc/sudoers.d entries are 440 — unreadable to us — so the unchanged-skip
 # (#89: headless upgrades must not need out-of-scope sudo) compares against a
 # user-side stamp of what the last successful install wrote instead.

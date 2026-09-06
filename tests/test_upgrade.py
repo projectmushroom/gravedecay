@@ -19,10 +19,12 @@ class UpgradeTests(unittest.TestCase):
         self.checkout = root / "checkout"
         self.grave_root = root / "grave-root"
         (self.grave_root / "logs").mkdir(parents=True)
-        subprocess.run(["git", "init", "--bare", "--initial-branch=master", str(self.remote)], check=True,
+        subprocess.run(["git", "init", "--bare", str(self.remote)], check=True,
                        stdout=subprocess.DEVNULL)
-        subprocess.run(["git", "init", "-b", "master", str(source)], check=True,
+        subprocess.run(["git", "init", str(source)], check=True,
                        stdout=subprocess.DEVNULL)
+        for repo in (self.remote, source):
+            subprocess.run(["git", "-C", str(repo), "symbolic-ref", "HEAD", "refs/heads/master"], check=True)
         subprocess.run(["git", "-C", str(source), "config", "user.email", "test@example.com"], check=True)
         subprocess.run(["git", "-C", str(source), "config", "user.name", "Test"], check=True)
         (source / "raise.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
@@ -58,6 +60,13 @@ class UpgradeTests(unittest.TestCase):
         data = json.loads(self.grave("releases", "--json").stdout)
         self.assertEqual(data["current"], "v0.4.0")
         self.assertEqual(data["releases"], ["v0.5.0", "v0.4.0"])
+
+    def test_releases_reports_an_untagged_branch_on_old_git(self):
+        subprocess.run(["git", "-C", str(self.checkout), "checkout", "-qb", "local-compat"], check=True)
+        subprocess.run(["git", "-C", str(self.checkout), "-c", "user.name=Test",
+                        "-c", "user.email=test@example.com", "commit", "--allow-empty", "-qm", "local fix"], check=True)
+        data = json.loads(self.grave("releases", "--json").stdout)
+        self.assertEqual(data["checkout"], "local-compat")
 
     def test_upgrade_can_pin_an_exact_release(self):
         result = self.grave("upgrade", "--tag", "v0.5.0")

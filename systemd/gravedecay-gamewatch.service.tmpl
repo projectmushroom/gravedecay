@@ -12,7 +12,7 @@ OnFailure=gravedecay-notify@%n.service
 [Service]
 Type=simple
 User=@USER@
-Group=@USER@
+# Use the account's primary group (it need not share the username).
 ExecStart=@GRAVE_ROOT@/scripts/gravedecay-gamewatch
 Restart=always
 RestartSec=5

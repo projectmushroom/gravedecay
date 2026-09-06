@@ -94,9 +94,19 @@ cancel_auto_thaw() {
   ok "cancelled pending gaming auto-thaw"
 }
 
+valid_auto_thaw_duration() {
+  if systemd-analyze --help 2>/dev/null | grep -qw timespan; then
+    systemd-analyze timespan "$1" >/dev/null 2>&1
+  else
+    # systemd 228 lacks the parser command. Accept the documented duration
+    # subset here; systemd-run still performs the final timer validation.
+    [[ "$1" =~ ^([0-9]+([.][0-9]+)?(ms|s|min|m|h|d|w))+$ ]]
+  fi
+}
+
 schedule_auto_thaw() { # schedule_auto_thaw <systemd timespan, e.g. 2h or 90m>
   local duration="$1" grave_bin
-  systemd-analyze timespan "$duration" >/dev/null 2>&1 \
+  valid_auto_thaw_duration "$duration" \
     || { bad "invalid --for duration '$duration' (examples: 30m, 2h, 1h30m)"; exit 1; }
   command -v systemd-run >/dev/null 2>&1 \
     || { bad "systemd-run is required for --for"; exit 1; }
@@ -113,7 +123,7 @@ cmd_auto_thaw_root() { # root-only helper: cmd_auto_thaw_root schedule <timespan
   local sub="${1:-}" duration="${2:-}" uid="${SUDO_UID:-}" gid="${SUDO_GID:-}"
   [[ "$sub" == schedule && "$uid" =~ ^[0-9]+$ && "$gid" =~ ^[0-9]+$ ]] \
     || { bad "invalid auto-thaw helper invocation"; exit 1; }
-  systemd-analyze timespan "$duration" >/dev/null 2>&1 \
+  valid_auto_thaw_duration "$duration" \
     || { bad "invalid auto-thaw duration"; exit 1; }
   local user home grave_bin
   user="$(getent passwd "$uid" | cut -d: -f1)"
@@ -123,7 +133,11 @@ cmd_auto_thaw_root() { # root-only helper: cmd_auto_thaw_root schedule <timespan
   # A system transient timer survives the invoking shell/dashboard request. The
   # service itself runs as the appliance owner so rootless Docker and the user
   # tmux session are restored in the same context as an interactive command.
-  /usr/bin/systemd-run --quiet --collect \
+  local run_args=(--quiet)
+  # systemd 228 (Leap 42.3) predates --collect. Successful transient units
+  # are still garbage-collected by the manager without this option.
+  systemd-run --help | grep -q -- --collect && run_args+=(--collect)
+  /usr/bin/systemd-run "${run_args[@]}" \
     --unit="$AUTO_THAW_UNIT" --on-active="$duration" \
     --timer-property=AccuracySec=1s \
     --description="Restore gravedecay developer mode after gaming" \
@@ -135,6 +149,7 @@ cmd_auto_thaw_root() { # root-only helper: cmd_auto_thaw_root schedule <timespan
 
 pkg_mgr() {
   if command -v pacman >/dev/null; then echo pacman
+  elif command -v zypper >/dev/null; then echo zypper
   elif command -v apt-get >/dev/null; then echo apt
   elif command -v dnf >/dev/null; then echo dnf
   else echo none; fi
@@ -487,7 +502,7 @@ cmd_gaming() { # cmd_gaming [--kill] [--for <timespan>]
     esac
     shift
   done
-  [[ -z "$duration" ]] || systemd-analyze timespan "$duration" >/dev/null 2>&1 \
+  [[ -z "$duration" ]] || valid_auto_thaw_duration "$duration" \
     || { bad "invalid --for duration '$duration' (examples: 30m, 2h, 1h30m)"; exit 1; }
   cancel_auto_thaw
   [[ -z "$duration" ]] || schedule_auto_thaw "$duration"
@@ -693,6 +708,7 @@ cmd_update() {
     case "$(pkg_mgr)" in
       pacman) sudo pacman -Syu --noconfirm
               if command -v paru >/dev/null; then paru -Sua --noconfirm || say "${YLW}AUR update had issues (non-fatal)${RST}"; fi ;;
+      zypper) sudo zypper --non-interactive update ;;
       apt)    sudo apt-get update && sudo apt-get -y upgrade ;;
       dnf)    sudo dnf -y upgrade ;;
       *)      say "${YLW}no known package manager — skipping system update${RST}" ;;
@@ -1031,7 +1047,8 @@ cmd_releases() { # grave releases [--json] — list selectable stable releases
   repo=$(upgrade_repo)
   fetch_upgrade_refs "$repo"
   current=$(git -C "$repo" describe --tags --exact-match HEAD 2>/dev/null || true)
-  checkout="${current:-$(git -C "$repo" branch --show-current)}"
+  # `git branch --show-current` arrived in Git 2.22; Leap 42.3 ships 2.13.
+  checkout="${current:-$(git -C "$repo" symbolic-ref -q --short HEAD || true)}"
   [[ -n "$checkout" ]] || checkout=$(git -C "$repo" rev-parse --short HEAD)
   local tags
   tags=$(git -C "$repo" tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname \
@@ -1147,6 +1164,18 @@ firewall_active() {
     [[ "$zone" != trusted ]] && ! "${fc[@]}" --info-zone="$zone" 2>/dev/null | grep -q 'target: ACCEPT'
   else return 1; fi
 }
+service_accounts_ok() {
+  local unit properties account group
+  for unit in t3code gravedecay gravedecay-term; do
+    properties=$(systemctl show -p LoadState -p User -p Group "$unit") || return 1
+    grep -qx 'LoadState=loaded' <<<"$properties" || continue
+    account=$(sed -n 's/^User=//p' <<<"$properties")
+    group=$(sed -n 's/^Group=//p' <<<"$properties")
+    getent passwd "${account:-root}" >/dev/null || return 1
+    [[ -z "$group" ]] || getent group "$group" >/dev/null || return 1
+  done
+}
+
 cmd_doctor() { # grave doctor [--no-page]
   # --no-page suppresses the failure notification: `grave digest` embeds the
   # doctor verdict in its own single morning page, and two pages about one
@@ -1155,11 +1184,15 @@ cmd_doctor() { # grave doctor [--no-page]
   [[ "${1:-}" == "--no-page" ]] && no_page=1
   FAILURES=0
   hdr "grave doctor"
+  if [[ -f "$GRAVE_ROOT/config/leap42-compat" ]]; then
+    check "Leap 42.3 compatibility runtime" "$GRAVE_ROOT/scripts/leap42-check"
+  fi
+  check "service users and groups resolve" service_accounts_ok
   check "tailscaled running"            systemctl is-active --quiet tailscaled
   # A Type=simple tailscaled races the localapi ExecStartPost against socket
   # creation and crash-loops (see raise.sh). notify is the invariant that keeps
   # the box on the tailnet across reboots; upstream's packaged unit sets it too.
-  check "tailscaled unit uses Type=notify" bash -c "[[ \$(systemctl show -p Type --value tailscaled) == notify ]]"
+  check "tailscaled unit uses Type=notify" bash -c "systemctl show -p Type tailscaled | grep -qx 'Type=notify'"
   check "tailscale logged in"           tailscale status --peers=false
   # OpenSSH server unit is `sshd` on Arch/Fedora, `ssh` on Debian/Ubuntu.
   check "ssh server running"            bash -c "systemctl is-active --quiet sshd || systemctl is-active --quiet ssh"

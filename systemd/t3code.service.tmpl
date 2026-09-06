@@ -10,7 +10,7 @@ OnFailure=gravedecay-notify@%n.service
 [Service]
 Type=simple
 User=@USER@
-Group=@USER@
+# Use the account's primary group (it need not share the username).
 WorkingDirectory=@GRAVE_ROOT@/repos
 ExecStart=@T3@ serve --mode web --host 127.0.0.1 --port @T3_PORT@ --base-dir @GRAVE_ROOT@/agents/t3code @GRAVE_ROOT@/repos
 Restart=always

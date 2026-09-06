@@ -9,7 +9,7 @@ OnFailure=gravedecay-notify@%n.service
 [Service]
 Type=simple
 User=@USER@
-Group=@USER@
+# Use the account's primary group (it need not share the username).
 ExecStart=@PYTHON@ @GRAVE_ROOT@/scripts/gravedecay.py
 Restart=always
 RestartSec=3
