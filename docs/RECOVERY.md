@@ -10,6 +10,12 @@
 - `configs/t3code-state.tar.gz` — T3 server state (projects, pairings)
 - `configs/workspaces.tar.gz` — workspace homes, T3 state, private checkouts
   including dirty/untracked work, and integration configuration
+- `configs/agent-worktrees.tar.gz` — managed agent checkout files (including
+  staged, dirty, untracked, and ignored files) and session `meta.json` records;
+  `recovery/<session>/` contains a verified commit bundle, HEAD/branch record,
+  and binary staged patch. Created privately when `worktrees/` exists.
+  Committed branches are also in the source repository's bundle. These are raw
+  project files and may include project-local credentials.
 - `volumes/*.tar.gz` — every named docker volume (postgres data, etc.)
 
 Secrets are excluded by default, including provider keys, Linear keys, GitHub
@@ -48,6 +54,22 @@ grave restore <ts> repo <name>    # clone bundle → repos/<name>-restored
 grave restore <ts> volume <name>  # recreate + fill docker volume (stop stack first)
 grave restore <ts> workspaces     # restore workspace trees and dirty work
 ```
+
+## Recovering isolated agent work
+
+Extract `configs/agent-worktrees.tar.gz` into a scratch directory first. The
+saved `.git` files and session paths refer to the original host; do not use
+them to launch sessions on a replacement box. Restore the source repository
+bundle, import `recovery/<session>/commits.bundle` if needed, and create a new
+worktree at the commit in `recovery/<session>/head.json`. Apply a nonempty
+`staged.patch` there with `git apply --index`, then copy the saved checkout
+files into it **excluding `.git`**. Apply tracked-file deletions from the saved
+tree as well (compare the trees before copying). Applying the staged patch
+before copying preserves both versions when a file has staged and unstaged
+changes. Inspect `git status` before starting a new session.
+
+This archive supplements the repo bundles; it does not make an atomic snapshot
+of a running agent. Pause writing agents when a consistent checkpoint matters.
 
 ## Full box loss → new box
 

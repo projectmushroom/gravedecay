@@ -581,7 +581,89 @@ cmd_developer() {
 }
 
 # ---------------------------------------------------------------- agents ----
+# Managed worktrees stay under this appliance's own root. Never accept an
+# arbitrary path from session metadata for a cleanup operation.
+agent_worktree_valid() {
+  local name="$1" meta="$GRAVE_ROOT/agents/$1/meta.json" repo dir
+  [[ "$name" =~ ^[A-Za-z0-9_-]+$ && ! -L "$meta" ]] || return 1
+  jq -e '.worktree == true and .pruned != true' "$meta" >/dev/null || return 1
+  repo=$(jq -er '.repo' "$meta") || return 1
+  dir=$(jq -er '.dir' "$meta") || return 1
+  [[ "$repo" =~ ^[A-Za-z0-9_-][A-Za-z0-9_.-]*$ ]] || return 1
+  [[ "$dir" == "$GRAVE_ROOT/worktrees/$repo/$name" && ! -L "$dir" && -d "$dir" && -w "$dir" ]] || return 1
+  [[ ! -L "$GRAVE_ROOT/worktrees" && ! -L "$GRAVE_ROOT/worktrees/$repo" ]] || return 1
+  [[ -d "$GRAVE_ROOT/repos/$repo/.git" && ! -L "$GRAVE_ROOT/repos/$repo" ]] || return 1
+  [[ "$(git -C "$dir" rev-parse --git-common-dir)" -ef "$GRAVE_ROOT/repos/$repo/.git" ]]
+}
+
+agent_worktrees_check() {
+  if [[ -e "$GRAVE_ROOT/worktrees" || -L "$GRAVE_ROOT/worktrees" ]]; then
+    [[ -d "$GRAVE_ROOT/worktrees" && -w "$GRAVE_ROOT/worktrees" && ! -L "$GRAVE_ROOT/worktrees" ]] || return 1
+  fi
+  local meta name
+  for meta in "$GRAVE_ROOT"/agents/*/meta.json; do
+    [[ -f "$meta" ]] || continue
+    jq -e 'type == "object"' "$meta" >/dev/null || return 1
+    jq -e '.worktree == true and .pruned != true' "$meta" >/dev/null || continue
+    name=$(basename "$(dirname "$meta")")
+    agent_worktree_valid "$name" || return 1
+  done
+}
+
+agent_worktrees_prune() {
+  local meta name repo dir base head status panes tmp unpushed
+  # Failure to inspect tmux must not be interpreted as an idle checkout.
+  panes=$(tmuxa list-panes -a -F '#{pane_current_path}' 2>/dev/null) || {
+    if tmuxa list-sessions >/dev/null 2>&1; then bad "cannot inspect live panes"; return 1; fi
+    panes=""
+  }
+  for meta in "$GRAVE_ROOT"/agents/*/meta.json; do
+    [[ -f "$meta" ]] || continue
+    jq -e '.worktree == true and .pruned != true' "$meta" >/dev/null || continue
+    name=$(basename "$(dirname "$meta")")
+    agent_worktree_valid "$name" || { bad "$name: invalid worktree metadata; retained"; continue; }
+    repo=$(jq -r '.repo' "$meta"); dir=$(jq -r '.dir' "$meta"); base=$(jq -r '.base' "$meta")
+    if tmuxa has-session -t "=$name" 2>/dev/null ||
+       awk -v d="$dir" '$0 == d || index($0,d "/") == 1 {found=1} END {exit !found}' <<<"$panes"; then
+      say "  $name: live; retained"; continue
+    fi
+    status=$(git -C "$dir" status --porcelain --untracked-files=all --ignored) || continue
+    [[ -z "$status" ]] || { say "  $name: local files or changes; retained"; continue; }
+    head=$(git -C "$dir" rev-parse HEAD) || continue
+    # An untouched new branch is disposable. Otherwise require both a merge
+    # into the source checkout's HEAD and a remote ref containing the commits.
+    if [[ "$head" != "$base" ]]; then
+      git -C "$GRAVE_ROOT/repos/$repo" merge-base --is-ancestor "$head" HEAD || {
+        say "  $name: not merged into the source checkout; retained"; continue;
+      }
+      unpushed=$(git -C "$dir" rev-list HEAD --not --remotes) || continue
+      [[ -z "$unpushed" ]] || {
+        say "  $name: unpushed commits; retained"; continue;
+      }
+    fi
+    if git -C "$GRAVE_ROOT/repos/$repo" worktree remove "$dir"; then
+      tmp=$(mktemp "$meta.XXXXXX")
+      jq '.pruned = true' "$meta" >"$tmp" && mv "$tmp" "$meta"
+      ok "$name: checkout removed; branch and session history retained"
+    else
+      bad "$name: Git could not safely remove the checkout; retained (Git 2.17+ required)"
+    fi
+  done
+}
+
 cmd_agents() {
+  case "${1:-list}" in
+    new|kill|resume|prune)
+      [[ ! -L "$GRAVE_ROOT/agents" ]] || { bad "agents directory must not be a symlink"; return 1; }
+      mkdir -p "$GRAVE_ROOT/agents"
+      # Serialize lifecycle changes, but don't pass the lock into tmux's
+      # long-lived server or pane processes.
+      (flock -x 9; cmd_agents_unlocked "$@" 9>&-) 9>"$GRAVE_ROOT/agents/.lifecycle.lock" ;;
+    *) cmd_agents_unlocked "$@" ;;
+  esac
+}
+
+cmd_agents_unlocked() {
   local sub="${1:-list}"; shift || true
   case "$sub" in
     list)
@@ -591,22 +673,78 @@ cmd_agents() {
       # The name is interpolated into a path and into the pipe-pane command tmux
       # runs via /bin/sh, so restrict it to a safe charset (traversal + injection).
       [[ "$name" =~ ^[A-Za-z0-9_-]+$ ]] || { bad "session name must be letters, digits, '-' or '_'"; exit 1; }
-      local dir="${2:-$GRAVE_ROOT/repos}"
-      tmuxa -f "$TMUX_CONF" new-session -d -s "$name" -c "$dir"
+      [[ "$name" != t3code && ${#name} -le 50 ]] || { bad "session name is reserved or longer than 50 characters"; return 1; }
+      shift
+      local dir="" repo="" branch="" worktree=0 base="" meta tmp
+      while (($#)); do
+        case "$1" in
+          --worktree) worktree=1 ;;
+          --repo) shift; repo="${1:?--repo requires a repository name}"; worktree=1 ;;
+          --branch) shift; branch="${1:?--branch requires a new branch name}" ;;
+          -*) bad "unknown agents new option: $1"; return 1 ;;
+          *) [[ -z "$dir" ]] || { bad "only one working directory is allowed"; return 1; }; dir="$1" ;;
+        esac
+        shift
+      done
+      [[ ! -L "$GRAVE_ROOT/agents" && ! -L "$GRAVE_ROOT/agents/$name" ]] || { bad "session directory must not be a symlink"; return 1; }
+      meta="$GRAVE_ROOT/agents/$name/meta.json"
+      if tmuxa has-session -t "=$name" 2>/dev/null; then bad "session '$name' already exists"; return 1; fi
+      if (( worktree )); then
+        [[ -z "$dir" && "$repo" =~ ^[A-Za-z0-9_-][A-Za-z0-9_.-]*$ ]] || {
+          bad "use --worktree --repo <name> (a repository under $GRAVE_ROOT/repos), without [dir]"; return 1;
+        }
+        [[ ! -e "$meta" ]] || { bad "session history already exists; use agents resume or a new name"; return 1; }
+        [[ -d "$GRAVE_ROOT/repos/$repo/.git" && ! -L "$GRAVE_ROOT/repos/$repo" ]] || {
+          bad "repository must be a primary checkout under $GRAVE_ROOT/repos"; return 1;
+        }
+        branch="${branch:-agent/$name}"
+        git check-ref-format --branch "$branch" >/dev/null || return 1
+        [[ "$branch" != -* ]] || { bad "invalid branch"; return 1; }
+        base=$(git -C "$GRAVE_ROOT/repos/$repo" rev-parse --verify HEAD) || return 1
+        dir="$GRAVE_ROOT/worktrees/$repo/$name"
+        [[ ! -L "$GRAVE_ROOT/worktrees" && ! -L "$GRAVE_ROOT/worktrees/$repo" && ! -e "$dir" && ! -L "$dir" ]] || {
+          bad "worktree path exists or is a symlink"; return 1;
+        }
+        (umask 077; mkdir -p "$GRAVE_ROOT/worktrees/$repo")
+        git -C "$GRAVE_ROOT/repos/$repo" worktree add -b "$branch" "$dir" "$base" || return 1
+      else
+        [[ -z "$branch" ]] || { bad "--branch requires --repo"; return 1; }
+        dir="${dir:-$GRAVE_ROOT/repos}"
+        if jq -e '.worktree == true' "$meta" >/dev/null 2>&1; then
+          agent_worktree_valid "$name" && [[ "$dir" == "$(jq -r '.dir' "$meta")" ]] || {
+            bad "managed session must resume its existing worktree; use a new session name"; return 1;
+          }
+        fi
+      fi
+      dir=$(cd "$dir" && pwd -P) || return 1
       mkdir -p "$GRAVE_ROOT/agents/$name"
+      if (( worktree )); then
+        tmp=$(mktemp "$meta.XXXXXX")
+        jq -n --arg dir "$dir" --arg repo "$repo" --arg branch "$branch" --arg base "$base" \
+          --arg created "$(date -u +%FT%TZ)" \
+          '{dir:$dir,repo:$repo,branch:$branch,base:$base,created:$created,worktree:true}' >"$tmp"
+        mv "$tmp" "$meta"
+      fi
+      tmuxa -f "$TMUX_CONF" new-session -d -s "$name" -c "$dir"
       # Record the working dir so `agents resume` (and the dashboard's ▶
       # button) can bring a dead session back where it lived (#110).
-      jq -n --arg dir "$dir" --arg created "$(date -u +%FT%TZ)" \
+      if ! jq -e '.worktree == true' "$meta" >/dev/null 2>&1; then
+        jq -n --arg dir "$dir" --arg created "$(date -u +%FT%TZ)" \
         '{dir:$dir, created:$created}' >"$GRAVE_ROOT/agents/$name/meta.json" 2>/dev/null || true
+      fi
       # Resolve the dated log path in bash: the old deferred date-in-tmux form
       # double-escaped the percents and logged a literal filename, never a date.
       local logfile="$GRAVE_ROOT/agents/$name/session-$(date +%Y%m%d).log"
-      tmuxa pipe-pane -t "$name" -o "cat >> '$logfile'" 2>/dev/null || true
+      local quoted_log; printf -v quoted_log '%q' "$logfile"
+      tmuxa pipe-pane -t "=$name" -o "cat >> $quoted_log" 2>/dev/null || true
       ok "session '$name' created in $dir (attach: grave agents attach $name)" ;;
     attach)
       exec tmux -L "$TMUX_SOCKET" attach -t "${1:?usage: grave agents attach <name>}" ;;
     kill)
-      tmuxa kill-session -t "${1:?usage: grave agents kill <name>}"; ok "killed ${1}" ;;
+      local name="${1:?usage: grave agents kill <name>}"
+      [[ "$name" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
+      tmuxa kill-session -t "=$name"; ok "killed ${1}; any worktree is retained" ;;
+    prune) agent_worktrees_prune ;;
     history)
       # Dead sessions leave their pipe-pane logs behind (#110): list every
       # session dir that has logs, live or not. agents/t3code is T3 server
@@ -630,10 +768,19 @@ cmd_agents() {
       # Back to the dir it lived in; sessions predating meta.json fall back to
       # the default. The old logs stay put — the new day's log appends beside them.
       local dir
+      if [[ -e "$GRAVE_ROOT/agents/$name/meta.json" ]]; then
+        jq -e 'type == "object" and (.dir | type == "string")' "$GRAVE_ROOT/agents/$name/meta.json" >/dev/null || {
+          bad "invalid session metadata; repair it before resuming"; return 1;
+        }
+      fi
       dir=$(jq -r '.dir // empty' "$GRAVE_ROOT/agents/$name/meta.json" 2>/dev/null) || dir=""
-      [[ -d "$dir" ]] || dir="$GRAVE_ROOT/repos"
-      cmd_agents new "$name" "$dir" ;;
-    *) say "usage: grave agents [list|new|attach|kill|history|resume]"; exit 1 ;;
+      if jq -e '.worktree == true' "$GRAVE_ROOT/agents/$name/meta.json" >/dev/null 2>&1; then
+        agent_worktree_valid "$name" || { bad "worktree is missing or invalid; recover it before resuming"; return 1; }
+      else
+        [[ -d "$dir" ]] || dir="$GRAVE_ROOT/repos"
+      fi
+      cmd_agents_unlocked new "$name" "$dir" ;;
+    *) say "usage: grave agents [list|new|attach|kill|history|resume|prune]"; exit 1 ;;
   esac
 }
 
@@ -1251,6 +1398,7 @@ cmd_doctor() { # grave doctor [--no-page]
   [[ "${1:-}" == "--no-page" ]] && no_page=1
   FAILURES=0
   hdr "grave doctor"
+  check "managed agent worktrees valid and writable" agent_worktrees_check
   check "development benchmark ready" python3 "$GRAVE_ROOT/scripts/benchmark.py" --root "$GRAVE_ROOT" check
   if [[ -f "$GRAVE_ROOT/config/leap42-compat" ]]; then
     check "Leap 42.3 compatibility runtime" "$GRAVE_ROOT/scripts/leap42-check"
@@ -1711,6 +1859,43 @@ cmd_backup() {
   if [[ -d "$GRAVE_ROOT/workspaces" ]]; then
     backup_tar "workspace homes, state, and dirty worktrees" "$dest/configs/workspaces.tar.gz" \
       "${excludes[@]}" -C "$GRAVE_ROOT" workspaces
+  fi
+  if [[ -d "$GRAVE_ROOT/worktrees" ]]; then
+    # Bundles above preserve branches, but not staged/dirty/untracked files.
+    # Keep the raw checkout files and lifecycle records as a recovery archive.
+    local agent_paths=(worktrees) metadata name dir head branch recovery
+    recovery=$(mktemp -d "$dest/configs/.agent-recovery.XXXXXX")
+    mkdir -p "$recovery/recovery"
+    for metadata in "$GRAVE_ROOT"/agents/*/meta.json; do
+      [[ -f "$metadata" ]] || continue
+      jq -e '.worktree == true' "$metadata" >/dev/null || continue
+      agent_paths+=("${metadata#"$GRAVE_ROOT/"}")
+      jq -e '.pruned != true' "$metadata" >/dev/null || continue
+      name=$(basename "$(dirname "$metadata")")
+      if ! agent_worktree_valid "$name"; then
+        bad "invalid agent worktree $name"; failures=$((failures+1)); continue
+      fi
+      dir=$(jq -r '.dir' "$metadata")
+      mkdir -p "$recovery/recovery/$name"
+      # The index can hold a different version from the file on disk. Keep
+      # its binary patch against the recorded HEAD, plus that exact commit
+      # (including detached work that the source repo's --all may not bundle).
+      if head=$(git -C "$dir" rev-parse HEAD) &&
+         git -C "$dir" diff --cached --binary "$head" >"$recovery/recovery/$name/staged.patch" &&
+         git -C "$dir" bundle create "$recovery/recovery/$name/commits.bundle" HEAD &&
+         git -C "$dir" bundle verify "$recovery/recovery/$name/commits.bundle" >/dev/null 2>&1; then
+        branch=$(git -C "$dir" symbolic-ref --short -q HEAD) || branch=""
+        jq -n --arg head "$head" --arg branch "$branch" '{head:$head,branch:$branch}' \
+          >"$recovery/recovery/$name/head.json"
+      else
+        bad "agent index/commit backup failed: $name"; failures=$((failures+1))
+      fi
+    done
+    (umask 077; failures=0
+      backup_tar "agent worktree files and metadata" "$dest/configs/agent-worktrees.tar.gz" \
+        -C "$GRAVE_ROOT" "${agent_paths[@]}" -C "$recovery" recovery
+      (( failures == 0 ))) || failures=$((failures+1))
+    rm -rf "$recovery"
   fi
   printf '{"version":1,"secrets_included":%s,"created":"%s"}\n' "$([[ $include_secrets == 1 ]] && echo true || echo false)" "$(date -u +%FT%TZ)" >"$dest/manifest.json"
   local d
@@ -2321,6 +2506,8 @@ grave — gravedecay appliance control 🪦
 
   grave agents               list agent tmux sessions
   grave agents new <n> [dir]    create persistent agent session
+  grave agents new <n> --repo <r> [--branch <b>]  start in an isolated worktree
+  grave agents prune           remove clean, idle, merged/pushed worktrees
   grave agents attach <n>       attach (detach: Ctrl-b d)
   grave agents kill <n>         kill session
   grave agents history          past sessions — logs survive death; view 📜

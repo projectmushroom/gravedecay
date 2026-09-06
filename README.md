@@ -208,7 +208,9 @@ grave status                     # services, containers, agents, temps, disk
 grave doctor                     # verify every platform invariant
 grave bench                      # score local development speed (System tab also)
 grave agents new mybot [dir]     # persistent tmux agent session
+grave agents new mybot --repo app --branch agent/mybot  # isolated Git worktree
 grave agents attach mybot        # detach: Ctrl-b d — session survives
+grave agents prune               # safely clean up eligible idle worktrees
 grave gaming [--kill] [--for 2h] # 🎮 free resources; optionally auto-restore
 grave developer                  # 💻 thaw + restore
 grave docker ps|up|down|logs     # stack management
