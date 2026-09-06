@@ -155,7 +155,7 @@ if MACOS and "GRAVEDECAY_APPS" not in os.environ:
 # exactly like actions). Stored beside the other appliance config.
 SETTINGS_PATH = os.path.join(GRAVE_ROOT, "config", "gravedecay-settings.json")
 DEFAULT_SETTINGS = {
-    "panel_order": ["prs", "linear", "ci", "t3activity", "tmux", "sessions", "usage",
+    "panel_order": ["prs", "linear", "ci", "t3activity", "tmux", "scheduled", "sessions", "usage",
                     "inbox", "repos",
                     "stats", "benchmark", "actions", "services", "docker", "journal"],
     "hidden_panels": [],   # panel ids to hide
@@ -2137,10 +2137,72 @@ def t3_activity():
     return cached("t3-activity", 3, fetch)
 
 
+def collect_scheduled_runs():
+    """Owner-only metadata and output; saved prompt files stay in the secret store."""
+    if not dispatch_supported():
+        return {"available": False, "jobs": [], "runs": []}
+    def fetch():
+        result = {"available": os.path.isfile(os.path.join(GRAVE_ROOT, "scripts", "agent-jobs.py")),
+                  "jobs": [], "runs": []}
+        root = os.path.join(GRAVE_ROOT, "config", "secrets", "agent-jobs")
+        def private_json(path):
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd) as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > 65536:
+                    raise ValueError("invalid job report file")
+                value = json.load(stream)
+                if not isinstance(value, dict):
+                    raise ValueError("invalid job report object")
+                return value
+        paths = []
+        try:
+            for name in os.listdir(root):
+                if not re.fullmatch(r"[A-Za-z0-9_-]{1,20}", name):
+                    continue
+                directory = os.path.join(root, name)
+                if os.path.islink(directory):
+                    continue
+                job = private_json(os.path.join(directory, "job.json"))
+                result["jobs"].append({key: job.get(key) for key in
+                    ("name", "repo", "agent", "schedule", "enabled", "next_due")})
+                runs_dir = os.path.join(directory, "runs")
+                if not os.path.islink(runs_dir):
+                    paths.extend(glob.glob(os.path.join(runs_dir, "*.json")))
+            for path in sorted(paths, key=os.path.basename, reverse=True)[:20]:
+                run = private_json(path)
+                row = {key: run.get(key) for key in ("name", "repo", "agent", "status", "reason",
+                    "started", "finished", "exit_code", "session", "log")}
+                row["tail"] = ""
+                session, log = row.get("session"), row.get("log")
+                if isinstance(session, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,50}", session) and isinstance(log, str) and re.fullmatch(r"session-[0-9]{8}\.log", log):
+                    directory = os.path.join(GRAVE_ROOT, "agents", session)
+                    if not os.path.islink(directory):
+                        try:
+                            fd = os.open(os.path.join(directory, log), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                            with os.fdopen(fd, "rb") as stream:
+                                info = os.fstat(stream.fileno())
+                                if stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o077:
+                                    stream.seek(max(0, info.st_size - 4000))
+                                    row["tail"] = ANSI.sub("", stream.read(4000).decode("utf-8", "replace"))
+                        except OSError:
+                            pass
+                else:
+                    row["session"] = row["log"] = None
+                result["runs"].append(row)
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, TypeError):
+            result["error"] = "A job record needs repair; run grave doctor."
+        return result
+    return cached("scheduled-runs", 3, fetch)
+
+
 def state(headers):
     result = _state(headers)
     if owner_request(headers):
         result["dispatch"] = dispatch_capabilities()
+        result["scheduled"] = collect_scheduled_runs()
         for row in result.get("tmux", []) + result.get("agent_history", []):
             row.update(agent_worktree_metadata(row["name"]))
     return result
@@ -2910,6 +2972,19 @@ class Handler(BaseHTTPRequestHandler):
             rc, out, err = sh([GRAVE, "agents", "resume", name], timeout=30)
             self._send(200, json.dumps({"ok": rc == 0,
                                         "output": ANSI.sub("", out + err).strip()}))
+        elif p == "/api/agent-job-cancel":
+            if not isinstance(data, dict):
+                self._send(400, '{"output":"invalid job request"}')
+                return
+            name = data.get("name")
+            if not dispatch_supported():
+                self._send(404, '{"output":"scheduled runs unavailable"}')
+                return
+            if set(data) != {"name"} or not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,20}", name):
+                self._send(400, '{"output":"invalid job name"}')
+                return
+            rc, out, err = sh([GRAVE, "agents", "jobs", "cancel", name], timeout=15)
+            self._send(200 if rc == 0 else 409, json.dumps({"ok": rc == 0, "output": ANSI.sub("", out + err)}))
         elif p == "/api/session-capture":
             # Session scrollback into a textarea — the copy path that works
             # even where the in-terminal one can't (no touch selection in

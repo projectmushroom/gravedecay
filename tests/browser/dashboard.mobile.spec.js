@@ -343,4 +343,29 @@ test('dispatch failures remain actionable and PR links appear beside issue sessi
   await expect(page.locator('#dispatch-message')).toContainText('nothing started');
   await expect(page.locator('#dispatch-start')).toBeEnabled();
 });
+test('overnight reports escape output and cancel a scheduled job', async ({ page }) => {
+  let body;
+  const s=await page.evaluate(async()=> (await fetch('api/state')).json());
+  s.mode='developer';
+  s.scheduled={available:true,jobs:[{name:'nightly',schedule:'02:00',enabled:true,next_due:1800000000}],
+    runs:[{name:'nightly',repo:'project',status:'failed',exit_code:9,started:1790000000,
+      session:'job-nightly-fixture',log:'session-20260906.log',tail:'<script>literal output</script>'}]};
+  await page.route('**/api/state',route=>route.fulfill({json:s}));
+  await page.route('**/api/agent-job-cancel',async route=>{
+    body=route.request().postDataJSON();
+    await route.fulfill({json:{ok:true,output:'cancelled'}});
+  });
+  await page.reload();
+  await page.evaluate(async()=>render(await(await fetch('api/state')).json()));
+  await expect(page.locator('[data-panel="scheduled"]')).toBeVisible();
+  await page.locator('#scheduled summary').click();
+  await expect(page.locator('#scheduled pre')).toHaveText('<script>literal output</script>');
+  await expect(page.locator('#scheduled script')).toHaveCount(0);
+  await expect(page.getByRole('link',{name:'Open worktree',exact:true})).toHaveAttribute('href',/arg=job-nightly-fixture$/);
+  await page.getByRole('button',{name:'Cancel job',exact:true}).click();
+  await expect(page.locator('[data-job-cancel]')).toHaveText('Cancelled');
+  expect(body).toEqual({name:'nightly'});
+  await expectNoHorizontalOverflow(page,'overnight report');
+});
+
 });

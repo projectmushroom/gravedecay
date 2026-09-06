@@ -101,6 +101,7 @@ button.busy{opacity:.6;cursor:wait}
 .gear{min-height:0;padding:3px 9px;font-size:13px}
 @media(pointer:coarse){td{padding-top:9px;padding-bottom:9px}}
 /* panels: title sits ON the border, like a TUI frame */
+#panels>[hidden]{display:none!important}
 #panels{display:grid;grid-template-columns:1fr 1fr;gap:18px 12px;margin-bottom:12px}
 /* rows stretch: side-by-side widgets always share the taller one's height */
 @media(max-width:760px){#panels{grid-template-columns:1fr}}
@@ -595,6 +596,7 @@ body.portable #sec-notify{display:none!important}
   <div class="panel" data-panel="usage"><h2>🧾 Agent usage</h2><table id="usage"></table></div>
   <div class="panel" data-panel="tmux"><h2>🤖 Agent sessions — tap to open</h2><table id="tmux"></table></div>
   <div class="panel" data-panel="t3activity"><h2>🛰️ T3 activity</h2><table id="t3activity"><tr><td class="dim">not configured</td></tr></table></div>
+  <div class="panel" data-panel="scheduled"><h2>🌙 Overnight report</h2><div id="scheduled"></div></div>
   <div class="panel" data-panel="sessions"><h2>📜 Session history</h2><table id="sessions"></table></div>
   <div class="panel" data-panel="inbox"><h2>🔔 Inbox — pages this box sent</h2><div id="inbox"></div></div>
   <div class="panel" data-panel="repos"><h2>📦 Repos</h2><table id="repos"></table></div>
@@ -711,12 +713,12 @@ const appUrl=u=>portableCompanion?u:(macosCompanion&&location.port&&u==='/net/')
 // 'claude' or 'codex' if this tile launches that agent CLI via /term/?arg=…,
 // else null. Gates the ⚡ skip-perms toggle and the -yolo session rewrite.
 const agentArg=u=>{const m=/[?&]arg=(claude|codex)(?=$|&)/.exec(u||'');return m?m[1]:null;};
-const PANEL_NAMES={prs:'Pull requests',ci:'CI status',
+const PANEL_NAMES={scheduled:'Overnight report',prs:'Pull requests',ci:'CI status',
   linear:'Linear issues',usage:'Agent usage',tmux:'Agent sessions',t3activity:'T3 activity',repos:'Repos',
   sessions:'Session history',inbox:'Inbox',
   stats:'Stats tiles',benchmark:'Development benchmark',actions:'Actions',services:'Services',docker:'Docker',
   journal:'Journal errors'};
-const PANEL_TABS={prs:'work',ci:'work',linear:'work',usage:'work',
+const PANEL_TABS={scheduled:'work',prs:'work',ci:'work',linear:'work',usage:'work',
   tmux:'work',t3activity:'work',repos:'work',sessions:'work',inbox:'work',
   stats:'system',benchmark:'system',actions:'system',services:'system',docker:'system',journal:'system'};
 let linearConfigured=false,lastMode=null,lastTmux=[];
@@ -1000,6 +1002,22 @@ function render(s){
       <td class="dim">${esc(x.attached)}</td>
       <td class="num"><a class="capture" data-capture="${esc(x.name)}" title="copy session output">📋</a><a class="kill" data-kill="${esc(x.name)}" title="kill session">✕</a></td></tr>`).join('')
     :'<tr><td class="dim">no agent sessions — use the Terminal/Claude/Codex tiles</td></tr>';
+  const scheduled=s.scheduled||{available:false,jobs:[],runs:[]};
+  const report=$('scheduled');
+  report.closest('[data-panel]').hidden=!scheduled.available;
+  report.innerHTML=(scheduled.error?`<p>${esc(scheduled.error)}</p>`:'')+
+    (scheduled.jobs||[]).map(j=>`<div class="setrow" style="flex-wrap:wrap"><span class="setlabel">${esc(j.name)} · ${esc(j.schedule||'once')} · ${j.enabled?(j.next_due?'next '+esc(new Date(j.next_due*1000).toLocaleString()):'complete'):'cancelled'}</span>${j.enabled?`<button class="mini" data-job-cancel="${esc(j.name)}">Cancel job</button>`:''}</div>`).join('')+
+    (scheduled.runs||[]).map(r=>`<details style="margin-top:10px"><summary>${esc(r.name)} · ${esc(r.status)}${r.exit_code!=null?' (exit '+esc(String(r.exit_code))+')':''} · ${esc(new Date(r.started*1000).toLocaleString())}</summary><p class="dim">${esc(r.reason||r.repo||'')}</p>${r.session&&r.log?`<a class="viewlog" href="#" data-log="${esc(r.session)}" data-file="${esc(r.log)}">Transcript</a> · <a href="${esc(appUrl('/term/?arg='+encodeURIComponent(r.session)))}">Open worktree</a>`:''}<pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto">${esc(r.tail||'No output recorded.')}</pre></details>`).join('')+
+    (!(scheduled.jobs||[]).length?'<p class="dim">No scheduled jobs yet. Add one with grave agents run.</p>':'');
+  report.querySelectorAll('[data-job-cancel]').forEach(button=>button.onclick=async()=>{
+    button.disabled=true;
+    try{
+      const response=await fetch('api/agent-job-cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:button.dataset.jobCancel})});
+      const result=await response.json();
+      if(!response.ok||!result.ok)throw new Error(result.output||'Cancellation failed');
+      button.textContent='Cancelled';
+    }catch(error){button.disabled=false;button.textContent=error.message;}
+  });
   $('sessions').innerHTML=(s.agent_history||[]).length?s.agent_history.map(h=>{
     const live=s.tmux.some(x=>x.name===h.name);
     return `<tr><td>${statusDot(live?'active':'inactive')}${esc(h.name)}${h.worktree?`<div class="dim" title="${esc(h.worktree.dir||'')}">${esc(h.worktree.repo||'')} · ${esc(h.worktree.branch||'')}${h.worktree.pruned?' · checkout removed':''}</div>`:''}${dispatchDetail(h)}</td>

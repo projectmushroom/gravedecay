@@ -79,7 +79,7 @@ did() { (( DRY )) || ok "$*"; }
 UNITS=(
   gravedecay-backup.timer gravedecay-digest.timer
   gravedecay-auto-thaw.timer gravedecay-auto-thaw.service
-  gravedecay-backup.service gravedecay-digest.service
+  gravedecay-backup.service gravedecay-digest.service gravedecay-agents.service
   gravedecay-upgrade.service gravedecay-upgrade@.service
   gravedecay-gamewatch.service gravedecay-keepalive.service
   gravedecay-selfheal.service gravedecay-net.service

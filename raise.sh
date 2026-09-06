@@ -656,6 +656,7 @@ step "gravedecay"
 install -m 755 "$REPO_DIR/dashboard/gravedecay.py" "$GRAVE_ROOT/scripts/gravedecay.py"
 install -m 755 "$REPO_DIR/dashboard/benchmark.py" "$GRAVE_ROOT/scripts/benchmark.py"
 install -m 755 "$REPO_DIR/libexec/agent-task.py" "$GRAVE_ROOT/scripts/agent-task.py"
+install -m 755 "$REPO_DIR/libexec/agent-jobs.py" "$GRAVE_ROOT/scripts/agent-jobs.py"
 install -m 755 "$REPO_DIR/dashboard/gateway.py" "$GRAVE_ROOT/scripts/gateway.py"
 install -m 755 "$REPO_DIR/libexec/t3-connect-diagnose.py" "$GRAVE_ROOT/scripts/t3-connect-diagnose.py"
 install -d -m 755 "$GRAVE_ROOT/scripts/dashboard-static"
@@ -889,6 +890,20 @@ install_unit gravedecay-digest.timer <"$REPO_DIR/systemd/gravedecay-digest.timer
 sudo systemctl daemon-reload
 enable_restart gravedecay-digest.timer >/dev/null 2>&1 || true
 ok "morning digest scheduled (~08:00; preview any time: grave digest --print)"
+
+# Persistent owner schedules; jobs never start developer services themselves.
+step "Scheduled agent runner"
+sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
+    -e "s|@HOME@|$HOME_DIR|g" -e "s|@TOOLPATH@|$TOOLPATH|g" \
+    -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" \
+    "$REPO_DIR/systemd/gravedecay-agents.service.tmpl" \
+  | install_unit gravedecay-agents.service
+sudo systemctl daemon-reload
+if [[ "${MULTI_USER:-0}" == 0 ]]; then
+  enable_restart gravedecay-agents.service >/dev/null 2>&1 || true
+else
+  sudo systemctl disable --now gravedecay-agents.service >/dev/null 2>&1 || true
+fi
 
 # -------------------------------------------------------------- 7. docker ----
 step "Docker stacks"
