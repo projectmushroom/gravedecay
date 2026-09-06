@@ -215,3 +215,8 @@ process status, and retains the pane as a shell on exit. Deterministic session
 names prevent duplicate dispatch, while Work links the issue, session, branch,
 and any matching GitHub PR. See [DISPATCH.md](DISPATCH.md) for authorization,
 platform scope, retry behavior, and recovery.
+
+`gravedecay-agents.service` supervises persistent owner schedules through
+`libexec/agent-jobs.py`. Each headless run gets a fresh Git worktree, private
+transcript and atomic result record. The dashboard exposes bounded reports
+only after owner authorization. See [SCHEDULES.md](SCHEDULES.md).

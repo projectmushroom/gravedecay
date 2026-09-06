@@ -290,3 +290,7 @@ access; Linux doctor, macOS doctor-lite and the portable healthcheck enforce it.
 Raw localhost browser access is read-only; use the Tailscale Serve URL for
 interactive owner controls. Multi-user backends still require their separate
 root-managed backend capability before evaluating owner access.
+
+Scheduled jobs run as the single appliance owner, with private prompt snapshots
+and owner-gated reports. They inherit provider credentials and cannot overlap
+the same job; see [SCHEDULES.md](SCHEDULES.md) for isolation and cancellation.

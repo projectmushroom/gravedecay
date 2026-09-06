@@ -1,0 +1,21 @@
+[Unit]
+Description=gravedecay - scheduled owner agent jobs
+Documentation=https://github.com/projectmushroom/gravedecay
+After=network.target t3code.service
+OnFailure=gravedecay-notify@%n.service
+
+[Service]
+Type=simple
+User=@USER@
+Environment=HOME=@HOME@
+Environment=GRAVE_ROOT=@GRAVE_ROOT@
+Environment=PATH=@TOOLPATH@@HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=@GRAVE_BIN@ agents __scheduler
+Restart=on-failure
+RestartSec=10
+UMask=0077
+KillMode=control-group
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

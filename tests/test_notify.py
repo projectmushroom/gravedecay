@@ -18,6 +18,7 @@ AGENT_NOTIFY = (ROOT / "bin/grave-agent-notify").read_text()
 # a deliberate follow-up (they run as grave-<slug>, not the owner).
 PLATFORM_UNITS = [
     "gravedecay",
+    "gravedecay-agents",
     "t3code",
     "gravedecay-term",
     "gravedecay-gateway",

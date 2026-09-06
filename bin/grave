@@ -623,6 +623,9 @@ agent_worktrees_prune() {
     name=$(basename "$(dirname "$meta")")
     agent_worktree_valid "$name" || { bad "$name: invalid worktree metadata; retained"; continue; }
     repo=$(jq -r '.repo' "$meta"); dir=$(jq -r '.dir' "$meta"); base=$(jq -r '.base' "$meta")
+    if [[ -e "$GRAVE_ROOT/agents/$name/.run.lock" ]] && ! flock -n "$GRAVE_ROOT/agents/$name/.run.lock" true; then
+      say "  $name: scheduled run active; retained"; continue
+    fi
     if tmuxa has-session -t "=$name" 2>/dev/null ||
        awk -v d="$dir" '$0 == d || index($0,d "/") == 1 {found=1} END {exit !found}' <<<"$panes"; then
       say "  $name: live; retained"; continue
@@ -671,6 +674,12 @@ cmd_agents() {
       # Serialize lifecycle changes, but don't pass the lock into tmux's
       # long-lived server or pane processes.
       (flock -x 9; cmd_agents_unlocked "$@" 9>&-) 9>"$GRAVE_ROOT/agents/.lifecycle.lock" ;;
+    run|jobs|__scheduler)
+      [[ "${MULTI_USER:-0}" == 0 ]] || { bad "scheduled runs require single-owner mode"; return 1; }
+      local action="$1"; shift
+      [[ "$action" != __scheduler ]] || action=scheduler
+      GRAVE_ROOT="$GRAVE_ROOT" GRAVE_CONF="$CONF" GRAVE_BIN="$(readlink -f "$0")" \
+        python3 "$GRAVE_ROOT/scripts/agent-jobs.py" "$action" "$@" ;;
     *) cmd_agents_unlocked "$@" ;;
   esac
 }
@@ -816,7 +825,7 @@ cmd_agents_unlocked() {
         [[ -d "$dir" ]] || dir="$GRAVE_ROOT/repos"
       fi
       cmd_agents_unlocked new "$name" "$dir" ;;
-    *) say "usage: grave agents [list|new|attach|kill|history|resume|prune]"; exit 1 ;;
+    *) say "usage: grave agents [list|new|attach|kill|history|resume|prune|run|jobs]"; exit 1 ;;
   esac
 }
 
@@ -1396,7 +1405,7 @@ firewall_active() {
 }
 service_accounts_ok() {
   local unit properties account group
-  for unit in t3code gravedecay gravedecay-term; do
+  for unit in t3code gravedecay gravedecay-term gravedecay-agents; do
     properties=$(systemctl show -p LoadState -p User -p Group "$unit") || return 1
     grep -qx 'LoadState=loaded' <<<"$properties" || continue
     account=$(sed -n 's/^User=//p' <<<"$properties")
@@ -1434,6 +1443,10 @@ cmd_doctor() { # grave doctor [--no-page]
   FAILURES=0
   hdr "grave doctor"
   check "managed agent worktrees valid and writable" agent_worktrees_check
+  if [[ "${MULTI_USER:-0}" == 0 ]]; then
+    check "scheduled agent runner installed" test -r "$GRAVE_ROOT/scripts/agent-jobs.py"
+    check "scheduled prompts and service valid" env GRAVE_ROOT="$GRAVE_ROOT" python3 "$GRAVE_ROOT/scripts/agent-jobs.py" check
+  fi
   check "issue agent task runner installed" test -r "$GRAVE_ROOT/scripts/agent-task.py"
   check "issue tasks private and consistent with session metadata" agent_tasks_check
   check "development benchmark ready" python3 "$GRAVE_ROOT/scripts/benchmark.py" --root "$GRAVE_ROOT" check
@@ -2143,7 +2156,7 @@ cmd_multiuser_cleanup() {
 UNINSTALL_UNITS=(
   gravedecay-backup.timer gravedecay-digest.timer
   gravedecay-auto-thaw.timer gravedecay-auto-thaw.service
-  gravedecay-backup.service gravedecay-digest.service
+  gravedecay-backup.service gravedecay-digest.service gravedecay-agents.service
   gravedecay-upgrade.service gravedecay-upgrade@.service
   gravedecay-gamewatch.service gravedecay-keepalive.service
   gravedecay-selfheal.service gravedecay-net.service

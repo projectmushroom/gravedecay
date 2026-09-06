@@ -211,6 +211,8 @@ grave agents new mybot [dir]     # persistent tmux agent session
 grave agents new mybot --repo app --branch agent/mybot  # isolated Git worktree
 grave agents attach mybot        # detach: Ctrl-b d — session survives
 grave agents prune               # safely clean up eligible idle worktrees
+grave agents run nightly --repo app --prompt-file ~/nightly.txt --at 02:00
+grave agents jobs                 # persistent schedules; jobs cancel <name> stops one
 grave agents new issue-run --repo app --task /path/to/task.json  # saved Linear task
 grave gaming [--kill] [--for 2h] # 🎮 free resources; optionally auto-restore
 grave developer                  # 💻 thaw + restore
@@ -272,3 +274,6 @@ Writing your own is ~20 lines; see `profiles/README.md`.
 ## License
 
 MIT. Daemons in the dirt, shipping while you sleep. 🪦
+
+Saved prompts can run unattended with isolated worktrees and an owner-only
+[overnight report](docs/SCHEDULES.md), including cancellation and gaming-mode skips.

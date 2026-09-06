@@ -104,6 +104,8 @@ docker exec "$CTR" curl -sf http://127.0.0.1:4712/healthz >/dev/null
 docker exec "$CTR" curl -sf -o /dev/null http://127.0.0.1:4711/
 docker exec "$CTR" curl -sf -o /dev/null http://127.0.0.1:4713/
 
+as_mole bash /repo/tests/e2e/jobs.sh
+
 echo "=== phase 6: multi-user loopback boundary ==="
 as_mole grave multiuser enable 100 mole@example.com mole --profile generic
 docker exec "$CTR" grave __users doctor
