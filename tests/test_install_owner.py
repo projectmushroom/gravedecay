@@ -194,7 +194,13 @@ class OwnerDoctorTests(unittest.TestCase):
 set -euo pipefail
 GRAVE_ROOT="$1"
 getent() { printf 'grave:x:1000:100:owner:%s:/bin/bash\n' "$GRAVE_ROOT"; }
-systemctl() { printf 'LoadState=loaded\nUser=%s\n' "$service_owner"; }
+systemctl() {
+  # The network helper has no User= directive and intentionally runs as root.
+  case "${@: -1}" in
+    gravedecay-net) printf 'LoadState=loaded\nUser=\n' ;;
+    *) printf 'LoadState=loaded\nUser=%s\n' "$service_owner" ;;
+  esac
+}
 service_owner="$2"; home_owner="$3"
 stat() { echo "$home_owner"; }
 '''

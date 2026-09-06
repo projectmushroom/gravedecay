@@ -1233,7 +1233,9 @@ appliance_owner_ok() {
   [[ "$(cut -d: -f3 <<<"$entry")" != 0 ]] || return 1
   home=$(cut -d: -f6 <<<"$entry")
   [[ -d "$home" && "$(stat -c %U "$GRAVE_ROOT")" == "$owner" && "$(stat -c %U "$home")" == "$owner" ]] || return 1
-  for unit in gravedecay t3code gravedecay-term gravedecay-net gravedecay-upgrade gravedecay-backup; do
+  # Only owner services belong here. gravedecay-net deliberately runs as root
+  # to manage networking; workspace services have their own Unix identities.
+  for unit in gravedecay t3code gravedecay-term gravedecay-upgrade gravedecay-backup gravedecay-digest gravedecay-gamewatch gravedecay-keepalive gravedecay-selfheal; do
     properties=$(systemctl show -p LoadState -p User "$unit") || return 1
     grep -qx 'LoadState=loaded' <<<"$properties" || continue
     actual=$(sed -n 's/^User=//p' <<<"$properties")
