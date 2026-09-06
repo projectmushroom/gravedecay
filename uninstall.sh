@@ -152,6 +152,8 @@ done
 for c in "$HOME/.local/bin/grave" "$HOME/.local/bin/grave-workspaces"; do
   [[ -e "$c" ]] && { run rm -f "$c"; did "$c removed"; }
 done
+run sudo rm -f /etc/sudoers.d/40-gravedecay-owner
+did "owner administrator rule removed (Unix account and home retained)"
 
 step "Not handled by the fallback path"
 echo "  Without the CLI's view of this box, these need you:"

@@ -62,6 +62,13 @@ $GRAVE_ROOT/repos/gravedecay/raise.sh --profile <your-profile>
 | `~/Projects` symlink | kept (still valid) | removed |
 | docker, tailscale login, toolchain, distro packages | kept | kept |
 | workspace unix users (`grave-<slug>`) | kept | kept |
+| appliance owner account (`grave` or custom) and its home | kept | kept |
+
+The installer-created password-required sudo rule `40-gravedecay-owner` is
+removed after the final privileged teardown operation. The Unix account and
+its home remain, including GitHub/provider logins. The retained
+`$GRAVE_ROOT/config/owner` records who should own a later re-raise; an
+administrator may need to restore that account's sudo access before reinstalling.
 
 ### Things it deliberately will not do
 

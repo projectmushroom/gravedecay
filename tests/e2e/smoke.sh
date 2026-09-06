@@ -63,7 +63,14 @@ docker exec "$CTR" chown -R mole:mole /repo
 as_mole() { docker exec -u mole -e USER=mole -e HOME=/home/mole -w /repo "$CTR" "$@"; }
 
 echo "=== phase 1: first raise (human-at-keyboard sudo) ==="
-as_mole bash -c './raise.sh --profile generic </dev/null'
+# Start from root to exercise the login-context handoff to a custom owner.
+# bootstrap.sh pre-provisions the account and temporary CI sudo entitlement.
+docker exec -w /repo "$CTR" bash -c './raise.sh --profile generic --user mole </dev/null'
+docker exec "$CTR" grep -qx mole /srv/dev/config/owner
+if docker exec -w /repo "$CTR" bash -c './raise.sh --user grave </dev/null'; then
+  echo "FATAL: re-raise accepted a different owner without migration"
+  exit 1
+fi
 # the box has a wheel rule, so the scoped grant must exist AND sort after it —
 # phase 3 is hollow if the first raise skipped or misnamed its sudoers install
 docker exec "$CTR" test -f /etc/sudoers.d/zz-gravedecay

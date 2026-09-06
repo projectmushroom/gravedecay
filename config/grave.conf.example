@@ -3,6 +3,9 @@
 
 # Root of the dev platform
 GRAVE_ROOT="@GRAVE_ROOT@"
+# The selected Unix account is persisted in $GRAVE_ROOT/config/owner.
+# Choose it on the first raise with --user grave|current|<name>; re-raises
+# preserve it. Changing the record is not an account-migration procedure.
 
 # systemd services that are part of "developer mode" (stopped by gaming mode)
 DEV_SERVICES=(t3code)
