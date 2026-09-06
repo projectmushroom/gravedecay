@@ -39,3 +39,7 @@ jobs:
       - run: python -m py_compile dashboard/gravedecay.py dashboard/gateway.py bin/grave-workspaces
       - run: bash -n raise.sh
       - run: bash -n bin/grave
+      - name: Validate legacy bootstrap scripts
+        run: |
+          bash -n compat/leap42/install.sh
+          bash -n compat/leap42/check.sh

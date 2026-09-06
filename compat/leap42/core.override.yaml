@@ -1,0 +1,5 @@
+# Explicit opt-in for Docker 18.09 only. Removes syscall filtering for postgres.
+services:
+  postgres:
+    security_opt:
+      - seccomp=unconfined

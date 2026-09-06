@@ -9,7 +9,7 @@ OnFailure=gravedecay-notify@%n.service
 [Service]
 Type=simple
 User=@USER@
-Group=@USER@
+# Use the account's primary group (it need not share the username).
 # -i lo: loopback only (reached via tailscale serve /term).  -W: writable.
 # --url-arg lets the launcher tiles pick the session (?arg=claude etc).
 # No --base-path: tailscale serve strips the /term mount prefix.

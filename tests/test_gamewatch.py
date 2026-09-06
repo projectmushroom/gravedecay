@@ -173,7 +173,7 @@ class GamewatchPolicyAndTimerTests(unittest.TestCase):
         self.assertNotIn(': > "$GRAVE_ROOT/config/gamewatch.on"', STEAM_PROFILE)
 
     def test_auto_thaw_is_transient_visible_and_cancelled_by_developer(self):
-        self.assertIn("/usr/bin/systemd-run --quiet --collect", GRAVE_TEXT)
+        self.assertIn('/usr/bin/systemd-run "${run_args[@]}"', GRAVE_TEXT)
         self.assertIn('sudo -n "$grave_bin" __auto-thaw schedule', GRAVE_TEXT)
         self.assertNotIn("/usr/bin/systemd-run *", RAISE)
         self.assertIn('--on-active="$duration"', GRAVE_TEXT)

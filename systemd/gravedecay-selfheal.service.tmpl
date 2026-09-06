@@ -11,7 +11,7 @@ OnFailure=gravedecay-notify@%n.service
 [Service]
 Type=oneshot
 User=@USER@
-Group=@USER@
+# Use the account's primary group (it need not share the username).
 ExecStart=@GRAVE_ROOT@/scripts/gravedecay-selfheal
 Environment=HOME=@HOME@
 # Reach the durable toolchain + rootless docker under $HOME (@TOOLPATH@ is the
