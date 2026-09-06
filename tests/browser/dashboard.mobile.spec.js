@@ -300,6 +300,7 @@ test('Linear dispatch chooses a repository and opens the created session', async
       session: { name: 'linear-grv-108-abcdef', url: '/term/?arg=linear-grv-108-abcdef' } } });
   });
   await page.reload();
+  await page.evaluate(async () => render(await (await fetch('api/state')).json()));
   await page.getByRole('button', { name: 'Work on this', exact: true }).click();
   await expect(page.locator('#dispatch-issue')).toHaveText('GRV-108 — <script>literal issue title</script>');
   await expect(page.locator('#dispatch-issue script')).toHaveCount(0);
@@ -334,6 +335,7 @@ test('dispatch failures remain actionable and PR links appear beside issue sessi
   await page.route('**/api/linear-dispatch', route => route.fulfill({ status: 502,
     json: { ok: false, output: 'Could not fetch this issue from Linear; nothing started.' } }));
   await page.reload();
+  await page.evaluate(async () => render(await (await fetch('api/state')).json()));
   await expect(page.locator('#tmux').getByRole('link', { name: /PR #19/ })).toBeVisible();
   await expect(page.locator('#tmux')).toContainText('exited (0)');
   await expectPanelsContainContent(page, 'dispatch session and PR fit');
