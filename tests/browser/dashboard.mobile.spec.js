@@ -283,6 +283,7 @@ test('Linear dispatch chooses a repository and opens the created session', async
     const response = await route.fetch();
     const s = await response.json();
     s.dispatch = { available: true, agents: ['codex', 'claude'] };
+    s.mode = 'developer';
     s.repos = [{ name: 'a-long-project-name-for-a-phone', branch: 'master', dirty: 0 }];
     s.linear = { configured: true, issues: [{ id: 'GRV-108', title: '<script>literal issue title</script>',
       url: 'https://linear.app/grave/issue/GRV-108/fix', state: 'Todo' }] };
@@ -314,6 +315,7 @@ test('dispatch failures remain actionable and PR links appear beside issue sessi
     const response = await route.fetch();
     const s = await response.json();
     s.dispatch = { available: true, agents: ['codex'] };
+    s.mode = 'developer';
     s.repos = [{ name: 'project', branch: 'master', dirty: 0 }];
     s.linear = { configured: true, issues: [{ id: 'GRV-108', title: 'Fix the issue',
       url: 'https://linear.app/grave/issue/GRV-108/fix', state: 'Todo' }] };
