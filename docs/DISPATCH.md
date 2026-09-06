@@ -24,7 +24,9 @@ resubmitting the issue to the agent.
 Repeated requests for the same Linear issue UUID and repository reuse the
 recorded session, including after a browser timeout. They do not start a
 second agent, even if a different agent is selected on retry. An existing
-session is never overwritten. Use the terminal to continue that work.
+session is never overwritten. Use the terminal to continue that work. If its
+checkout has been pruned, dispatch reports that recovery or a new named task
+is needed rather than opening a shell outside the recorded checkout.
 
 When a PR is opened from the recorded branch against the source repository's
 GitHub origin, its link and state appear beside the issue. Lookup uses the

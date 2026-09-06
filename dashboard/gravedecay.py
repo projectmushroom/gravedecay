@@ -1337,6 +1337,8 @@ def dispatch_linear(data):
             meta = agent_worktree_metadata(name)
             if meta.get("dispatch", {}).get("issue", {}).get("id") == identifier \
                     and meta.get("worktree", {}).get("repo") == repo:
+                if meta["worktree"].get("pruned"):
+                    return 409, {"ok": False, "output": "this session's checkout was pruned; recover it or start a new named task from the terminal"}
                 return 200, {"ok": True, "existing": True, "session": session,
                              "output": "session already recorded; its work is retained"}
             return 409, {"ok": False, "output": "session path already exists; inspect it before retrying"}

@@ -102,6 +102,10 @@ print("FAKE_AGENT_RAN", flush=True)
         self.assertEqual(meta["dispatch"]["issue"]["id"], "GRV-108")
         self.assertEqual(meta["dispatch"]["status"], "exited")
         self.assertNotIn("description", meta["dispatch"]["issue"])
+        self.dash.ALLOWED_USERS = {"owner@example.test"}
+        self.dash._state = lambda headers: {"tmux": [{"name": name}], "agent_history": []}
+        self.assertIn("dispatch", self.dash.state({"Tailscale-User-Login": "owner@example.test"})["tmux"][0])
+        self.assertNotIn("dispatch", self.dash.state({"Tailscale-User-Login": "viewer@example.test"})["tmux"][0])
         task = self.root / "agents" / name / "task.json"
         self.assertEqual(task.stat().st_mode & 0o777, 0o600)
         self.assertEqual(json.loads(task.read_text())["issue"]["description"], self.issue["description"])
@@ -119,6 +123,22 @@ print("FAKE_AGENT_RAN", flush=True)
             if status == 200:
                 self.assertEqual(response["session"]["name"], name)
                 self.assertTrue(response["existing"])
+        self.assertEqual(len(self.capture.read_text().splitlines()), 1)
+        meta_path = self.root / "agents" / name / "meta.json"
+        meta = json.loads(meta_path.read_text())
+        meta["pruned"] = True
+        meta_path.write_text(json.dumps(meta))
+        self.assertEqual(self.dash.dispatch_linear(self.request)[0], 409)
+
+    def test_simultaneous_initial_requests_create_only_one_agent(self):
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            replies = list(pool.map(lambda _: self.dash.dispatch_linear(dict(self.request)), range(2)))
+        self.assertEqual(sum(code == 201 for code, _ in replies), 1, replies)
+        self.assertTrue(all(code in (200, 201, 409) for code, _ in replies), replies)
+        for _ in range(100):
+            if self.capture.exists():
+                break
+            time.sleep(.05)
         self.assertEqual(len(self.capture.read_text().splitlines()), 1)
 
     def test_claude_uses_the_same_interactive_launch_path(self):
