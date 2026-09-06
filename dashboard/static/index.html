@@ -948,18 +948,18 @@ function render(s){
         <td>${statusDot(c.state==='running'?'active':'failed')}${esc(c.name)}</td>
         <td class="dim">${esc(c.status)}</td></tr>`).join('')||'<tr><td class="dim">no containers</td></tr>');
   $('tmux').innerHTML=s.tmux.length?s.tmux.map(x=>`<tr>
-      <td>${statusDot('active')}<a href="${esc(appUrl('/term/?arg='+encodeURIComponent(x.name)))}">${esc(x.name)}</a></td>
+      <td>${statusDot('active')}<a href="${esc(appUrl('/term/?arg='+encodeURIComponent(x.name)))}">${esc(x.name)}</a>${x.worktree?`<div class="dim" title="${esc(x.worktree.dir||'')}">${esc(x.worktree.repo||'')} · ${esc(x.worktree.branch||'')}</div>`:''}</td>
       <td class="num">${esc(x.windows)} win</td>
       <td class="dim">${esc(x.attached)}</td>
       <td class="num"><a class="capture" data-capture="${esc(x.name)}" title="copy session output">📋</a><a class="kill" data-kill="${esc(x.name)}" title="kill session">✕</a></td></tr>`).join('')
     :'<tr><td class="dim">no agent sessions — use the Terminal/Claude/Codex tiles</td></tr>';
   $('sessions').innerHTML=(s.agent_history||[]).length?s.agent_history.map(h=>{
     const live=s.tmux.some(x=>x.name===h.name);
-    return `<tr><td>${statusDot(live?'active':'inactive')}${esc(h.name)}</td>
+    return `<tr><td>${statusDot(live?'active':'inactive')}${esc(h.name)}${h.worktree?`<div class="dim" title="${esc(h.worktree.dir||'')}">${esc(h.worktree.repo||'')} · ${esc(h.worktree.branch||'')}${h.worktree.pruned?' · checkout removed':''}</div>`:''}</td>
       <td class="dim">${esc(h.last_when)}</td>
       <td class="num dim">${esc(String(h.size_kb))}K</td>
       <td class="num"><a class="viewlog" href="#" data-log="${esc(h.name)}" data-file="${esc(h.logs[0])}" title="view transcript">📜</a>
-      ${!live&&!portableCompanion?` <a class="resume" href="#" data-resume="${esc(h.name)}" title="resume in its old dir">▶</a>`:''}</td></tr>`;
+      ${!live&&!portableCompanion&&!h.worktree?.pruned?` <a class="resume" href="#" data-resume="${esc(h.name)}" title="resume in its old dir">▶</a>`:''}</td></tr>`;
     }).join('')
     :'<tr><td class="dim">no past sessions yet</td></tr>';
   $('inbox').innerHTML=(s.inbox||[]).length?s.inbox.map(n=>`
