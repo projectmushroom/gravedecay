@@ -277,6 +277,11 @@ test('PWA contract spans the appliance origin', async ({ request, baseURL }) => 
   expect(worker.headers()['service-worker-allowed']).toBe('/');
 });
 
+test.describe('issue dispatch API fixtures', () => {
+// These tests mock API traffic. A controlling PWA worker can bypass page.route
+// after reload; service-worker behavior is covered by the other browser tests.
+test.use({ serviceWorkers: 'block' });
+
 test('Linear dispatch chooses a repository and opens the created session', async ({ page }) => {
   let body;
   await page.route('**/api/state', async route => {
@@ -337,4 +342,5 @@ test('dispatch failures remain actionable and PR links appear beside issue sessi
   await page.locator('#dispatch-start').click();
   await expect(page.locator('#dispatch-message')).toContainText('nothing started');
   await expect(page.locator('#dispatch-start')).toBeEnabled();
+});
 });
