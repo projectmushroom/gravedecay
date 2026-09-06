@@ -183,8 +183,51 @@ t3_connect_mode() {
   case "$m" in publish|full) printf '%s\n' "$m" ;; *) printf 'off\n' ;; esac
 }
 
+t3_owner() {
+  local owner
+  owner=$(systemctl show -p User t3code 2>/dev/null | sed -n 's/^User=//p')
+  [[ -n "$owner" ]] && getent passwd "$owner" >/dev/null || {
+    echo "Cannot resolve t3code service user; run raise.sh first." >&2
+    return 1
+  }
+  printf '%s\n' "$owner"
+}
+
+t3_owner_run() { # run with the same Unix identity and home as t3code.service
+  local owner record owner_uid owner_home owner_path
+  owner=$(t3_owner) || return
+  record=$(getent passwd "$owner") || return
+  owner_uid=$(cut -d: -f3 <<<"$record")
+  owner_home=$(cut -d: -f6 <<<"$record")
+  owner_path="$owner_home/.local/bin:${TOOL_PATH:-}/usr/local/bin:/usr/bin:/bin"
+  if [[ "$EUID" == "$owner_uid" ]]; then
+    env HOME="$owner_home" USER="$owner" LOGNAME="$owner" PATH="$owner_path" "$@"
+  elif [[ "$EUID" == 0 ]]; then
+    sudo -n -H -u "$owner" env HOME="$owner_home" USER="$owner" LOGNAME="$owner" PATH="$owner_path" "$@"
+  else
+    echo "Run this command as $owner (the t3code service user)." >&2
+    return 1
+  fi
+}
+
+t3_connect_files_ok() {
+  # Root's ability to read mode-600 files says nothing about the service.
+  # Probe as its actual user and do not expose any secret contents.
+  t3_owner_run bash -c '
+    shopt -s nullglob
+    for file in "$1"/userdata/secrets/cloud-*.bin "$1"/userdata/secrets/relay-*.bin; do
+      [[ -r "$file" && -w "$file" && $(stat -c %a "$file") == 600 ]] || exit 1
+    done
+    [[ ! -d "$1/userdata/secrets" || ( -r "$1/userdata/secrets" && -x "$1/userdata/secrets" && -w "$1/userdata/secrets" ) ]]
+  ' bash "$T3_BASE_DIR"
+}
+
+t3_connect_set_mode() {
+  t3_owner_run bash -c 'mkdir -p "$(dirname "$1")"; printf "%s\n" "$2" >"$1"' bash "$T3_CONNECT_MODE_FILE" "$1"
+}
+
 t3_connect_json() { # persisted Connect state of the appliance instance
-  t3 connect status --json --base-dir "$T3_BASE_DIR" 2>/dev/null
+  t3_owner_run t3 connect status --json --base-dir "$T3_BASE_DIR" 2>/dev/null
 }
 
 t3c_is() { # t3c_is <jq bool expr> <json> — predicate for doctor checks
@@ -213,10 +256,15 @@ t3_connect_restart() { # apply a link-state change to the running service
   fi
 }
 
-cmd_t3_connect() { # grave t3 connect [status|publish|full|off]
+cmd_t3_connect() { # grave t3 connect [status|diagnose|publish|full|off]
   local want="${1:-status}" desired json
-  command -v t3 >/dev/null 2>&1 || { bad "t3 is not installed"; exit 1; }
+  if [[ "${MULTI_USER:-0}" == 1 ]]; then
+    bad "appliance Connect is unavailable in multi-user mode"; return 1
+  fi
   case "$want" in
+    diagnose)
+      t3_owner_run python3 "$GRAVE_ROOT/scripts/t3-connect-diagnose.py" "$T3_BASE_DIR"
+      ;;
     status)
       desired="$(t3_connect_mode)"
       say "T3 Connect — declared mode: ${BLD}$desired${RST} ($T3_CONNECT_MODE_FILE)"
@@ -238,11 +286,9 @@ cmd_t3_connect() { # grave t3 connect [status|publish|full|off]
               bad "drift: mode is $desired but no link desired — 'grave t3 connect $desired'"
             elif ! t3c_is '.linked' "$json"; then
               bad "mode is $desired and a link is desired, but the relay has NOT linked this environment"
-              say "     the official apps cannot reach this box. The usual cause is the"
-              say "     account's managed-tunnel limit, held by another environment (the"
-              say "     desktop app links ~/.t3). The relay has no list endpoint and no web"
-              say "     UI — free a slot by deleting that environment BY ID, then restart"
-              say "     t3code. See 'Freeing a managed-tunnel slot' in docs/SECURITY.md."
+              say "     run 'grave t3 connect diagnose' for the latest relay failure and"
+              say "     registered environments. A managed-tunnel limit is one possible"
+              say "     cause; see 'Freeing a managed-tunnel slot' in docs/SECURITY.md."
             elif [[ "$desired" == full ]] && ! t3c_is '.relayUrl' "$json"; then
               bad "linked but no relay provisioned — mode full expects a relay URL"
             else
@@ -250,7 +296,9 @@ cmd_t3_connect() { # grave t3 connect [status|publish|full|off]
             fi ;;
         esac
       else
-        bad "could not read t3 connect status for $T3_BASE_DIR"
+        bad "could not read t3 connect status as the t3code service user"
+        say "     check private-file ownership under $T3_BASE_DIR/userdata/secrets"
+        return 1
       fi
       ;;
     publish|full)
@@ -269,11 +317,11 @@ cmd_t3_connect() { # grave t3 connect [status|publish|full|off]
       # phone/laptop and prompts for the code shown after sign-in.
       local args=(connect link --headless --base-dir "$T3_BASE_DIR")
       [[ "$want" == publish ]] && args+=(--publish-only)
-      t3 "${args[@]}" || { bad "t3 connect link failed"; exit 1; }
+      t3_owner_run t3 "${args[@]}" || { bad "t3 connect link failed"; exit 1; }
       # publish-only sets the publish flag itself; a full link does not, and
       # phone notifications are half the point of enabling Connect on this box.
-      [[ "$want" == full ]] && t3 connect publish --base-dir "$T3_BASE_DIR"
-      mkdir -p "$GRAVE_ROOT/config"; printf '%s\n' "$want" >"$T3_CONNECT_MODE_FILE"
+      [[ "$want" == full ]] && t3_owner_run t3 connect publish --base-dir "$T3_BASE_DIR"
+      t3_connect_set_mode "$want"
       t3_connect_restart
       log "t3 connect: mode $want"
       ok "T3 Connect mode: $want — 'grave doctor' now enforces it"
@@ -282,13 +330,13 @@ cmd_t3_connect() { # grave t3 connect [status|publish|full|off]
       hdr "T3 Connect — off"
       # unlink keeps the stored authorization (relinking later skips sign-in);
       # `t3 connect logout --base-dir $T3_BASE_DIR` clears that too.
-      t3 connect unlink --base-dir "$T3_BASE_DIR" || true
-      mkdir -p "$GRAVE_ROOT/config"; printf 'off\n' >"$T3_CONNECT_MODE_FILE"
+      t3_owner_run t3 connect unlink --base-dir "$T3_BASE_DIR" || { bad "unlink failed; declared mode retained"; return 1; }
+      t3_connect_set_mode off
       t3_connect_restart
       log "t3 connect: mode off"
       ok "T3 Connect disabled — the box is tailnet-only again"
       ;;
-    *) say "usage: grave t3 connect [status|publish|full|off]"; exit 1 ;;
+    *) say "usage: grave t3 connect [status|diagnose|publish|full|off]"; exit 1 ;;
   esac
 }
 
@@ -361,7 +409,7 @@ cmd_t3() { # grave t3 [status|update|connect …] — manage the stable T3 Code 
       log "t3: updated v$installed to v$updated"
       ok "T3 Code updated to v$updated"
       ;;
-    *) say "usage: grave t3 [status|update|connect [status|publish|full|off]]"; exit 1 ;;
+    *) say "usage: grave t3 [status|update|connect [status|diagnose|publish|full|off]]"; exit 1 ;;
   esac
 }
 
@@ -1319,6 +1367,9 @@ cmd_doctor() { # grave doctor [--no-page]
   # dead) without anyone having decided that. See docs/SECURITY.md.
   local tc_mode tc_json
   tc_mode="$(t3_connect_mode)"
+  if [[ "$tc_mode" != off ]]; then
+    check "T3 Connect credentials private and usable by service user" t3_connect_files_ok
+  fi
   if tc_json="$(t3_connect_json)" && [[ -n "$tc_json" ]]; then
     case "$tc_mode" in
       off)
@@ -1342,6 +1393,9 @@ cmd_doctor() { # grave doctor [--no-page]
         if systemctl is-active --quiet t3code; then
           check "t3 connect environment linked"           t3c_is '.linked' "$tc_json"
           check "relay tunnel process running"            pgrep -f "$T3_BASE_DIR/.*[c]loudflared"
+          if ! t3c_is '.linked' "$tc_json"; then
+            say "     run 'grave t3 connect diagnose' for relay errors and registered environments"
+          fi
         fi
         ;;
     esac
@@ -1357,7 +1411,7 @@ cmd_doctor() { # grave doctor [--no-page]
   # ever setting the CLI's desired flag, so testing intent alone stayed silent
   # while the stray profile held the account's environment — the appliance's
   # own link then 403s with nothing pointing at the cause.
-  if [[ -d "$HOME/.t3" ]] && t3c_is '.desired or .linked' "$(t3 connect status --json 2>/dev/null)"; then
+  if t3_owner_run bash -c '[[ -d "$HOME/.t3" ]]' 2>/dev/null && t3c_is '.desired or .linked' "$(t3_owner_run t3 connect status --json 2>/dev/null)"; then
     say "  ${YLW}– stray T3 Connect link on the default t3 profile (~/.t3) — not this appliance's instance. It may hold a managed-tunnel slot and make this box's link 403; 't3 connect unlink' it if unintended, and check the slot was really released (unlink degrades to local-only when that profile holds no CLI credential — see docs/SECURITY.md)${RST}"
   fi
   if pgrep -af 'cloudflared.*tunnel run' 2>/dev/null | grep -v "$T3_BASE_DIR" | grep -q .; then
@@ -2254,7 +2308,7 @@ grave — gravedecay appliance control 🪦
   grave preview off <port>   stop a preview
 
   grave t3 [status|update]   show versions or install npm's stable T3 release
-  grave t3 connect <mode>    T3 Connect for the official T3 apps — status,
+  grave t3 connect <mode>    T3 Connect for the official T3 apps — status, diagnose,
                              publish (phone notifications, transport stays
                              tailnet), full (managed relay tunnel, no VPN
                              needed), off. Doctor enforces the declared mode

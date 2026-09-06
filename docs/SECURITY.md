@@ -86,44 +86,53 @@ for exactly that reason.
 
 ### Freeing a managed-tunnel slot
 
-A `full` link can be refused with `403 POST
-https://relay.t3.codes/v1/client/environment-links` while everything local
-looks correct — authorized, link desired, relay client installed. Upstream's
-contract (`packages/contracts/src/relay.ts`) maps exactly two codes to 403 on
-that endpoint: `environment_connect_not_authorized` and
-`environment_link_limit_exceeded` ("this account allows at most N tunnels").
-T3 Code logs the status but **discards the response body**, so the code never
-reaches the journal — the limit is the usual culprit, and the desktop app is
-the usual holder (it links the default `~/.t3` profile).
-
-Two facts make this harder than it should be:
-
-- `t3 connect unlink` does attempt the server-side revoke, but **degrades to
-  local-only when that profile holds no CLI credential** — which is exactly
-  the desktop app's state (`authenticated: false`, `linked: true`). It prints
-  "T3 Connect is disabled locally" and the slot stays taken.
-- The relay exposes **no list endpoint and no web UI** for environment links —
-  only `DELETE /v1/client/environment-links/:environmentId`. There is no page
-  to go and tidy this up on.
-
-So release the slot by id. The id and a bearer both survive on disk:
+A saved login is separate from a working environment link. Start with:
 
 ```sh
-ENV=$(cat ~/.t3/userdata/environment-id)          # the stray profile's id
-TOK=$(jq -r .accessToken \
-  "$GRAVE_ROOT/agents/t3code/userdata/secrets/cloud-cli-oauth-token.bin")
-curl -fsS -X DELETE -H "Authorization: Bearer $TOK" \
-  "https://relay.t3.codes/v1/client/environment-links/$ENV"   # -> {"ok":true}
-sudo systemctl restart t3code
-grave t3 connect status                            # linked: yes, relay: https://…
+grave t3 connect status
+grave t3 connect diagnose
 ```
 
-Any valid bearer for the account authorizes the delete, so the appliance's own
-token works on another environment's link. Deleting is reversible — relinking
-the desktop app re-registers it, and takes the slot back.
+Connect commands run as the `t3code.service` Unix user, including when invoked
+as root. This keeps login files readable by the service. Doctor also checks
+that the service user can read and update the private mode-600 Connect files.
+If an earlier root invocation created inaccessible files, correct ownership
+of the affected files under the appliance's `userdata/secrets` directory to
+the service user, retaining mode 600. Do not recursively change ownership of
+other profiles or collaborator credentials.
 
-`publish` mode consumes no tunnel slot, so it stays available when the limit
-is genuinely full.
+`diagnose` is read-only: it shows the latest recorded link attempt and calls
+`GET https://relay.t3.codes/v1/environments` with the appliance's existing
+credential. Tokens stay in memory, never in command arguments or output.
+The result identifies each environment by label, id, and transport. Manual
+endpoints do not consume Cloudflare tunnel slots. The list does not expose the
+account's maximum, so counting entries alone cannot confirm quota exhaustion.
+Older T3 versions (including 0.0.38) log HTTP 403 but discard the response body;
+diagnostics report that limitation instead of declaring every 403 a quota error.
+When preserved in the trace, `environment_link_limit_exceeded` identifies the
+quota failure explicitly.
+
+In the official app, open the account menu's **T3 Connect** page, or mobile
+**Settings → T3 Connect**, and **Deregister** an unused environment. This revokes
+that machine's cloud access and frees its host slot. Then run:
+
+```sh
+sudo systemctl restart t3code
+grave t3 connect status
+grave doctor
+```
+
+For administration by API, the removal endpoint is
+`DELETE /v1/client/environment-links/:environmentId`. Obtain the id from the
+list above and choose it explicitly; never remove an arbitrary environment to
+make a health check green. If DELETE returns an upstream error, list again
+before retrying: removal can have succeeded despite an HTTP 500. The new host
+must actually link and start its tunnel before recovery is complete.
+
+`publish` mode consumes no managed tunnel slot, but changing to it requires
+Tailscale for transport; it is not a repair for someone expecting full Connect.
+
+See [upstream remote-access documentation](https://github.com/pingdotgg/t3code/blob/main/docs/user/remote-access.md).
 
 ## The sudoers file
 

@@ -615,6 +615,7 @@ fi
 step "gravedecay"
 install -m 755 "$REPO_DIR/dashboard/gravedecay.py" "$GRAVE_ROOT/scripts/gravedecay.py"
 install -m 755 "$REPO_DIR/dashboard/gateway.py" "$GRAVE_ROOT/scripts/gateway.py"
+install -m 755 "$REPO_DIR/libexec/t3-connect-diagnose.py" "$GRAVE_ROOT/scripts/t3-connect-diagnose.py"
 install -d -m 755 "$GRAVE_ROOT/scripts/dashboard-static"
 install -m 644 "$REPO_DIR/dashboard/static/"* "$GRAVE_ROOT/scripts/dashboard-static/"
 install -m 644 "$REPO_DIR/assets/gravedecay.png" "$GRAVE_ROOT/config/gravedecay.png"

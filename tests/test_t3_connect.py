@@ -19,7 +19,7 @@ class T3ConnectContractTests(unittest.TestCase):
         # grave must pin --base-dir to the service instance.
         for line in GRAVE.splitlines():
             stripped = line.strip()
-            if stripped.startswith("t3 connect") and "status --json 2" not in stripped:
+            if stripped.startswith(("t3 connect", "t3_owner_run t3 connect")) and "status --json 2" not in stripped:
                 self.assertIn('--base-dir "$T3_BASE_DIR"', stripped, line)
 
     def test_doctor_enforces_every_declared_mode(self):
@@ -90,17 +90,12 @@ class T3ConnectContractTests(unittest.TestCase):
         self.assertIn("t3c_is '.desired or .linked'", GRAVE)
 
     def test_403_guidance_points_at_the_real_remedy(self):
-        # The first cut of this message sent operators to a "T3 Connect
-        # account" page that does not exist: the relay has no list endpoint
-        # and no web UI, only DELETE by environment id. It must not invent a
-        # destination, and the documented procedure has to be reachable.
-        self.assertNotIn("remove it in your T3 Connect account", GRAVE)
-        self.assertNotIn("remove the environment in your T3 account", GRAVE)
-        self.assertIn("managed-tunnel", GRAVE)
+        self.assertIn("grave t3 connect diagnose", GRAVE)
         self.assertIn("Freeing a managed-tunnel slot", GRAVE)
-        self.assertIn("### Freeing a managed-tunnel slot", SECURITY_DOC)
         self.assertIn("/v1/client/environment-links/", SECURITY_DOC)
-        self.assertIn("~/.t3/userdata/environment-id", SECURITY_DOC)
+        self.assertIn("/v1/environments", SECURITY_DOC)
+        self.assertIn("Deregister", SECURITY_DOC)
+        self.assertNotIn("no list endpoint", SECURITY_DOC)
 
     def test_headless_flag_is_used_for_linking(self):
         # The box has no browser: without --headless the CLI attempts a
