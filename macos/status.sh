@@ -74,6 +74,10 @@ drift(){ name=$1 rel=$2 enabled=$3; [ "$enabled" = 1 ] || return 0; [ -d "$SRC/.
   if cmp -s "$ROOT/scripts/$name" "$SRC/$rel"; then echo "$name: matches the managed checkout"
   else echo "$name: drifted from the managed checkout (rerun macos/install.sh)"; rc=1; fi; }
 drift gravedecay.py dashboard/gravedecay.py "$dash"
+drift benchmark.py dashboard/benchmark.py "$dash"
+if [ "$dash" = 1 ]; then
+  python3 "$ROOT/scripts/benchmark.py" --root "$ROOT" check || rc=1
+fi
 drift gravenet.py dashboard/gravenet.py "$net"
 # Every terminal session runs the copied webterm; stale copies serve silently.
 drift webterm bin/webterm "$agentsmode"

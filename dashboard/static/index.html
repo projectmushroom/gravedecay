@@ -278,6 +278,12 @@ body.gaming #foot{display:none}
   .panel #tmux td:last-child{grid-column:3;width:auto}
 }
 .release-picker{margin-top:12px;padding-top:10px;border-top:1px dashed var(--hairline)}
+/* These three short numeric columns remain a table on phones. */
+#bench-result table{display:table;table-layout:fixed;margin:12px 0}
+#bench-result tbody{display:table-row-group}
+#bench-result tr{display:table-row}
+#bench-result th,#bench-result td{display:table-cell;width:auto;padding:6px 4px;
+  text-align:left;font-size:12px}
 .release-picker label{color:var(--muted)}
 .release-picker select{background:var(--inset);color:var(--ink);border:1px solid var(--ring);
   min-height:40px;padding:6px 9px;font:13px ui-monospace,Menlo,monospace}
@@ -325,7 +331,7 @@ body.macos.macagents .macagents-setting.sethead{display:block!important}
 body:not(.macos) .mac-only-setting{display:none!important}
 body.macos [data-panel="actions"] .actions{display:none!important}
 /* Portable workspaces intentionally cannot observe or control their Docker host. */
-body.portable [data-panel="stats"],body.portable [data-panel="actions"],body.portable [data-panel="services"],
+body.portable [data-panel="benchmark"],body.portable [data-panel="stats"],body.portable [data-panel="actions"],body.portable [data-panel="services"],
 body.portable [data-panel="docker"],body.portable [data-panel="journal"],body.portable #game-banner,
 body.portable #mode,body.portable .tabs,body.portable #keepalive-head,body.portable #keepalive-row,
 body.portable #boot-mode-head,body.portable #boot-mode-row,body.portable #throttle-head,
@@ -578,6 +584,25 @@ body.portable #sec-notify{display:none!important}
   <div class="panel" data-panel="inbox"><h2>🔔 Inbox — pages this box sent</h2><div id="inbox"></div></div>
   <div class="panel" data-panel="repos"><h2>📦 Repos</h2><table id="repos"></table></div>
   <div class="tiles w-full" data-panel="stats" id="tiles"></div>
+  <div class="panel w-full" data-panel="benchmark">
+    <h2>⏱ Development benchmark</h2>
+    <p class="dim">Compare this grave’s local Git, build and test speed. Uses a disposable sample project; no downloads or AI calls.</p>
+    <div class="setrow" style="flex-wrap:wrap">
+      <label for="bench-mode">Workload</label>
+      <select id="bench-mode">
+        <option value="quick">Quick · single worker</option>
+        <option value="capacity">Capacity · up to 8 workers</option>
+        <option value="sustained">Sustained · 10 minutes</option>
+      </select>
+      <button class="mini" id="bench-run" disabled>▶ Run benchmark</button>
+      <button class="mini" id="bench-cancel" hidden>■ Stop</button>
+      <button class="mini" id="bench-export" hidden>↓ Export JSON</button>
+    </div>
+    <p class="dim2">Runs CPU and disk work on this grave. For comparable results, use AC power and pause other heavy jobs.</p>
+    <progress id="bench-progress" max="100" value="0" aria-label="Benchmark progress" hidden style="width:100%"></progress>
+    <p id="bench-state" role="status" aria-live="polite">Loading benchmark status…</p>
+    <div id="bench-result"></div>
+  </div>
   <div class="panel w-full" data-panel="actions"><h2>🕹️ Actions</h2>
     <div class="actions">
       <button data-act="gaming" data-gaming-control style="display:none">🎮 Gaming mode</button>
@@ -674,11 +699,11 @@ const agentArg=u=>{const m=/[?&]arg=(claude|codex)(?=$|&)/.exec(u||'');return m?
 const PANEL_NAMES={prs:'Pull requests',ci:'CI status',
   linear:'Linear issues',usage:'Agent usage',tmux:'Agent sessions',t3activity:'T3 activity',repos:'Repos',
   sessions:'Session history',inbox:'Inbox',
-  stats:'Stats tiles',actions:'Actions',services:'Services',docker:'Docker',
+  stats:'Stats tiles',benchmark:'Development benchmark',actions:'Actions',services:'Services',docker:'Docker',
   journal:'Journal errors'};
 const PANEL_TABS={prs:'work',ci:'work',linear:'work',usage:'work',
   tmux:'work',t3activity:'work',repos:'work',sessions:'work',inbox:'work',
-  stats:'system',actions:'system',services:'system',docker:'system',journal:'system'};
+  stats:'system',benchmark:'system',actions:'system',services:'system',docker:'system',journal:'system'};
 let linearConfigured=false,lastMode=null,lastTmux=[];
 let cfg=null,cfgSrv='',envApps=[],layoutKey='';
 let graveReleasesLoaded=false,macUpdateChannel='release',macUpdateSeen=false;
@@ -708,8 +733,64 @@ document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
   activeTab=t.dataset.tab;localStorage.setItem('grave-tab',activeTab);
   if(cfg)applyLayout();
   // Linux uses !macosCompanion&&!portableCompanion for its system actions; Mac has only this release picker.
-  if(activeTab==='system'&&!portableCompanion)loadGraveReleases();
+  if(activeTab==='system'&&!portableCompanion){loadGraveReleases();pollBenchmark();}
 });
+let benchBusy=false,benchChecked=0,benchLatest=null,benchRunning=false;
+function renderBenchmark(b){
+  benchRunning=b.state==='running'||b.state==='cancelling';
+  $('bench-run').disabled=benchRunning;
+  $('bench-mode').disabled=benchRunning;
+  $('bench-cancel').hidden=!benchRunning;
+  $('bench-progress').hidden=!benchRunning;
+  $('bench-progress').value=b.progress||0;
+  $('bench-state').textContent=b.message||'Ready — choose a workload and run it.';
+  if(b.elapsed_s&&benchRunning)$('bench-state').textContent+=` · ${Math.round(b.elapsed_s)}s`;
+  if(b.latest)benchLatest=b.latest;
+  const r=benchLatest;
+  $('bench-export').hidden=!r;
+  if(!r)return;
+  const e=r.environment,sec=n=>Number(n).toFixed(2),single=r.single;
+  $('bench-result').innerHTML=`
+    <div class="tiles" style="margin:12px 0">
+      <div class="tile"><div class="dim">Dev score</div><strong style="font-size:2rem">${esc(String(r.score))}</strong></div>
+      <div class="tile"><div class="dim">Single dev cycle</div><strong>${sec(single.total_s)}s</strong></div>
+      ${r.best_workers?`<div class="tile"><div class="dim">Best tested workers*</div><strong>${r.best_workers}</strong></div>`:''}
+    </div>
+    <p class="dim2">100 points = one standard cycle in 10 seconds. Higher is faster. Compare matching suite and toolchain versions.</p>
+    <table aria-label="Benchmark timings"><tr><th>Repository</th><th>Clean build</th><th>Tests</th></tr>
+      <tr><td>${sec(single.repository_s)}s</td><td>${sec(single.build_s)}s</td><td>${sec(single.tests_s)}s</td></tr></table>
+    ${(r.parallel||[]).length?`<table aria-label="Parallel benchmark"><tr><th>Workers</th><th>Cycles/min</th><th>Slowdown</th></tr>${r.parallel.map(x=>`<tr><td>${x.workers}</td><td>${sec(x.cycles_per_min)}</td><td>${sec(x.slowdown)}×</td></tr>`).join('')}</table><p class="dim2">*Highest throughput with at most 2× single-worker latency. Synthetic workers; actual agent capacity depends on your projects and memory use.</p>`:''}
+    ${r.sustained?`<p>Sustained: ${sec(r.sustained.cycles_per_min)} cycles/min · final cycles took ${sec(r.sustained.last_vs_first)}× the initial time.</p>`:''}
+    <p class="dim2" style="overflow-wrap:anywhere">Last completed: ${esc(new Date(r.measured_at*1000).toLocaleString())} · ${esc(r.mode)} · ${esc(r.suite)}<br>${esc(e.host)} · ${esc(e.os)} / ${esc(e.architecture)} · Python ${esc(e.python)} · ${esc(e.git)} · ${esc(e.execution)}</p>`;
+}
+async function pollBenchmark(force=false){
+  if(benchBusy||portableCompanion||(!force&&Date.now()-benchChecked<2000))return;
+  benchBusy=true;benchChecked=Date.now();
+  try{
+    const response=await fetch('api/admin/benchmark',{cache:'no-store'}),b=await response.json();
+    if(!response.ok)throw new Error(b.output||b.error||`HTTP ${response.status}`);
+    renderBenchmark(b);
+  }catch(e){$('bench-state').textContent=e.message;$('bench-run').disabled=true;}
+  finally{benchBusy=false;}
+}
+async function benchmarkAction(action){
+  $('bench-run').disabled=true;$('bench-cancel').disabled=true;
+  try{
+    const body=action==='start'?{action,mode:$('bench-mode').value}:{action};
+    const response=await fetch('api/admin/benchmark',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),b=await response.json();
+    if(!response.ok)throw new Error(b.output||b.error||`HTTP ${response.status}`);
+    renderBenchmark(b);
+  }catch(e){$('bench-state').textContent=e.message;}
+  finally{$('bench-cancel').disabled=false;benchChecked=0;}
+}
+$('bench-run').onclick=()=>benchmarkAction('start');
+$('bench-cancel').onclick=()=>benchmarkAction('cancel');
+$('bench-export').onclick=()=>{
+  if(!benchLatest)return;
+  const url=URL.createObjectURL(new Blob([JSON.stringify(benchLatest,null,2)],{type:'application/json'}));
+  const a=document.createElement('a');a.href=url;a.download=`${benchLatest.suite}-${benchLatest.measured_at}.json`;a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+};
 async function loadGraveReleases(force=false){
   if(graveReleasesLoaded&&!force)return;
   graveReleasesLoaded=true;
@@ -792,7 +873,7 @@ function render(s){
   if(modeChanged)schedule();
   const k=JSON.stringify([cfg.panel_order,cfg.hidden_panels,activeTab]);
   if(k!==layoutKey){layoutKey=k;applyLayout();}
-  if(activeTab==='system'&&!portableCompanion)loadGraveReleases();
+  if(activeTab==='system'&&!portableCompanion){loadGraveReleases();pollBenchmark();}
   // 📁 Files is a built-in tile: opens the native file-manager modal.
   const tiles=(s.platform==='macos'?[]:[{name:'📁 Files',url:FILES_URL}]).concat(allApps());
   $('apps').innerHTML=tiles.filter(a=>!cfg.hidden_apps.includes(a.name)).map(a=>{

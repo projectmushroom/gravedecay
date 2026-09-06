@@ -31,6 +31,17 @@ or `container`. Portable (`container`) summaries intentionally return `null`
 host resource and uptime values, retain `dashboard`, `t3`, and `terminal`
 links, and omit `network`.
 
+## Owner-only benchmark
+
+`GET /grave/api/admin/benchmark` returns run progress and the last successful
+local result. `POST` accepts exactly `{"action":"start","mode":"quick"}`
+(also `capacity` or `sustained`) or `{"action":"cancel"}`. Both routes require
+the existing owner/admin identity gate; POST also requires the existing
+same-origin protection. The macOS source companion supports them; portable
+dashboards reject them. The multi-user gateway routes admin requests to the
+owner backend. Results are not part of `/api/v1/summary`.
+See [BENCHMARK.md](BENCHMARK.md).
+
 ## Owner-only T3 activity
 
 `GET /grave/api/t3-activity` is an owner/workspace-gated dashboard endpoint,

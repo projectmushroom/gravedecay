@@ -194,6 +194,7 @@ websockets just work. `grave preview off 3000` stops it.
 ```
 grave status                     # services, containers, agents, temps, disk
 grave doctor                     # verify every platform invariant
+grave bench                      # score local development speed (System tab also)
 grave agents new mybot [dir]     # persistent tmux agent session
 grave agents attach mybot        # detach: Ctrl-b d — session survives
 grave gaming [--kill] [--for 2h] # 🎮 free resources; optionally auto-restore
@@ -244,6 +245,7 @@ Writing your own is ~20 lines; see `profiles/README.md`.
 | [docs/MACOS.md](docs/MACOS.md) | macOS companion, native-app coexistence, and macOS operations |
 | [docs/SECRETS.md](docs/SECRETS.md) | Secrets + MCP wiring for agent CLIs |
 | [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md) | Web Push + ntfy: agents, failing units, and doctor page your phone |
+| [docs/BENCHMARK.md](docs/BENCHMARK.md) | Development speed scores, parallel scaling, and sustained workloads |
 | [docs/PORTS.md](docs/PORTS.md) | Every port, documented or it doesn't exist |
 | [docs/RECOVERY.md](docs/RECOVERY.md) | Backup/restore procedures |
 | [docs/UNINSTALL.md](docs/UNINSTALL.md) | Unraising the box: what is removed, kept, and deliberately untouched |

@@ -139,6 +139,11 @@ user-scoped, no-sudo companion installs or depends on. Thermal is instead
 reported as nominal or throttled from `pmset -g therm`; desktop Macs simply
 have no battery card.
 
+The source companion supports `grave bench` and **System → Development
+benchmark** for local Git/Python speed, parallel scaling and sustained runs.
+See [BENCHMARK.md](BENCHMARK.md) for scoring and comparison limits. The
+read-only native publisher does not run benchmarks.
+
 Run `macos/status.sh` for doctor-lite. Like `grave doctor` on the appliance,
 it is the contract: it exits non-zero when an invariant fails. It checks
 selected LaunchAgents loaded, loopback health, Serve path mounts matching the

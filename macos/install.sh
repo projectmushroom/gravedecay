@@ -162,6 +162,7 @@ serve_off(){ path=$1; [ -z "$TAILSCALE" ] || run "$TAILSCALE" serve --https=443 
 [ "$DRY" = 1 ] || { run mkdir -p "$ROOT/scripts" "$ROOT/web/net" "$ROOT/logs" "$ROOT/config" "$ROOT/config/secrets" "$ROOT/repos" "$ROOT/staging" "$AGENTS"; run chmod 700 "$ROOT/config/secrets"; : > "$ROOT/.gravedecay-macos"; }
 if [ "$DRY" = 0 ]; then
   run cp "$HERE/grave" "$ROOT/scripts/grave"; run cp "$HERE/updater.py" "$ROOT/scripts/updater.py"; run cp "$HERE/status.sh" "$ROOT/scripts/status.sh"; run chmod 700 "$ROOT/scripts/grave" "$ROOT/scripts/updater.py" "$ROOT/scripts/status.sh"
+  run cp "$HERE/../dashboard/benchmark.py" "$ROOT/scripts/benchmark.py"
   "$PYTHON" - "$ROOT" "$SOURCE" "${GRAVEDECAY_UPDATE_CHANNEL:-release}" <<'PY'
 import json, os, subprocess, sys
 root, source, channel = sys.argv[1:]

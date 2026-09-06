@@ -94,12 +94,13 @@ def notify(args):
   die("ntfy delivery failed")
  if not event: print("notification sent")
 def main():
- if len(sys.argv)<2: die("usage: grave releases [--json] | grave upgrade [--release|--edge|--tag vX.Y.Z] | grave update-status | grave notify <title> [body...]")
+ if len(sys.argv)<2: die("usage: grave releases [--json] | grave upgrade [--release|--edge|--tag vX.Y.Z] | grave update-status | grave bench [quick|capacity|sustained|status|cancel] | grave notify <title> [body...]")
  c,a=sys.argv[1],sys.argv[2:]
  if c=="releases" and a in ([],["--json"]):
   x=releases(); print(json.dumps(x) if a else "\n".join(["gravedecay checkout: "+x["checkout"]]+["  "+v for v in x["releases"]]))
  elif c=="upgrade": upgrade(a)
  elif c=="update-status" and not a: print(json.dumps(read(STATUS,{"state":"idle"})))
  elif c=="notify": notify(a)
- else: die("usage: grave releases [--json] | grave upgrade [--release|--edge|--tag vX.Y.Z] | grave update-status | grave notify <title> [body...]")
+ elif c=="bench": os.execv(sys.executable, [sys.executable, os.path.join(ROOT,"scripts","benchmark.py"), "--root", ROOT, *a])
+ else: die("usage: grave releases [--json] | grave upgrade [--release|--edge|--tag vX.Y.Z] | grave update-status | grave bench [quick|capacity|sustained|status|cancel] | grave notify <title> [body...]")
 if __name__=="__main__": main()
