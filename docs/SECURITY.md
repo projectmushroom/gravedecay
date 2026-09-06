@@ -202,8 +202,7 @@ credentials.
 Use Docker Engine 28.0.0+ for localhost-published ports. On older Engines,
 Docker documented that a loopback published port could be reachable by hosts on
 the same L2 segment; upgrade or deny it in the host firewall. Never put the
-portable gateway behind an unauthenticated public/LAN proxy: a request without
-the Tailscale identity header is treated as local. Use host Tailscale Serve or
+portable gateway behind an unauthenticated public/LAN proxy. Use host Tailscale Serve or
 another trusted identity-aware access-control proxy instead. See
 [DOCKER.md](DOCKER.md) for the operational contract.
 
@@ -218,7 +217,7 @@ so you can move projects onto the box from a browser. It is confined:
   here — edit that repo over git/T3).
 - **Gated like the action buttons.** Reads *and* writes require
   `Tailscale-User-Login ∈ GRAVEDECAY_ALLOWED_USERS`; listing a filesystem is
-  as sensitive as changing it. Localhost (no header) stays trusted.
+  as sensitive as changing it. Local maintenance requires the private token below.
 - **The appliance's own secret store is hidden.** `$GRAVE_ROOT/config/secrets/`
   is excluded from listing, download, and mutation even though it sits inside
   the jail. This is a path guard, **not** a `*.env` blanket: repo `.env` files
@@ -259,3 +258,35 @@ permission-bypass flags. Task files are owner-private and included in agent
 worktree backups. Workspace, portable, and macOS backends reject this launch
 path; it never crosses into the appliance owner's identity. See
 [DISPATCH.md](DISPATCH.md).
+
+## Dashboard identity and local maintenance
+
+On Linux, macOS and portable installs, headerless requests (including tagged
+Tailscale devices) receive public status only. Owner-private GETs, every POST,
+and streamed actions require an allowed `Tailscale-User-Login` or the explicit
+local maintenance capability. Gaming mode follows the same rule. An empty
+allowlist grants no remote owner access.
+
+Tailscale Serve is the trusted edge: it strips client-supplied identity headers
+and supplies verified user identities. Keep the native backend on loopback and
+the portable gateway published on loopback; do not expose them through an
+untrusted proxy. The portable gateway preserves Serve identity and strips
+`X-Grave-Local-Token`. This does not protect a single-owner backend from another
+local Unix process forging identity headers; use the multi-user gateway and
+its backend capability/network boundary for that threat model.
+
+At startup the dashboard creates `config/secrets/dashboard-local-token` under
+`GRAVE_ROOT` with 256 random bits and mode 0600. Existing tokens must be regular,
+non-symlink files owned by the service account with no group/other access.
+The token stays out of HTML, API state, URLs and process arguments. Requests
+use `X-Grave-Local-Token`; the file manager cannot read the secret directory.
+Deleting the token and restarting the dashboard rotates it.
+
+`grave notify` and the morning digest authenticate their local calls through
+`python3 "$GRAVE_ROOT/scripts/gravedecay.py" --local-request /api/state`
+(or `/api/push-send` with JSON on stdin). Run maintenance as the appliance
+owner. `--check-auth` verifies token privacy, anonymous refusal, and authenticated
+access; Linux doctor, macOS doctor-lite and the portable healthcheck enforce it.
+Raw localhost browser access is read-only; use the Tailscale Serve URL for
+interactive owner controls. Multi-user backends still require their separate
+root-managed backend capability before evaluating owner access.

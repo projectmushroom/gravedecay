@@ -49,7 +49,7 @@ jobs:
       - run: npx playwright install --with-deps chromium webkit
       - name: Start fixture dashboard
         run: |
-          GRAVEDECAY_PORT=3000 GRAVE_ROOT="$RUNNER_TEMP/grave-root" \
+          GRAVEDECAY_ALLOWED_USERS=browser@example.test GRAVEDECAY_PORT=3000 GRAVE_ROOT="$RUNNER_TEMP/grave-root" \
             python dashboard/gravedecay.py >"$RUNNER_TEMP/dashboard.log" 2>&1 &
           echo $! >"$RUNNER_TEMP/dashboard.pid"
           for _ in {1..30}; do

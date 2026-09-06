@@ -1083,8 +1083,7 @@ push_send() { # push_send <title> <body> <priority> <link> <event>
   local resp
   resp=$(jq -n --arg t "$1" --arg b "$2" --arg p "$3" --arg u "$4" --arg e "$5" \
       '{title:$t, body:$b, priority:$p, url:$u, tag:(if $e=="" then "manual" else $e end)}' \
-    | curl -s -m 15 -X POST -H 'Content-Type: application/json' \
-        --data-binary @- "http://127.0.0.1:${DASH_PORT:-4712}/api/push-send") || { PUSH_ERROR="dashboard unreachable"; return 1; }
+    | GRAVE_ROOT="$GRAVE_ROOT" DASH_PORT="${DASH_PORT:-4712}" python3 "$GRAVE_ROOT/scripts/gravedecay.py" --local-request /api/push-send) || { [[ -n "$resp" ]] || { PUSH_ERROR="dashboard unreachable"; return 1; }; }
   jq -e .ok <<<"$resp" >/dev/null 2>&1 && return 0
   PUSH_ERROR=$(jq -r '.output // "push failed"' <<<"$resp" 2>/dev/null)
   return 1
@@ -1215,7 +1214,7 @@ cmd_digest() { # grave digest [--print]  (--print: compose only, never page)
   # on loopback instead of duplicating the parsers in bash. Its absence (gaming
   # mode, stopped) is itself morning news, so say so rather than omit the line.
   local usage spend_line="spend: dashboard stopped — no numbers this morning"
-  usage=$(curl -sf -m 10 "http://127.0.0.1:${DASH_PORT:-4712}/api/state" 2>/dev/null \
+  usage=$(GRAVE_ROOT="$GRAVE_ROOT" DASH_PORT="${DASH_PORT:-4712}" python3 "$GRAVE_ROOT/scripts/gravedecay.py" --local-request /api/state 2>/dev/null \
           | jq -c '.usage // empty' 2>/dev/null) || usage=""
   if [[ -n "$usage" ]]; then
     spend_line=$(jq -r '
@@ -1640,6 +1639,7 @@ cmd_doctor() { # grave doctor [--no-page]
       check "dashboard offline shell ready" dashboard_sw_ok
       check "dashboard serving installed offline page" dashboard_offline_ok
     else
+      check "dashboard identity and local maintenance boundary" env GRAVE_ROOT="$GRAVE_ROOT" DASH_PORT="$DASH_PORT" python3 "$GRAVE_ROOT/scripts/gravedecay.py" --check-auth
       check "gravedecay answering"         curl -sf -o /dev/null "http://127.0.0.1:$DASH_PORT/healthz"
     check "dashboard summary API contract" bash -c \
       "curl -sf 'http://127.0.0.1:$DASH_PORT/api/v1/summary' | jq -e '.product == \"gravedecay\" and .api_version == 1' >/dev/null"
@@ -1728,7 +1728,7 @@ cmd_doctor() { # grave doctor [--no-page]
     if [[ "${MULTI_USER:-0}" == 1 ]]; then
       check "web push sender ready"     dashboard_push_ok
     else
-      check "web push sender ready"     bash -c "curl -sf 'http://127.0.0.1:$DASH_PORT/api/push-key' | jq -e .ok"
+      check "web push sender ready"     dashboard_local_push_ok
     fi
   fi
   if [[ -e "$NOTIFY_ENV" ]] || push_ready; then
@@ -1784,15 +1784,22 @@ cmd_dashboard_probe() {
     push-key) path=/api/push-key ;;
     *) bad "unknown dashboard probe"; exit 2 ;;
   esac
-  local token
+  local token local_token=""
+  if [[ "$path" == /api/push-key ]]; then
+    local_token=$(cat "$GRAVE_ROOT/config/secrets/dashboard-local-token") || return 1
+    [[ "$local_token" =~ ^[0-9a-f]{64}$ ]] || return 1
+  fi
   token=$(sed -n 's/^GRAVEDECAY_BACKEND_TOKEN=//p' "$GRAVE_ROOT/config/secrets/admin-dashboard.env" | head -1)
   [[ "$path" == /healthz || ${#token} -ge 32 ]] || { bad "dashboard capability missing"; exit 1; }
   {
     printf 'url = "http://127.0.0.1:%s%s"\nfail\nsilent\nshow-error\n' "$DASH_PORT" "$path"
+    [[ -z "$local_token" ]] || printf 'header = "X-Grave-Local-Token: %s"\n' "$local_token"
     [[ -z "$include" ]] || printf 'include\n'
     [[ "$path" != /healthz ]] && printf 'header = "X-Grave-Backend-Token: %s"\n' "$token"
   } | curl --config -
 }
+
+dashboard_local_push_ok() { GRAVE_ROOT="$GRAVE_ROOT" DASH_PORT="$DASH_PORT" python3 "$GRAVE_ROOT/scripts/gravedecay.py" --local-request /api/push-key | jq -e .ok >/dev/null; }
 
 dashboard_probe() { sudo -n "$0" __dashboard-probe "$1"; }
 dashboard_summary_ok() { dashboard_probe summary | jq -e '.product == "gravedecay" and .api_version == 1' >/dev/null; }

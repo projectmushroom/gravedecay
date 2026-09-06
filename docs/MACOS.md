@@ -217,3 +217,8 @@ is not already present. It never edits shell startup files or replaces another
 `grave` command. The updater keeps the installer-recorded Serve owner identity
 instead of querying or logging it again, and removes only its own hook on
 uninstall.
+
+Dashboard owner controls require the configured Tailscale identity, including
+when viewing from localhost. Headerless/tagged clients receive public status
+only. Local scripts use the private maintenance token; see
+[dashboard authentication](SECURITY.md#dashboard-identity-and-local-maintenance).

@@ -29,8 +29,8 @@ curl -f http://127.0.0.1:4711/healthz
 
 Only the nginx gateway publishes a host port, and Compose pins it to
 `127.0.0.1`. App ports are private to the Compose network. Do not put this
-port behind a public or LAN proxy: the dashboard trusts requests without a
-`Tailscale-User-Login` header as local. Keep it on loopback, or front it with
+port behind a public or LAN proxy. Headerless requests are read-only; verified
+identity headers authorize owner access. Keep it on loopback, or front it with
 host Tailscale Serve (or another trusted access-control proxy that supplies
 identity headers).
 
@@ -86,3 +86,8 @@ to it is effectively host-root access, which would defeat this boundary.
 
 The Engine 28 requirement follows [Docker's localhost port-publishing
 warning](https://docs.docker.com/engine/network/port-publishing/).
+
+Dashboard owner controls require the configured Tailscale identity, including
+when viewing from localhost. Headerless/tagged clients receive public status
+only. Local scripts use the private maintenance token; see
+[dashboard authentication](SECURITY.md#dashboard-identity-and-local-maintenance).

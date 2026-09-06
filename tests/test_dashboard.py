@@ -15,6 +15,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("gravedecay_dashboard", ROOT / "dashboard/gravedecay.py")
 DASHBOARD = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(DASHBOARD)
+DASHBOARD.ALLOWED_USERS = {"owner@example.test"}
+OWNER = {"Tailscale-User-Login": "owner@example.test"}
 
 
 def load_dashboard(env):
@@ -63,13 +65,13 @@ class DashboardContractTests(unittest.TestCase):
         cls.thread.join(timeout=2)
 
     def get(self, path):
-        return urllib.request.urlopen(self.origin + path, timeout=2)
+        return urllib.request.urlopen(urllib.request.Request(self.origin + path, headers=OWNER), timeout=2)
 
     def post(self, path, data):
         return urllib.request.urlopen(urllib.request.Request(
             self.origin + path,
             data=json.dumps(data).encode(),
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", **OWNER},
             method="POST",
         ), timeout=2)
 
@@ -431,7 +433,7 @@ class DashboardContractTests(unittest.TestCase):
         DASHBOARD.collect_backups = lambda: {"count": 0, "latest": None}
         DASHBOARD.collect_tmux = lambda: []
         try:
-            owner = DASHBOARD.state({})  # localhost / no header → trusted
+            owner = DASHBOARD.state(OWNER)
             viewer = DASHBOARD.state({"Tailscale-User-Login": "eve@example.com"})
         finally:
             for name, fn in saved.items():
@@ -595,7 +597,7 @@ class DashboardContractTests(unittest.TestCase):
 
     def _send_with_site(self, path, method, site, data=None):
         body = json.dumps(data).encode() if data is not None else None
-        headers = {"Sec-Fetch-Site": site}
+        headers = {"Sec-Fetch-Site": site, **OWNER}
         if data is not None:
             headers["Content-Type"] = "application/json"
         request = urllib.request.Request(self.origin + path, data=body,
