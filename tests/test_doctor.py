@@ -62,6 +62,11 @@ class DoctorContractTests(unittest.TestCase):
         self.assertIn('/api/v1/summary', GRAVE)
         self.assertIn('.product == \\"gravedecay\\" and .api_version == 1', GRAVE)
 
+    def test_doctor_checks_that_tracked_edits_will_not_block_upgrade(self):
+        self.assertIn('upgrade_tracked_status()', GRAVE)
+        self.assertIn('status --short --untracked-files=no', GRAVE)
+        self.assertIn('check "gravedecay upgrade checkout has no tracked changes" upgrade_checkout_clean', GRAVE)
+
     def test_t3_activity_doctor_keeps_the_source_boundary_and_bearer_off_argv(self):
         self.assertIn('t3_activity_configured()', GRAVE)
         self.assertIn('127\\.0\\.0\\.1|localhost', GRAVE)
