@@ -2,6 +2,35 @@ import XCTest
 @testable import GravedecayKit
 
 final class GraveSummaryTests: XCTestCase {
+    func testSavedPlotsSurviveRestartAndFailedDiscoveryWithoutLosingIdentity() throws {
+        let summary = try XCTUnwrap(GraveSummary.decode(MacPublisherSummary.data(host: "Mac", uptime: nil, cpu: nil, memory: nil, disk: nil)))
+        let mac = GravePlot(candidate: .init(id: "mac", dns: "mac.tail.ts.net", name: "Mac"), summary: summary)
+        let vm = GravePlot(candidate: .init(id: "vm", dns: "vm.tail.ts.net", name: "VM"), summary: summary)
+        let restored = GravePlot.restore(try JSONEncoder().encode([mac, vm]))
+        XCTAssertEqual(restored.map(\.id), ["mac", "vm"])
+        XCTAssertTrue(restored.allSatisfy { !$0.reachable })
+        XCTAssertEqual(restored[0].lastSeen.timeIntervalSince1970, mac.lastSeen.timeIntervalSince1970, accuracy: 0.001)
+        let merged = GravePlot.merge(saved: restored, discovered: [vm])
+        XCTAssertEqual(merged.count, 2)
+        XCTAssertEqual(merged.first { $0.id == "mac" }?.reachable, false)
+        XCTAssertEqual(merged.first { $0.id == "vm" }?.reachable, true)
+        XCTAssertEqual(GravePlot.merge(saved: merged, discovered: []).count, 2)
+        let renamed = GravePlot(candidate: .init(id: "vm", dns: "new.tail.ts.net", name: "Renamed VM"), summary: summary)
+        let updated = GravePlot.merge(saved: merged, discovered: [renamed])
+        XCTAssertEqual(updated.count, 2)
+        XCTAssertEqual(updated.first { $0.id == "vm" }?.candidate.dns, "new.tail.ts.net")
+    }
+
+    func testSavedPlotsRejectCorruptAndUnsafeInventory() throws {
+        XCTAssertTrue(GravePlot.restore(Data("bad json".utf8)).isEmpty)
+        XCTAssertTrue(GravePlot.restore(Data(repeating: 65, count: 1_048_577)).isEmpty)
+        let summary = try XCTUnwrap(GraveSummary.decode(MacPublisherSummary.data(host: "Mac", uptime: nil, cpu: nil, memory: nil, disk: nil)))
+        let unsafe = GravePlot(candidate: .init(id: "bad", dns: "vm.ts.net@evil.example", name: "Bad"), summary: summary)
+        XCTAssertTrue(GravePlot.restore(try JSONEncoder().encode([unsafe])).isEmpty)
+        let good = GravePlot(candidate: .init(id: "mac", dns: "mac.tail.ts.net", name: "Mac"), summary: summary)
+        XCTAssertEqual(GravePlot.restore(try JSONEncoder().encode([good, good])).count, 1)
+    }
+
     func testTailscaleStateKeepsUnavailableDistinctFromMissing() {
         XCTAssertEqual(GraveDiscovery.tailscaleState(executableFound: false, statusData: nil), .missing)
         XCTAssertEqual(GraveDiscovery.tailscaleState(executableFound: true, statusData: nil), .unavailable)

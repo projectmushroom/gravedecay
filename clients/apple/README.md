@@ -3,8 +3,8 @@
 iOS is a compact client for the box's web surfaces and native SwiftTerm
 terminal. macOS is a standalone, Universal 2 native application: it lives in
 the Dock and menu bar, renders Graveyard, This Mac, Work, Network, Terminal,
-and Settings in SwiftUI, and uses no local Python service or webview. Only T3
-opens in the default browser.
+and Settings in SwiftUI, and uses no local Python service or webview. Dashboard
+and T3 links open in the default browser.
 
 ## Layout
 
@@ -39,7 +39,7 @@ Mac** opens Settings for the opt-in local host. You can do both later. The
 native window reads unprivileged macOS system state, scans a chosen work folder
 for Git repositories, reads GitHub CLI status, optionally reads assigned
 Linear issues from an app-owned Keychain key, discovers tailnet graves, and
-hosts the native terminal. It opens only T3 in the default browser; `WebPane`
+hosts the native terminal. It opens Dashboard and T3 in the default browser; `WebPane`
 is compiled only for iOS.
 
 The look is the appliance's grave dark, deliberately and in native form:
@@ -57,8 +57,12 @@ On launch, opening the menu, manual refresh, and about every 45 seconds it runs 
 Only online Self/Peer nodes with a stable node ID and a strict DNS name are
 probed at `https://<dns>/grave/api/v1/summary`. Responses time out in three
 seconds and are capped at 64 KiB; the app displays only the versioned
-`gravedecay` summary contract. Previous valid summaries remain visible as
-unreachable if a later probe fails. T3, Terminal, and Network actions are
+`gravedecay` summary contract. Up to 64 nodes are probed, eight at a time.
+Validated plots and last-seen summaries are saved in app preferences and
+restored as unreachable until discovery succeeds. Offline plots stay listed
+and selected; **Forget plot** removes an unreachable entry. Graveyard opens
+with all plots, and the header and menu-bar pickers select a destination.
+See [Graveyard](../../docs/GRAVEYARD.md). Dashboard, T3, and Terminal actions are
 constructed only from the selected DNS name and safe same-host single-slash
 paths supplied by that contract. Graveyard selects remote graves only. A native
 terminal is created only when the selected grave advertises `/term`.
@@ -76,7 +80,8 @@ download page; sign-in and Tailscale configuration remain yours.
 
 The direct-distribution macOS target deliberately is not App Sandbox enabled:
 running the user-installed Tailscale CLI requires local process access. It
-uses no credentials, daemon, registry, analytics, or remote control; its
+uses no credentials, daemon, analytics, or remote control; its local plot
+inventory contains only identities, observation times, and sanitized summaries. Its
 optional listener is loopback-only and explicit. Network requests remain HTTPS
 tailnet requests. Hardened Runtime remains on
 for release builds.

@@ -1,5 +1,8 @@
 # Native clients
 
+The [Graveyard overview](GRAVEYARD.md) remembers your appliance instances (plots)
+and opens their advertised apps from web, native macOS, and Omarchy.
+
 The box serves web UIs only (docs/PORTS.md); native clients are thin shells
 over the same origins and never require new listening ports on the box.
 
@@ -24,7 +27,7 @@ over the same origins and never require new listening ports on the box.
   dashboard. macOS 15+ is a standalone native SwiftUI Dock/menu-bar app:
   first run offers remote-first **Connect to Graves** or **Share This Mac**;
   Graveyard selects validated remote graves, with native This Mac, Work,
-  Network, Terminal, and Settings surfaces. It opens only T3 in the default
+  Network, Terminal, and Settings surfaces. It opens Dashboard and T3 in the default
   browser. Tailscale discovery is read-only; Graveyard, Settings, and the menu
   bar can open Tailscale for you to sign in. **Start Local Host** is off by
   default, binds only loopback while the app runs, and shows an explicit manual
@@ -50,10 +53,10 @@ over the same origins and never require new listening ports on the box.
 
 - **Omarchy 4 / Quattro** — `clients/omarchy/` is a native Quickshell bar
   widget. It reads local `tailscale status --json`, probes online peers at
-  `/grave/api/v1/summary`, and keeps only reachable summaries in shell memory.
+  `/grave/api/v1/summary`, and remembers validated plots across shell restarts.
   It needs Tailscale and `curl`; see its README for installation and local
-  development. It never stores tailnet inventory, credentials, or remote
-  content, and it cannot control an appliance.
+  development. It stores only validated plot identities, last-seen times, and
+  sanitized summaries; no credentials, private work, or remote controls.
 
 - **macOS menu bar** — `clients/macos-menubar/` is a macOS 15+ SwiftUI
   `MenuBarExtra` fleet widget. Every roughly 45 seconds (and when opened), it

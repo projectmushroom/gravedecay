@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "projectmushroom.gravedecay",
   "name": "Gravedecay",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Project Mushroom",
   "license": "MIT",
-  "description": "Tailnet Gravedecay appliance summary.",
+  "description": "Saved Graveyard plots and tailnet status.",
   "kinds": ["bar-widget"],
   "entryPoints": {"barWidget": "Panel.qml"},
   "barWidget": {

@@ -1,6 +1,7 @@
 import json
 import pathlib
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -11,6 +12,11 @@ CLIENT = ROOT / "clients" / "omarchy"
 
 
 class OmarchyClientContractTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "Node is required for the client model checks")
+    def test_saved_plot_model(self):
+        result = subprocess.run(["node", str(CLIENT / "tests/model.test.js")], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_manifest_and_local_installer_contract(self):
         manifest = json.loads((CLIENT / "manifest.json").read_text())
         self.assertEqual(manifest["id"], "projectmushroom.gravedecay")
@@ -34,7 +40,7 @@ class OmarchyClientContractTests(unittest.TestCase):
     def test_client_uses_argv_discovery_and_versioned_summary(self):
         panel = (CLIENT / "Panel.qml").read_text()
         self.assertIn('["tailscale", "status", "--json"]', panel)
-        self.assertIn('["curl", "--silent"', panel)
+        self.assertIn('["curl", "-q", "--silent"', panel)
         self.assertIn('/grave/api/v1/summary', panel)
         self.assertIn('"--max-filesize", "65536"', panel)
         self.assertIn("StdioCollector", panel)

@@ -1,9 +1,46 @@
 import Foundation
 
-public struct GraveCandidate: Identifiable, Equatable, Sendable {
+public struct GraveCandidate: Identifiable, Codable, Equatable, Sendable {
     public let id: String
     public let dns: String
     public let name: String
+}
+
+/// Saved, sanitized summaries are always restored as unreachable. Discovery
+/// refreshes them; losing a connection must never select a different plot.
+public struct GravePlot: Identifiable, Codable, Sendable {
+    public let candidate: GraveCandidate
+    public var summary: GraveSummary?
+    public var lastSeen: Date
+    public var reachable = false
+    public var id: String { candidate.id }
+    private enum CodingKeys: String, CodingKey { case candidate, summary, lastSeen }
+
+    public init(candidate: GraveCandidate, summary: GraveSummary, lastSeen: Date = .now) {
+        self.candidate = candidate; self.summary = summary; self.lastSeen = lastSeen
+        reachable = true
+    }
+
+    public static func restore(_ data: Data?) -> [Self] {
+        guard let data, data.count <= 1_048_576,
+              let plots = try? JSONDecoder().decode([Self].self, from: data) else { return [] }
+        var seen = Set<String>()
+        return plots.prefix(128).filter {
+            !$0.id.isEmpty && $0.id.count <= 256 && $0.candidate.name.count <= 256 &&
+            (0...1e12).contains($0.lastSeen.timeIntervalSince1970) && seen.insert($0.id).inserted &&
+            GraveDiscovery.dnsName($0.candidate.dns) == $0.candidate.dns &&
+            $0.summary?.product == "gravedecay" && $0.summary?.api_version == 1
+        }
+    }
+
+    public static func merge(saved: [Self], discovered: [Self]) -> [Self] {
+        var plots = saved.map { var plot = $0; plot.reachable = false; return plot }
+        for plot in discovered {
+            if let index = plots.firstIndex(where: { $0.id == plot.id }) { plots[index] = plot }
+            else if plots.count < 128 { plots.append(plot) }
+        }
+        return plots.sorted { $0.candidate.name.localizedStandardCompare($1.candidate.name) == .orderedAscending }
+    }
 }
 
 public enum GraveDiscovery {

@@ -93,6 +93,14 @@ Thin native clients consume the dashboard's loopback-backed, path-routed
 `/grave/api/v1/summary` contract. It is a bounded local status sample, not a
 second control plane: it excludes integrations, repositories, logs, and names.
 
+[Graveyard](GRAVEYARD.md) remembers these appliance instances as plots. The
+single-owner web dashboard adds an asynchronous, owner-only summary collector
+at `/grave/api/graveyard` so browser clients need no cross-origin access.
+It never forwards viewer credentials or proxies private work. Native macOS,
+Omarchy, and web clients retain their own sanitized inventory and keep an
+unreachable selected plot in place. Existing doctor identity checks also verify
+the collector's authorization and response contract.
+
 Project grants are registry records, not shared filesystem permissions. A grant
 clones into that workspace's private `repos/<project>` as its Unix identity;
 two collaborators therefore have independent indexes, branches, remotes, and
