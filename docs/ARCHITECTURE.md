@@ -164,6 +164,15 @@ tweak establishes something new ("GPU must be pinned", "docker on its own
 subvolume"), it must add a check (via the `CHECK_*` flags or a profile edit) —
 an invariant doctor can't see will silently regress.
 
+The Linux self-updater operates on the checkout configured by `REPO_DIR`.
+Tracked edits stop an upgrade and fail doctor because changing releases would
+discard them. Non-conflicting untracked files, such as local field notes or a
+saved installation transcript, are preserved across release and edge updates.
+If an untracked path would be overwritten by the target release, Git stops the
+upgrade and `grave` prints the conflicting path without changing that file.
+Doctor also fails this readiness check if the checkout is missing or Git
+cannot read its status; a failed status command is never treated as clean.
+
 ## Dashboard PWA boundary
 
 The installed gravedecay web app owns the entire Tailscale Serve HTTPS origin,

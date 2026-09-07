@@ -1274,6 +1274,10 @@ upgrade_repo() {
   printf '%s\n' "$repo"
 }
 
+upgrade_tracked_status() {
+  git -C "$1" status --short --untracked-files=no
+}
+
 fetch_upgrade_refs() {
   local repo="$1"
   git -C "$repo" fetch --tags --prune -q origin
@@ -1304,7 +1308,7 @@ cmd_releases() { # grave releases [--json] — list selectable stable releases
 
 cmd_upgrade() { # grave upgrade [--edge|--release|--tag vX.Y.Z]
   local channel="${UPGRADE_CHANNEL:-release}"
-  local repo tag=""
+  local repo tag="" dirty git_error
   repo=$(upgrade_repo)
   while (($#)); do
     case "$1" in
@@ -1318,8 +1322,15 @@ cmd_upgrade() { # grave upgrade [--edge|--release|--tag vX.Y.Z]
       *) say "usage: grave upgrade [--edge|--release|--tag vX.Y.Z]"; exit 1 ;;
     esac
   done
-  if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then
-    bad "checkout at $repo has local changes — commit or stash them first"
+  # Untracked field notes and command transcripts are safe to preserve when
+  # Git can switch to the requested release without overwriting them. Blocking
+  # every untracked path made an otherwise clean appliance impossible to
+  # upgrade. Tracked edits remain a hard stop; Git itself rejects an untracked
+  # path that collides with the target tree, and we surface that exact error.
+  dirty=$(upgrade_tracked_status "$repo")
+  if [[ -n "$dirty" ]]; then
+    bad "checkout at $repo has tracked local changes — commit or stash them first"
+    printf '%s\n' "$dirty" | sed 's/^/    /'
     exit 1
   fi
   say "Fetching updates (${channel} channel)..."
@@ -1342,11 +1353,23 @@ cmd_upgrade() { # grave upgrade [--edge|--release|--tag vX.Y.Z]
     local branch
     branch=$(git -C "$repo" symbolic-ref -q --short refs/remotes/origin/HEAD || echo origin/master)
     branch=${branch#origin/}
-    git -C "$repo" checkout -q "$branch"
-    git -C "$repo" pull -q --ff-only origin "$branch"
+    if ! git_error=$(git -C "$repo" checkout -q "$branch" 2>&1); then
+      bad "could not check out $branch in $repo"
+      printf '%s\n' "$git_error" | sed 's/^/    /'
+      exit 1
+    fi
+    if ! git_error=$(git -C "$repo" pull -q --ff-only origin "$branch" 2>&1); then
+      bad "could not fast-forward $branch in $repo"
+      printf '%s\n' "$git_error" | sed 's/^/    /'
+      exit 1
+    fi
     target="$branch"
   else
-    git -C "$repo" checkout -q --detach "$target"
+    if ! git_error=$(git -C "$repo" checkout -q --detach "$target" 2>&1); then
+      bad "could not check out $target in $repo"
+      printf '%s\n' "$git_error" | sed 's/^/    /'
+      exit 1
+    fi
   fi
   ok "checked out $target ($(git -C "$repo" rev-parse --short HEAD))"
   say "Re-running the ritual (idempotent)..."
@@ -1434,6 +1457,13 @@ appliance_owner_ok() {
   done
 }
 
+upgrade_checkout_clean() {
+  local repo="${REPO_DIR:-$GRAVE_ROOT/repos/gravedecay}" dirty
+  [[ -d "$repo/.git" ]] || return 1
+  dirty=$(upgrade_tracked_status "$repo") || return 1
+  [[ -z "$dirty" ]]
+}
+
 cmd_doctor() { # grave doctor [--no-page]
   # --no-page suppresses the failure notification: `grave digest` embeds the
   # doctor verdict in its own single morning page, and two pages about one
@@ -1459,6 +1489,7 @@ cmd_doctor() { # grave doctor [--no-page]
   else
     say "  ${YLW}– appliance owner not recorded yet — re-run raise.sh${RST}"
   fi
+  check "gravedecay upgrade checkout has no tracked changes" upgrade_checkout_clean
   check "tailscaled running"            systemctl is-active --quiet tailscaled
   # A Type=simple tailscaled races the localapi ExecStartPost against socket
   # creation and crash-loops (see raise.sh). notify is the invariant that keeps

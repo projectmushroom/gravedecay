@@ -1,6 +1,7 @@
 import pathlib
 import re
 import subprocess
+import tempfile
 import unittest
 
 
@@ -62,6 +63,11 @@ class DoctorContractTests(unittest.TestCase):
         self.assertIn('/api/v1/summary', GRAVE)
         self.assertIn('.product == \\"gravedecay\\" and .api_version == 1', GRAVE)
 
+    def test_doctor_checks_that_tracked_edits_will_not_block_upgrade(self):
+        self.assertIn('upgrade_tracked_status()', GRAVE)
+        self.assertIn('status --short --untracked-files=no', GRAVE)
+        self.assertIn('check "gravedecay upgrade checkout has no tracked changes" upgrade_checkout_clean', GRAVE)
+
     def test_t3_activity_doctor_keeps_the_source_boundary_and_bearer_off_argv(self):
         self.assertIn('t3_activity_configured()', GRAVE)
         self.assertIn('127\\.0\\.0\\.1|localhost', GRAVE)
@@ -97,6 +103,59 @@ class DoctorContractTests(unittest.TestCase):
             enabled = subprocess.run(["bash", "-c", f"systemctl() {{ return 0; }}\n{body}\n{name}"], capture_output=True)
             self.assertEqual(disabled.returncode, 0, unit)
             self.assertNotEqual(enabled.returncode, 0, unit)
+
+
+class UpgradeReadinessTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.repo = pathlib.Path(self.tmp.name) / "checkout with spaces"
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        (self.repo / "tracked.txt").write_text("original\n")
+        self.git("add", "tracked.txt")
+        self.git("-c", "user.name=Test", "-c", "user.email=test@example.com",
+                 "commit", "-qm", "initial")
+
+    def git(self, *args):
+        return subprocess.run(["git", "-C", str(self.repo), *args], check=True,
+                              capture_output=True, text=True)
+
+    def readiness(self):
+        helpers = "\n".join(
+            re.search(rf"^{name}\(\) \{{.*?^\}}", GRAVE, re.S | re.M).group(0)
+            for name in ("upgrade_tracked_status", "upgrade_checkout_clean")
+        )
+        # Doctor invokes predicates in an if-condition, where errexit cannot
+        # propagate a failed git command for us. Exercise that exact context.
+        return subprocess.run(
+            ["bash", "-eu", "-c", helpers + '\nREPO_DIR="$1"\n'
+             'if upgrade_checkout_clean; then exit 0; else exit 1; fi',
+             "doctor-test", str(self.repo)], capture_output=True, text=True,
+        )
+
+    def test_clean_checkout_and_untracked_directory_are_ready(self):
+        self.assertEqual(self.readiness().returncode, 0)
+        (self.repo / "notes").mkdir()
+        (self.repo / "notes/local.txt").write_text("keep me\n")
+        self.assertEqual(self.readiness().returncode, 0)
+
+    def test_unstaged_and_staged_edits_are_not_ready(self):
+        (self.repo / "tracked.txt").write_text("edited\n")
+        self.assertNotEqual(self.readiness().returncode, 0)
+        self.git("add", "tracked.txt")
+        self.assertNotEqual(self.readiness().returncode, 0)
+
+    def test_missing_checkout_is_not_ready(self):
+        self.repo = self.repo / "missing"
+        self.assertNotEqual(self.readiness().returncode, 0)
+
+    def test_git_status_failure_is_not_ready(self):
+        # Keep .git present so this reaches Git, which returns no status stdout
+        # on failure. Empty stdout must not be mistaken for a clean checkout.
+        (self.repo / ".git/HEAD").unlink()
+        result = self.readiness()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("fatal:", result.stderr)
 
 
 if __name__ == "__main__":
