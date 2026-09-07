@@ -170,6 +170,8 @@ discard them. Non-conflicting untracked files, such as local field notes or a
 saved installation transcript, are preserved across release and edge updates.
 If an untracked path would be overwritten by the target release, Git stops the
 upgrade and `grave` prints the conflicting path without changing that file.
+Doctor also fails this readiness check if the checkout is missing or Git
+cannot read its status; a failed status command is never treated as clean.
 
 ## Dashboard PWA boundary
 

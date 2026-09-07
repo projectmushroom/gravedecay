@@ -1458,9 +1458,10 @@ appliance_owner_ok() {
 }
 
 upgrade_checkout_clean() {
-  local repo="${REPO_DIR:-$GRAVE_ROOT/repos/gravedecay}"
+  local repo="${REPO_DIR:-$GRAVE_ROOT/repos/gravedecay}" dirty
   [[ -d "$repo/.git" ]] || return 1
-  [[ -z "$(upgrade_tracked_status "$repo")" ]]
+  dirty=$(upgrade_tracked_status "$repo") || return 1
+  [[ -z "$dirty" ]]
 }
 
 cmd_doctor() { # grave doctor [--no-page]
