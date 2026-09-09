@@ -57,7 +57,7 @@ MACOS_AGENTS = MACOS and os.environ.get("GRAVEDECAY_MACOS_AGENTS") == "1"
 # t3-pair), and session kill/scrollback for the tmux -L agents panel — every
 # POST still passes the exact-LoginName ALLOWED_USERS gate in do_POST.
 MACOS_GETS = frozenset((
-    "/", "/healthz", "/api/auth-check", "/api/state", "/api/t3-activity", "/api/v1/summary", "/api/admin/releases",
+    "/", "/healthz", "/api/auth-check", "/api/state", "/api/graveyard", "/api/t3-activity", "/api/v1/summary", "/api/admin/releases",
     "/api/admin/update-status", "/api/admin/benchmark", "/manifest.webmanifest", "/sw.js",
     "/offline.html", "/apple-touch-icon.png", "/icon-180.png",
     "/icon-192.png", "/icon-512.png",
@@ -1196,6 +1196,109 @@ def _summary():
 
 def summary():
     return cached("summary", 5, _summary)
+
+
+# The browser cannot read other plots' origins. This owner-only collector
+# reads just their public summary, never forwards identity or fetches work.
+GRAVEYARD_LOCK = threading.Lock()
+GRAVEYARD = {"state": "idle", "plots": [], "checked_at": 0, "limited": False}
+
+
+def graveyard_candidates(status):
+    if not isinstance(status, dict) or status.get("BackendState") != "Running":
+        return []
+    peers = status.get("Peer", {})
+    nodes = [status.get("Self")] + (list(peers.values()) if isinstance(peers, dict) else [])
+    found = {}
+    for node in nodes:
+        if not isinstance(node, dict) or node.get("Online") is not True:
+            continue
+        dns = node.get("DNSName", "")
+        identifier = node.get("ID") or node.get("StableID") or node.get("NodeID")
+        if not isinstance(dns, str) or not isinstance(identifier, str) or not 0 < len(identifier) <= 256:
+            continue
+        dns = dns.lower().rstrip(".")
+        if len(dns) > 253 or not re.fullmatch(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}", dns):
+            continue
+        name = node.get("HostName")
+        found.setdefault(identifier, {"id": identifier, "dns": dns,
+                         "name": name[:256] if isinstance(name, str) and name else dns})
+    return sorted(found.values(), key=lambda node: (node["name"].lower(), node["id"]))
+
+
+def graveyard_summary(raw):
+    """Allowlist the v1 fields; a peer cannot smuggle private content through."""
+    if len(raw) > 65536:
+        return None
+    try:
+        value = json.loads(raw)
+        if not isinstance(value, dict) or value.get("product") != "gravedecay" or value.get("api_version") != 1:
+            return None
+        if not all(isinstance(value.get(key), dict) for key in ("node", "resources", "activity", "health", "links")):
+            return None
+        if value["node"].get("platform") not in ("linux", "macos", "container"):
+            return None
+        result = {"product": "gravedecay", "api_version": 1,
+                  "node": {key: str(value["node"].get(key, ""))[:256] for key in ("host", "platform", "mode")},
+                  "links": {key: path for key, path in value["links"].items()
+                            if key in ("dashboard", "t3", "terminal", "network") and
+                            isinstance(path, str) and path in ("/", "/grave", "/grave/", "/term", "/term/", "/net", "/net/")}}
+        for section, keys in (("resources", ("cpu_pct", "memory_pct", "disk_pct")),
+                              ("activity", ("sessions_live", "sessions_frozen")),
+                              ("health", ("services_failed", "containers_problem"))):
+            result[section] = {}
+            for key in keys:
+                number = value[section].get(key)
+                result[section][key] = number if type(number) in (int, float) and 0 <= number <= 1e12 else None
+        return result
+    except (ValueError, TypeError):
+        return None
+
+
+def graveyard_probe(candidate):
+    # -q ignores ~/.curlrc; no redirects, proxies, cookies, or identity headers.
+    rc, out, _ = sh(["curl", "-q", "--silent", "--fail", "--noproxy", "*",
+                     "--connect-timeout", "2", "--max-time", "3", "--max-filesize", "65536",
+                     "https://" + candidate["dns"] + "/grave/api/v1/summary"], timeout=4)
+    value = graveyard_summary(out) if rc == 0 else None
+    return dict(candidate, summary=value, lastSeen=time.time()) if value else None
+
+
+def _scan_graveyard():
+    plots, state, limited = [], "unavailable", False
+    try:
+        executable = shutil.which("tailscale")
+        if not executable and MACOS:
+            executable = next((p for p in ("/usr/local/bin/tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale") if os.access(p, os.X_OK)), None)
+        if executable:
+            rc, raw, _ = sh(["env", "TAILSCALE_BE_CLI=1", executable, "status", "--json"], timeout=4)
+            status = json.loads(raw) if rc == 0 and len(raw) <= 1048576 else {}
+            if isinstance(status, dict) and status.get("BackendState") == "Running":
+                candidates = graveyard_candidates(status)
+                limited = len(candidates) > 64
+                # ponytail: bounded scan of 64 nodes; explicit discovery tags if the tailnet grows.
+                with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+                    plots = [plot for plot in pool.map(graveyard_probe, candidates[:64]) if plot]
+                state = "ready"
+            else:
+                state = "tailscale-unavailable"
+    except (OSError, ValueError, TypeError):
+        pass
+    finally:
+        with GRAVEYARD_LOCK:
+            GRAVEYARD.update(state=state, plots=plots, checked_at=time.time(), limited=limited)
+
+
+def graveyard():
+    # An appliance-to-appliance call represents the collector's Tailscale
+    # principal. Multi-user delegation needs its own contract before enabling.
+    if PORTABLE or BACKEND_TOKEN or REQUIRE_BACKEND_TOKEN:
+        return {"state": "unsupported", "plots": [], "checked_at": 0, "limited": False}
+    with GRAVEYARD_LOCK:
+        if GRAVEYARD["state"] != "scanning" and time.time() - GRAVEYARD["checked_at"] >= 45:
+            GRAVEYARD["state"] = "scanning"
+            threading.Thread(target=_scan_graveyard, daemon=True).start()
+        return dict(GRAVEYARD)
 
 
 def collect_github():
@@ -2726,6 +2829,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, '{"ok":true}')
         elif p == "/api/state":
             self._send(200, json.dumps(state(self.headers)))
+        elif p == "/api/graveyard":
+            if self._forbidden():
+                return
+            self._send(200, json.dumps(graveyard()))
         elif p == "/api/admin/benchmark":
             if PORTABLE:
                 self._send(404, '{"error":"unavailable in portable workspace"}')
@@ -3050,15 +3157,22 @@ def maintenance_request(path, data=None, authenticated=True):
 if __name__ == "__main__":
     if sys.argv[1:] == ["--check-auth"]:
         local_token()
-        try:
-            maintenance_request("/api/auth-check", authenticated=False)
-        except urllib.error.HTTPError as error:
-            if error.code != 403:
-                raise
-        else:
-            sys.exit("headerless dashboard request unexpectedly authorized")
+        for path in ("/api/auth-check", "/api/graveyard"):
+            try:
+                maintenance_request(path, authenticated=False)
+            except urllib.error.HTTPError as error:
+                if error.code != 403:
+                    raise
+            else:
+                sys.exit("headerless dashboard request unexpectedly authorized")
         with maintenance_request("/api/auth-check") as response:
             assert response.status == 200
+        with maintenance_request("/api/graveyard") as response:
+            result = json.load(response)
+            assert result["state"] in ("idle", "scanning", "ready", "unavailable", "tailscale-unavailable", "unsupported")
+            assert isinstance(result["plots"], list)
+            assert response.headers["Cache-Control"] == "no-store"
+            assert response.headers.get("Access-Control-Allow-Origin") is None
     elif sys.argv[1:] in (["--local-request", "/api/state"], ["--local-request", "/api/push-send"], ["--local-request", "/api/push-key"]):
         path = sys.argv[2]
         data = sys.stdin.buffer.read(65537) if path == "/api/push-send" else None

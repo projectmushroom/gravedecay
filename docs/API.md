@@ -31,6 +31,26 @@ or `container`. Portable (`container`) summaries intentionally return `null`
 host resource and uptime values, retain `dashboard`, `t3`, and `terminal`
 links, and omit `network`.
 
+## Owner-only Graveyard overview
+
+`GET /grave/api/graveyard` returns `{state, plots, checked_at, limited}`.
+Each plot contains `{id, dns, name, summary, lastSeen}`; timestamps outside the
+summary are Unix seconds. `summary` is an allowlisted subset of v1 (node
+host/platform/mode, CPU/memory/disk percentages, session/problem counts, and
+standard app links). It contains no private work data.
+
+Collection is asynchronous and throttled to 45 seconds. `state` is `scanning`,
+`ready`, `unavailable`, `tailscale-unavailable`, or `unsupported`; `limited`
+indicates the 64-candidate scan ceiling. Cached results during `scanning` are
+historical. Clients keep absent saved plots as unreachable and use `lastSeen`
+to label stale records. A ready result is reachability from the collector,
+not proof that the requesting browser can reach the destination.
+
+The owner identity gate applies before collection. Responses use `no-store`
+and omit CORS. Portable and multi-user backends report `unsupported` without
+probing. No request parameter selects a host or upstream; only validated local
+Tailscale discovery supplies probe destinations. See [GRAVEYARD.md](GRAVEYARD.md).
+
 ## Owner-only benchmark
 
 `GET /grave/api/admin/benchmark` returns run progress and the last successful

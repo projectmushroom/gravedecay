@@ -84,7 +84,7 @@ private struct GraveMenuView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack { GraveMark(color: GraveTheme.ink).accessibilityHidden(true); Text("GRAVEDECAY").tracking(1.2).foregroundStyle(GraveTheme.amber); Spacer(); Button("↻ REFRESH") { model.refresh() }.buttonStyle(GraveButton()).accessibilityLabel("Refresh graves") }.font(.system(size: 11, weight: .bold, design: .monospaced))
-            Picker("TARGET", selection: $model.selectedID) { ForEach(model.graves) { Text($0.candidate.name.uppercased()).tag(Optional($0.id)) } }.pickerStyle(.menu).tint(GraveTheme.amber).font(.system(size: 10, design: .monospaced))
+            Picker("PLOT", selection: $model.selectedID) { ForEach(model.graves) { Text($0.candidate.name.uppercased()).tag(Optional($0.id)) } }.pickerStyle(.menu).tint(GraveTheme.amber).font(.system(size: 10, design: .monospaced))
             if model.graves.isEmpty {
                 TailscaleOnboardingView(model: model)
             } else if let grave = model.selected, let summary = grave.summary {
@@ -94,8 +94,8 @@ private struct GraveMenuView: View {
                     HStack(spacing: 6) { menuTile("CPU", GravePresentation.percent(summary.resources.cpu_pct), GraveTheme.good); menuTile("MEM", GravePresentation.percent(summary.resources.memory_pct), GraveTheme.ink2); menuTile("DISK", GravePresentation.percent(summary.resources.disk_pct), GraveTheme.amber) }.accessibilityLabel("CPU \(GravePresentation.percent(summary.resources.cpu_pct)), memory \(GravePresentation.percent(summary.resources.memory_pct)), disk \(GravePresentation.percent(summary.resources.disk_pct))")
                     Text("TEMP CPU \(GravePresentation.temperature(summary.resources.cpu_temp_c)) // GPU \(GravePresentation.temperature(summary.resources.gpu_temp_c))").foregroundStyle(GraveTheme.muted)
                     Text("\(summary.activity.sessions_live) ACTIVE // \(summary.activity.sessions_frozen) FROZEN // \(summary.problems) PROBLEMS").foregroundStyle(summary.problems > 0 ? GraveTheme.crit : GraveTheme.ink2)
-                    Text("UP \(GravePresentation.uptime(summary.node.uptime_s)) // SEEN \(GravePresentation.age(summary.observed_at))").foregroundStyle(GraveTheme.muted)
-                    HStack { link("T3", summary.capabilities.t3); if summary.capabilities.terminal != nil { Button("TERMINAL") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true); NotificationCenter.default.post(name: .openNativeTerminal, object: nil) }.buttonStyle(GraveButton()) } }
+                    Text("UP \(GravePresentation.uptime(summary.node.uptime_s)) // SEEN \(GravePresentation.age(grave.lastSeen))").foregroundStyle(GraveTheme.muted)
+                    HStack { link("T3", summary.capabilities.t3); if summary.capabilities.terminal != nil { Button("TERMINAL") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true); NotificationCenter.default.post(name: .openNativeTerminal, object: nil) }.buttonStyle(GraveButton()) } }.disabled(!grave.reachable)
                 }.font(.system(size: 9, design: .monospaced))
             } else { Text("SELECT A REACHABLE GRAVE.").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.muted) }
             Rectangle().fill(GraveTheme.ring).frame(height: 1)

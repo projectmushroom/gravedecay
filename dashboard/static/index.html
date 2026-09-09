@@ -341,6 +341,15 @@ body.portable #mode,body.portable .tabs,body.portable #keepalive-head,body.porta
 body.portable #boot-mode-head,body.portable #boot-mode-row,body.portable #throttle-head,
 body.portable #throttle-row,body.portable .t3connect-only,body.portable #notify-head,
 body.portable #sec-notify{display:none!important}
+.graveyard-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0}
+#graveyard summary{cursor:pointer;font-weight:700;color:var(--ink)}
+#graveyard-plots{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:10px}
+.plot-card{padding:12px;border:1px solid var(--ring);min-width:0;overflow-wrap:anywhere}
+.plot-card h3{font-size:14px;margin:0 0 8px}.plot-card p{margin:6px 0}
+.plot-links{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.plot-links a{padding:8px;border:1px solid var(--ring);text-decoration:none}
+#plot-picker{max-width:100%;min-height:44px;flex:1;min-width:0;padding:8px;
+  background:var(--surface);color:var(--ink);border:1px solid var(--ring);font:inherit}
 </style></head><body>
 <div id="topcover"></div>
 <div class="topbar">
@@ -352,6 +361,15 @@ body.portable #sec-notify{display:none!important}
 </div>
 <div id="connection" role="status" aria-live="polite"><span id="connection-text"></span>
   <button id="connection-retry">↻ retry</button></div>
+<details class="panel" id="graveyard" open>
+  <summary>🪦 Graveyard — your plots</summary>
+  <div class="graveyard-head">
+    <select id="plot-picker" aria-label="Plot"><option value="">All plots</option></select>
+    <button id="graveyard-refresh" aria-label="Refresh plots">↻ Refresh</button>
+  </div>
+  <p id="graveyard-status" class="dim" role="status">Discovering plots…</p>
+  <div id="graveyard-plots"></div>
+</details>
 <div class="apps" id="apps"></div>
 <div id="game-banner">
   <h2>🎮 G A M E &nbsp; M O D E</h2>
@@ -661,6 +679,83 @@ $('epitaph').textContent=[
   'buried, not broken.',
 ][Math.floor(Math.random()*8)];
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// Only sanitized summaries are remembered in this browser, per dashboard
+// origin. Reachability is never persisted or inferred from a saved summary.
+let savedPlots=[],selectedPlot='',graveyardBusy=false,graveyardAuthorized=false,graveyardTimer;
+function validPlot(plot){
+  return plot&&typeof plot.id==='string'&&plot.id.length>0&&plot.id.length<=256&&
+    typeof plot.dns==='string'&&plot.dns.length<=253&&/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(plot.dns)&&
+    typeof plot.name==='string'&&plot.name.length<=256&&Number.isFinite(plot.lastSeen)&&
+    plot.summary?.product==='gravedecay'&&plot.summary?.api_version===1&&
+    plot.summary.node&&plot.summary.resources&&plot.summary.activity&&plot.summary.health&&plot.summary.links;
+}
+try{
+  const saved=JSON.parse(localStorage.getItem('graveyard-plots-v1')||'{}');
+  savedPlots=(Array.isArray(saved.plots)?saved.plots:[]).filter(validPlot).slice(0,128).map(p=>({...p,reachable:false}));
+  selectedPlot=typeof saved.selected==='string'?saved.selected:'';
+}catch(_){}
+function rememberPlots(){
+  try{localStorage.setItem('graveyard-plots-v1',JSON.stringify({selected:selectedPlot,plots:savedPlots.map(({reachable,...p})=>p)}));}catch(_){$('graveyard-status').textContent='Browser storage unavailable — plots are remembered until this page closes.';}
+}
+function plotLink(plot,key){
+  const path=plot.summary.links[key];
+  return ['/','/grave','/grave/','/term','/term/','/net','/net/'].includes(path)?`https://${plot.dns}${path}`:null;
+}
+function renderGraveyard(message){
+  $('graveyard-status').textContent=message;
+  $('plot-picker').innerHTML='<option value="">All plots</option>'+savedPlots.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}${p.reachable?'':' · unreachable'}</option>`).join('');
+  $('plot-picker').value=selectedPlot;
+  const plots=selectedPlot?savedPlots.filter(p=>p.id===selectedPlot):savedPlots;
+  $('graveyard-plots').innerHTML=plots.map(p=>{
+    const s=p.summary,problems=(s.health.services_failed||0)+(s.health.containers_problem||0);
+    const age=Math.max(0,Math.floor((Date.now()/1000-p.lastSeen)/60));
+    const condition=!p.reachable?'Unreachable':problems?'Needs attention':s.node.mode==='gaming'?'Gaming':'Online';
+    const links=['dashboard','t3','terminal','network'].map(key=>{
+      const url=plotLink(p,key);return p.reachable&&url?`<a href="${esc(url)}" rel="noreferrer">${{dashboard:'Dashboard',t3:'T3',terminal:'Terminal',network:'Network'}[key]}</a>`:'';
+    }).join('');
+    return `<article class="plot-card" data-plot="${esc(p.id)}"><h3>${esc(p.name)}</h3>
+      <p>${condition} · ${esc(s.node.platform)}</p>
+      <p class="dim">${p.reachable?`${esc(s.activity.sessions_live??'—')} live sessions · ${esc(problems)} problems`:`Last seen ${age<1?'just now':age<60?age+'m ago':Math.floor(age/60)+'h ago'}`}</p>
+      <div class="plot-links">${links}${!p.reachable?`<button data-forget-plot="${esc(p.id)}">Forget plot</button>`:''}</div></article>`;
+  }).join('');
+}
+$('plot-picker').onchange=()=>{selectedPlot=$('plot-picker').value;rememberPlots();renderGraveyard($('graveyard-status').textContent);};
+$('graveyard-plots').onclick=e=>{
+  const button=e.target.closest('[data-forget-plot]');if(!button)return;
+  savedPlots=savedPlots.filter(p=>p.id!==button.dataset.forgetPlot);
+  if(selectedPlot===button.dataset.forgetPlot)selectedPlot='';
+  rememberPlots();renderGraveyard($('graveyard-status').textContent);
+};
+async function refreshGraveyard(){
+  if(graveyardBusy)return;graveyardBusy=true;clearTimeout(graveyardTimer);
+  let delay=45000;
+  try{
+    const response=await fetch('api/graveyard',{cache:'no-store'});
+    if(response.status===401||response.status===403){
+      graveyardAuthorized=false;
+      savedPlots=savedPlots.map(p=>({...p,reachable:false}));
+      $('graveyard-plots').replaceChildren();$('plot-picker').replaceChildren();
+      $('graveyard-status').textContent='Sign in as the appliance owner to view plots.';return;
+    }
+    if(!response.ok)throw new Error('unavailable');
+    const data=await response.json();
+    graveyardAuthorized=true;
+    savedPlots=savedPlots.map(p=>({...p,reachable:data.state==='scanning'&&p.reachable&&Date.now()/1000-p.lastSeen<90}));
+    if(data.state!=='scanning'){
+      for(const p of (Array.isArray(data.plots)?data.plots:[]).filter(validPlot)){
+        const index=savedPlots.findIndex(old=>old.id===p.id),plot={...p,reachable:Date.now()/1000-p.lastSeen<90};
+        if(index>=0)savedPlots[index]=plot;else if(savedPlots.length<128)savedPlots.push(plot);
+      }
+      rememberPlots();
+    }else delay=2000;
+    const messages={scanning:'Checking plots…',unsupported:'Discovery needs a single-owner Linux or macOS appliance.',unavailable:'Tailscale discovery unavailable.', 'tailscale-unavailable':'Connect this appliance to Tailscale to discover plots.'};
+    renderGraveyard(messages[data.state]||(data.limited?'Showing the first 64 tailnet devices.':savedPlots.length?'Choose a plot to open its apps.':'No plots found on this tailnet yet.'));
+  }catch(_){savedPlots=savedPlots.map(p=>({...p,reachable:false}));if(graveyardAuthorized)renderGraveyard('Connection unavailable — showing saved plots.');else $('graveyard-status').textContent='Connect to this appliance to view plots.';}
+  finally{graveyardBusy=false;graveyardTimer=setTimeout(refreshGraveyard,delay);}
+}
+$('graveyard-refresh').onclick=refreshGraveyard;
+// Wait for authorization before rendering remembered inventory.
+refreshGraveyard();
 const hist={cpu:[]};   // client-side sparkline history (last 60 polls)
 function push(k,v){if(v==null)return;hist[k].push(v);if(hist[k].length>60)hist[k].shift();}
 function spark(k){

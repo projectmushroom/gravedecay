@@ -6,28 +6,34 @@ import GravedecayKit
 @MainActor
 final class GraveMenuModel: ObservableObject {
     enum State: Equatable { case idle, scanning, missingTailscale, loggedOut, noAppliances, ready }
-    struct Grave: Identifiable {
-        let candidate: GraveCandidate
-        var summary: GraveSummary?
-        var reachable: Bool
-        var id: String { candidate.id }
-    }
+    typealias Grave = GravePlot
 
     @Published private(set) var state: State = .idle
     @Published private(set) var graves: [Grave] = []
     @Published private(set) var tailscaleUnavailable = false
     @Published var selectedID: String? { didSet { UserDefaults.standard.set(selectedID, forKey: "graveSelectedTarget") } }
-    private var previous = [String: GraveSummary]()
     private var timer: Timer?
 
     var selected: Grave? { graves.first { $0.id == selectedID } }
 
     init() {
+        graves = GravePlot.restore(UserDefaults.standard.data(forKey: "graveyardPlots"))
         selectedID = UserDefaults.standard.string(forKey: "graveSelectedTarget")
+        if selectedID == nil { selectedID = graves.first?.id }
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 45, repeats: true) { [weak self] _ in Task { @MainActor in self?.refresh() } }
     }
     func refresh() { Task { await scan() } }
+
+    private func save() {
+        if let data = try? JSONEncoder().encode(graves) { UserDefaults.standard.set(data, forKey: "graveyardPlots") }
+    }
+
+    func forget(_ grave: Grave) {
+        graves.removeAll { $0.id == grave.id }
+        if selectedID == grave.id { selectedID = graves.first?.id }
+        save()
+    }
 
     func scan() async {
         guard state != .scanning else { return }; state = .scanning
@@ -35,25 +41,30 @@ final class GraveMenuModel: ObservableObject {
         let probe = await Task.detached(priority: .utility, operation: Self.tailscaleStatus).value
         let statusData = probe.data
         switch GraveDiscovery.tailscaleState(executableFound: probe.executableFound, statusData: statusData) {
-        case .missing: graves = []; selectedID = nil; state = .missingTailscale; return
-        case .unavailable: graves = []; selectedID = nil; tailscaleUnavailable = true; state = .noAppliances; return
-        case .loggedOut: graves = []; selectedID = nil; state = .loggedOut; return
+        case .missing: graves = GravePlot.merge(saved: graves, discovered: []); state = .missingTailscale; return
+        case .unavailable: graves = GravePlot.merge(saved: graves, discovered: []); tailscaleUnavailable = true; state = .noAppliances; return
+        case .loggedOut: graves = GravePlot.merge(saved: graves, discovered: []); state = .loggedOut; return
         case .running: break
         }
         guard let statusData else { return }
         let candidates = GraveDiscovery.candidates(statusData: statusData)
-        guard !candidates.isEmpty else { graves = []; selectedID = nil; state = .noAppliances; return }
         var found: [Grave] = []
-        for candidate in candidates {
-            if let summary = await fetch(candidate) {
-                previous[candidate.id] = summary; found.append(Grave(candidate: candidate, summary: summary, reachable: true))
-            } else if let summary = previous[candidate.id] {
-                found.append(Grave(candidate: candidate, summary: summary, reachable: false))
+        let bounded = Array(candidates.prefix(64))
+        for start in stride(from: 0, to: bounded.count, by: 8) {
+            await withTaskGroup(of: Grave?.self) { group in
+                for candidate in bounded[start..<min(start + 8, bounded.count)] {
+                    group.addTask {
+                        guard let summary = await Self.fetch(candidate) else { return nil }
+                        return Grave(candidate: candidate, summary: summary)
+                    }
+                }
+                for await plot in group { if let plot { found.append(plot) } }
             }
         }
-        graves = found
-        selectedID = GraveDiscovery.selectedID(previousID: selectedID, candidates: found.map(\.candidate))
-        state = found.isEmpty ? .noAppliances : .ready
+        graves = GravePlot.merge(saved: graves, discovered: found)
+        if selectedID == nil { selectedID = graves.first?.id }
+        save()
+        state = graves.isEmpty ? .noAppliances : .ready
     }
 
     nonisolated private static func tailscaleStatus() async -> (executableFound: Bool, data: Data?) {
@@ -91,7 +102,7 @@ final class GraveMenuModel: ObservableObject {
     func getTailscale() { if let url = URL(string: "https://tailscale.com/download/mac") { NSWorkspace.shared.open(url) } }
     func openTailscale() { guard canOpenTailscale else { return }; NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/Tailscale.app")) }
 
-    private func fetch(_ candidate: GraveCandidate) async -> GraveSummary? {
+    nonisolated private static func fetch(_ candidate: GraveCandidate) async -> GraveSummary? {
         guard let url = GravePresentation.link(host: candidate.dns, path: "/grave/api/v1/summary") else { return nil }
         var request = URLRequest(url: url); request.timeoutInterval = 3; request.setValue("application/json", forHTTPHeaderField: "Accept")
         do {
@@ -104,11 +115,11 @@ final class GraveMenuModel: ObservableObject {
         } catch { return nil }
     }
 
-    func open(_ path: String?) { guard let grave = selected, let url = GravePresentation.link(host: grave.candidate.dns, path: path) else { return }; NSWorkspace.shared.open(url) }
+    func open(_ path: String?) { guard let grave = selected, grave.reachable, let url = GravePresentation.link(host: grave.candidate.dns, path: path) else { return }; NSWorkspace.shared.open(url) }
 
     func select(_ grave: Grave) { selectedID = grave.id }
 
-    private static let noRedirectSession: URLSession = {
+    nonisolated private static let noRedirectSession: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 3
         configuration.timeoutIntervalForResource = 3

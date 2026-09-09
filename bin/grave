@@ -1683,7 +1683,7 @@ cmd_doctor() { # grave doctor [--no-page]
       check "dashboard offline shell ready" dashboard_sw_ok
       check "dashboard serving installed offline page" dashboard_offline_ok
     else
-      check "dashboard identity and local maintenance boundary" env GRAVE_ROOT="$GRAVE_ROOT" DASH_PORT="$DASH_PORT" python3 "$GRAVE_ROOT/scripts/gravedecay.py" --check-auth
+      check "dashboard identity, Graveyard and local maintenance boundary" env GRAVE_ROOT="$GRAVE_ROOT" DASH_PORT="$DASH_PORT" python3 "$GRAVE_ROOT/scripts/gravedecay.py" --check-auth
       check "gravedecay answering"         curl -sf -o /dev/null "http://127.0.0.1:$DASH_PORT/healthz"
     check "dashboard summary API contract" bash -c \
       "curl -sf 'http://127.0.0.1:$DASH_PORT/api/v1/summary' | jq -e '.product == \"gravedecay\" and .api_version == 1' >/dev/null"
