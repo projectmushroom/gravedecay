@@ -49,6 +49,7 @@ function summary(raw) {
             clean[section][key] = typeof n === "number" && isFinite(n) && n >= 0 && n <= 1e12 ? n : null
         })
         ;["dashboard", "t3", "terminal", "network"].forEach(function(key) { var path = safePath(value.links[key]); if (path) clean.links[key] = path })
+        clean.health.t3 = ["running", "stopped", "starting", "failed", "unknown", "not-configured"].indexOf(value.health.t3) >= 0 ? value.health.t3 : "unknown"
         if (setupPath(value.links.t3_setup)) clean.links.t3_setup = value.links.t3_setup
         return clean
     } catch (_) { return null }
@@ -74,4 +75,20 @@ function merge(saved, found) {
         else if (nodes.length < 128) nodes.push(n)
     })
     return nodes.sort(function(a, b) { return a.name.localeCompare(b.name) })
+}
+
+function accent(dns) {
+    var colors = ["#e8b44c", "#78b7ef", "#c399ed", "#64c9b0", "#f194b0", "#b3c875", "#e89b6b"]
+    var value = cleanDnsName(dns).toLowerCase(), sum = 0
+    for (var i = 0; i < value.length; i++) sum = (sum * 31 + value.charCodeAt(i)) % colors.length
+    return colors[sum]
+}
+
+function icon(platform) { return {macos: "🍎", linux: "🖥", container: "📦"}[platform] || "🪦" }
+
+function connection(node, checking) {
+    if (checking) return "Checking connection…"
+    if (!node || !node.reachable) return "Unreachable — check Tailscale or dashboard"
+    var t3 = {running: "T3 service running", stopped: "T3 stopped", starting: "T3 starting", failed: "T3 service failed", "not-configured": "T3 not configured"}[node.summary.health.t3] || "T3 status unknown"
+    return "Dashboard reachable · " + t3
 }

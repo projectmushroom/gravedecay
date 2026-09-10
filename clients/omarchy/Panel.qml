@@ -59,7 +59,7 @@ Panel {
     }
     if (!pending.length && activeProbes === 0) finishScan("")
   }
-  function openLink(name) { var path = current && current.summary ? (name === "t3_setup" ? Model.setupPath(current.summary.links[name]) : Model.safePath(current.summary.links[name])) : ""; if (current && current.reachable && path) Qt.openUrlExternally("https://" + current.dns + path) }
+  function openLink(name) { var path = current && current.summary ? (name === "t3_setup" ? Model.setupPath(current.summary.links[name]) : Model.safePath(current.summary.links[name])) : ""; if (current && current.reachable && !refreshing && path) Qt.openUrlExternally("https://" + current.dns + path) }
   function fmt(value, suffix) { return value === null || value === undefined ? "—" : Number(value).toFixed(1) + suffix }
 
   onOpenedChanged: if (opened) { refresh(); Qt.callLater(function() { keyCatcher.forceActiveFocus() }) }
@@ -114,7 +114,7 @@ Panel {
       id: keyCatcher; anchors.fill: parent; onCloseRequested: root.close(); onMoveRequested: function(dx, dy) { if (dy && root.nodes.length) { var index = root.nodes.indexOf(root.current); root.selectedId = root.nodes[(index + dy + root.nodes.length) % root.nodes.length].id } }; onTabRequested: function(direction) { root.switchPanel(direction) }; onTextKey: function(text) { if (text === "r" || text === "R") root.refresh() }
       ColumnLayout { id: content; anchors.fill: parent; spacing: Style.space(8)
         RowLayout { Layout.fillWidth: true; Text { text: "Graveyard"; color: root.foreground; font.bold: true; font.pixelSize: Style.font.title }; Item { Layout.fillWidth: true }; PanelActionButton { iconText: "󰑐"; onClicked: root.refresh() } }
-        Dropdown { id: nodePicker; visible: root.nodes.length > 1; width: parent.width; showLabel: false; options: root.nodes.map(function(n) { return { value: n.id, label: n.name + (n.reachable ? "" : " · unreachable") } }); onChanged: function(value) { root.selectedId = value }; Connections { target: root; function onSelectedIdChanged() { nodePicker.value = root.selectedId } } }
+        Dropdown { id: nodePicker; visible: root.nodes.length > 1; width: parent.width; showLabel: false; options: root.nodes.map(function(n) { return { value: n.id, label: Model.icon(n.summary.node.platform) + " " + n.name + (n.reachable ? "" : " · unreachable") } }); onChanged: function(value) { root.selectedId = value }; Connections { target: root; function onSelectedIdChanged() { nodePicker.value = root.selectedId } } }
         Text { visible: !root.nodes.length && !root.refreshing; text: "No plots found yet"; color: root.dim }
         Text { visible: root.refreshing; text: "Checking plots…"; color: root.dim }
         Text { visible: !!root.discoveryMessage || !!root.storageMessage; text: root.storageMessage || root.discoveryMessage; color: root.dim; wrapMode: Text.Wrap; Layout.fillWidth: true }
@@ -122,16 +122,17 @@ Panel {
           visible: root.nodes.length > 1; Layout.fillWidth: true; Layout.preferredHeight: Math.min(root.nodes.length * Style.space(38), Style.space(140)); clip: true
           ColumnLayout { width: parent.width
             Repeater { model: root.nodes
-              Button { required property var modelData; Layout.fillWidth: true; text: modelData.name + " · " + (modelData.reachable ? ((modelData.summary.health.services_failed + modelData.summary.health.containers_problem) ? "needs attention" : modelData.summary.activity.sessions_live + " sessions") : "unreachable"); onClicked: root.selectedId = modelData.id }
+              Button { required property var modelData; Layout.fillWidth: true; text: Model.icon(modelData.summary.node.platform) + " " + modelData.name + " · " + (root.refreshing ? "checking" : modelData.reachable ? "reachable" : "unreachable"); palette.buttonText: Model.accent(modelData.dns); onClicked: root.selectedId = modelData.id }
             }
           }
         }
         ColumnLayout { visible: !!root.current; Layout.fillWidth: true; spacing: Style.space(4)
-          Text { text: root.current ? root.current.summary.node.host + " · " + root.current.summary.node.mode : ""; color: root.foreground; font.bold: true }
+          Text { text: root.current ? Model.icon(root.current.summary.node.platform) + " " + root.current.name + " · " + root.current.dns : ""; color: root.current ? Model.accent(root.current.dns) : root.foreground; font.bold: true; wrapMode: Text.Wrap; Layout.fillWidth: true }
+          Text { text: Model.connection(root.current, root.refreshing); color: root.dim; wrapMode: Text.Wrap; Layout.fillWidth: true }
           Text { visible: root.current && !root.current.reachable; text: root.current ? "Unreachable · last seen " + new Date(root.current.lastSeen).toLocaleString() : ""; color: root.dim; wrapMode: Text.Wrap; Layout.fillWidth: true }
           Text { visible: root.current && root.current.reachable; text: root.current ? "CPU " + root.fmt(root.current.summary.resources.cpu_pct, "%") + "  RAM " + root.fmt(root.current.summary.resources.memory_pct, "%") + "  Disk " + root.fmt(root.current.summary.resources.disk_pct, "%") : ""; color: root.dim }
           Text { visible: root.current && root.current.reachable; text: root.current ? "Sessions " + root.current.summary.activity.sessions_live + " live / " + root.current.summary.activity.sessions_frozen + " frozen · Problems " + (root.current.summary.health.services_failed + root.current.summary.health.containers_problem) : ""; color: root.current && root.current.summary.health.services_failed + root.current.summary.health.containers_problem ? root.urgent : root.dim }
-          Flow { visible: root.current && root.current.reachable; Layout.fillWidth: true; spacing: Style.space(4); Button { text: "Dashboard"; visible: root.current && !!root.current.summary.links.dashboard; onClicked: root.openLink("dashboard") }; Button { text: "T3"; visible: root.current && !!root.current.summary.links.t3; onClicked: root.openLink("t3") }; Button { text: "Set up T3"; visible: root.current && !!root.current.summary.links.t3_setup; onClicked: root.openLink("t3_setup") }; Button { text: "Terminal"; visible: root.current && !!root.current.summary.links.terminal; onClicked: root.openLink("terminal") }; Button { text: "Network"; visible: root.current && !!root.current.summary.links.network; onClicked: root.openLink("network") } }
+          Flow { visible: root.current && root.current.reachable; enabled: !root.refreshing; Layout.fillWidth: true; spacing: Style.space(4); Button { text: "Dashboard"; visible: root.current && !!root.current.summary.links.dashboard; onClicked: root.openLink("dashboard") }; Button { text: "T3"; visible: root.current && !!root.current.summary.links.t3; onClicked: root.openLink("t3") }; Button { text: "Set up T3"; visible: root.current && !!root.current.summary.links.t3_setup; onClicked: root.openLink("t3_setup") }; Button { text: "Terminal"; visible: root.current && !!root.current.summary.links.terminal; onClicked: root.openLink("terminal") }; Button { text: "Network"; visible: root.current && !!root.current.summary.links.network; onClicked: root.openLink("network") } }
           Button { text: "Forget plot"; visible: root.current && !root.current.reachable && !root.refreshing; onClicked: root.forgetCurrent() }
         }
       }

@@ -51,10 +51,40 @@ test('T3 setup opens pairing controls without minting a token', async ({ page })
   const pair = page.getByRole('button', { name: 'New T3 pairing token' });
   await expect(pair).toBeInViewport();
   await expect(pair).toBeFocused();
+  await expect(page.locator('#t3-setup')).toContainText('Set up T3 ·');
+  await expect(page.locator('#settings-title')).toContainText('Settings ·');
   expect(actions).toBe(0);
   expect(new URL(page.url()).hash).toBe('');
   await pair.click();
   await expect.poll(() => actions).toBe(1);
+  await expect(page.locator('#console-title')).toContainText(new URL(page.url()).hostname);
+});
+
+test('plot identity persists while connection and T3 states change independently', async ({ page }) => {
+  const mac = plot('mac', 'macos'), vm = plot('vm');
+  mac.summary.health.t3 = 'running'; vm.summary.health.t3 = 'stopped';
+  let state = 'ready', plots = [mac, vm];
+  await page.route('**/api/graveyard', route => route.fulfill({ json: { state, plots } }));
+  await page.goto('./');
+  await expect(page.locator('[data-plot="mac"]')).toContainText('Dashboard reachable · T3 service running');
+  await expect(page.locator('[data-plot="mac"] h3')).toContainText('🍎 My Mac');
+  await expect(page.locator('[data-plot="vm"]')).toContainText('Dashboard reachable · T3 stopped');
+  await expect(page.locator('[data-plot="mac"]')).toHaveCSS('border-left-color', 'rgb(195, 153, 237)');
+  await page.getByLabel('Plot', { exact: true }).selectOption('vm');
+  await page.reload();
+  await expect(page.locator('[data-plot="vm"]')).toHaveCSS('border-left-color', 'rgb(241, 148, 176)');
+  state = 'scanning';
+  await page.getByRole('button', { name: 'Refresh plots' }).click();
+  await expect(page.locator('.plot-card')).toContainText('Checking connection');
+  await expect(page.locator('.plot-card a')).toHaveCount(0);
+  state = 'ready'; vm.summary.health.t3 = 'failed';
+  await page.getByRole('button', { name: 'Refresh plots' }).click();
+  await expect(page.locator('.plot-card')).toContainText('Dashboard reachable · T3 service failed');
+  plots = [mac];
+  await page.getByRole('button', { name: 'Refresh plots' }).click();
+  await expect(page.locator('.plot-card')).toContainText('Unreachable — check Tailscale or dashboard');
+  await expect(page.locator('.plot-card')).not.toContainText('T3 service failed');
+  await expect(page.getByLabel('Plot', { exact: true })).toHaveValue('vm');
 });
 
 test('revoked overview access hides remembered inventory', async ({ page }) => {

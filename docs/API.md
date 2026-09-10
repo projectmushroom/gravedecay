@@ -14,7 +14,7 @@ seconds.
   "node": {"host": "grave", "platform": "linux", "mode": "developer", "uptime_s": 123},
   "resources": {"cpu_pct": 4.2, "memory_pct": 31.1, "disk_pct": 42.0, "cpu_temp_c": null, "gpu_temp_c": null},
   "activity": {"sessions_live": 1, "sessions_frozen": 0},
-  "health": {"services_failed": 0, "containers_problem": 0},
+  "health": {"services_failed": 0, "containers_problem": 0, "t3": "running"},
   "links": {"dashboard": "/grave/", "t3": "/", "terminal": "/term/", "network": "/net/"}
 }
 ```
@@ -30,6 +30,15 @@ summary, not a full grave. `node.platform` is `linux`, `macos`,
 or `container`. Portable (`container`) summaries intentionally return `null`
 host resource and uptime values, retain `dashboard`, `t3`, and `terminal`
 links, and omit `network`.
+
+`health.t3` is an optional supervisor state: `running`, `stopped`, `starting`,
+`failed`, `unknown`, or `not-configured`. Single-owner Linux uses the T3
+systemd unit; source-installed macOS with agents uses its launchd job, with
+a two-second query timeout. It says nothing about HTTP readiness, provider
+authentication, or the viewing device's pairing. A Mac without the agents
+layer reports `not-configured`; portable and multi-user backends report
+`unknown`. Missing/unsupported values from older publishers display as
+unknown. Offline cached summaries never establish current service state.
 
 `links.t3_setup` is an optional dashboard path (`/`, `/grave`, or `/grave/`)
 advertised by dashboards with T3 pairing controls, including macOS with the

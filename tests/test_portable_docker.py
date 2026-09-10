@@ -90,7 +90,7 @@ class PortableDockerContractTests(unittest.TestCase):
         self.assertEqual(body["resources"], {"cpu_pct": None, "memory_pct": None, "disk_pct": None,
                                               "cpu_temp_c": None, "gpu_temp_c": None})
         self.assertEqual(body["activity"], {"sessions_live": 2, "sessions_frozen": 0})
-        self.assertEqual(body["health"], {"services_failed": 0, "containers_problem": 0})
+        self.assertEqual(body["health"], {"services_failed": 0, "containers_problem": 0, "t3": "unknown"})
         self.assertEqual(body["links"], {"dashboard": "/grave/", "t3": "/", "terminal": "/term/", "t3_setup": "/grave/"})
 
     def test_build_context_drops_local_credentials(self):

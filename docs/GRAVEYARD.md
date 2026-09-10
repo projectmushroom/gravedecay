@@ -21,6 +21,24 @@ credentials, and services remain on their original plot.
   still describe the local Mac.
 - Omarchy: open the Graveyard widget for the plot list, picker, and links.
 
+Plots keep their discovered name, platform icon, and an accent derived from
+their normalized DNS address across refreshes and client restarts. The same
+address gets the same accent in web, macOS, and Omarchy. The palette is finite:
+colours can repeat, so the name and DNS address remain visible. Renaming the
+DNS address may change its colour; saved selection still uses the node ID.
+The destination web dashboard labels the machine being managed and uses its
+own hostname/address for pairing controls, never an identity supplied by a
+link from another plot.
+
+Connection text distinguishes **Checking connection**, **Dashboard reachable**,
+and **Unreachable — check Tailscale or dashboard**. A reachable dashboard can
+separately report **T3 stopped**, **starting**, **service failed**, **service
+running**, **not configured**, or **status unknown**. These are supervisor
+observations, not proof of a usable or paired T3 session. An unreachable plot
+does not prove the whole machine or tailnet is down. Refreshing plots disables
+their app/setup actions until discovery completes; it never chooses another
+machine. Old summaries and unsupported supervisors explicitly show unknown.
+
 Only appliances returning a validated v1 summary are remembered. Unreachable
 plots remain listed after a refresh or client restart, with the last successful
 observation time. Saved metrics are historical, never evidence that a plot is
@@ -112,4 +130,6 @@ own service installer, SSH launcher, and automatic Serve setup can create a
 second server/profile or change routes. Use the existing GD pairing controls
 and platform updater; enabling T3's remote service updater would require a
 separate compatibility check for GD-managed services. Machine version and
-connection diagnostics are a subsequent slice, not inferred from a T3 link.
+T3 HTTP/pairing diagnostics are a subsequent slice, not inferred from a T3
+link or the new supervisor-state field. Doctor validates that field's enum
+alongside the local setup capability.

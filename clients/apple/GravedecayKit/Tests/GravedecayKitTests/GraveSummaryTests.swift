@@ -2,6 +2,20 @@ import XCTest
 @testable import GravedecayKit
 
 final class GraveSummaryTests: XCTestCase {
+    func testPlotIdentityAndConnectionAreIndependentOfT3State() throws {
+        XCTAssertEqual(GravePresentation.accent("MAC.TAIL.TS.NET."), 0xc399ed)
+        XCTAssertEqual(GravePresentation.accent("vm.tail.ts.net"), 0xf194b0)
+        XCTAssertEqual(GravePresentation.machineIcon("container"), "shippingbox")
+        let data = MacPublisherSummary.data(host: "Mac", uptime: nil, cpu: nil, memory: nil, disk: nil)
+        let old = try XCTUnwrap(GraveSummary.decode(data))
+        XCTAssertEqual(GravePresentation.connection(summary: old, reachable: true), "Dashboard reachable · T3 status unknown")
+        var value = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        value["health"] = ["services_failed": 0, "containers_problem": 0, "t3": "stopped"]
+        let stopped = try XCTUnwrap(GraveSummary.decode(JSONSerialization.data(withJSONObject: value)))
+        XCTAssertEqual(GravePresentation.connection(summary: stopped, reachable: true), "Dashboard reachable · T3 stopped")
+        XCTAssertEqual(GravePresentation.connection(summary: stopped, reachable: true, checking: true), "Checking connection…")
+        XCTAssertEqual(GravePresentation.connection(summary: stopped, reachable: false), "Unreachable — check Tailscale or dashboard")
+    }
     func testSavedPlotsSurviveRestartAndFailedDiscoveryWithoutLosingIdentity() throws {
         let summary = try XCTUnwrap(GraveSummary.decode(MacPublisherSummary.data(host: "Mac", uptime: nil, cpu: nil, memory: nil, disk: nil)))
         let mac = GravePlot(candidate: .init(id: "mac", dns: "mac.tail.ts.net", name: "Mac"), summary: summary)
