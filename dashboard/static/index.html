@@ -17,8 +17,10 @@ if(!location.pathname.endsWith('/'))history.replaceState(null,'',location.pathna
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="gravedecay">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="apple-touch-icon" href="apple-touch-icon.png">
-<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=@ICON@">
+<link rel="icon" type="image/png" sizes="32x32" href="icon-32.png?v=@ICON@">
+<link rel="icon" type="image/png" sizes="16x16" href="icon-16.png?v=@ICON@">
+<link rel="shortcut icon" href="favicon.ico?v=@ICON@">
 <title>gravedecay · @HOST@</title>
 <style>
 /* grave-term — native terminal skin. Phosphor green on near-black, square
@@ -282,6 +284,13 @@ body.gaming #foot{display:none}
   .panel #tmux td:last-child{grid-column:3;width:auto}
 }
 .release-picker{margin-top:12px;padding-top:10px;border-top:1px dashed var(--hairline)}
+dialog.dlg{position:fixed;inset:0;height:fit-content;color:var(--ink);width:calc(100% - 28px);max-width:640px;max-height:85dvh;overflow:auto;margin:auto}
+dialog::backdrop{background:#000a;backdrop-filter:blur(3px)}
+#update-log{max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
+#update-title{padding-right:40px;overflow-wrap:anywhere}
+#update-close{position:absolute;top:10px;right:10px}
+#grave-release{width:100%;min-width:0}
+#grave-release-state{overflow-wrap:anywhere}
 /* These three short numeric columns remain a table on phones. */
 #bench-result table{display:table;table-layout:fixed;margin:12px 0}
 #bench-result tbody{display:table-row-group}
@@ -354,7 +363,7 @@ body.portable #sec-notify{display:none!important}
 </style></head><body>
 <div id="topcover"></div>
 <div class="topbar">
-  <img id="toplogo" src="icon-180.png" alt="">
+  <img id="toplogo" src="icon-180.png?v=@ICON@" alt="">
   <h1>gravedecay</h1>
   <span class="meta" id="meta">connecting…</span>
   <span class="badge" id="mode" role="button" title="Tap to switch mode" style="display:none;cursor:pointer">…</span>
@@ -645,27 +654,41 @@ body.portable #sec-notify{display:none!important}
     <div class="actions">
       <button data-act="gaming" data-gaming-control style="display:none">🎮 Gaming mode</button>
       <button data-act="developer" data-gaming-control style="display:none">💻 Developer mode</button>
-      <button data-act="restart-t3" data-confirm="Restart T3 Code? Active agent sessions survive, the UI reconnects.">↻ Restart T3 Code</button>
-      <button data-act="update-t3" data-confirm="Install the latest stable T3 Code release and restart its web service? Active agent sessions survive.">⬆ Update T3 Code</button>
-      <button data-act="update-grave" data-confirm="Update gravedecay using this appliance's configured release/edge channel, then re-raise it? The dashboard will briefly reconnect; agent sessions survive.">⬆ Update gravedecay</button>
       <button data-act="doctor">🩺 Run doctor</button>
-      <button data-act="reboot" data-confirm="Reboot the machine? Agent sessions die; everything else comes back automatically in the configured boot mode.">🔁 Reboot box</button>
       <button id="kill-open">🗡️ Kill sessions…</button>
     </div>
-    <div class="setrow release-picker">
-      <button class="mini mac-only-setting" id="update-macos-channel">⬆ Update configured channel</button>
-      <label for="grave-release">🪦 Release</label>
-      <select id="grave-release" aria-label="gravedecay release">
-        <option value="">load releases…</option>
-      </select>
-      <button class="mini" id="install-grave-release" disabled>⬆ Install selected</button>
-      <span id="grave-release-state">Choose an exact stable release; config and agent sessions are preserved.</span>
-    </div>
+    <button id="update-open">⬆ Updates &amp; restart…</button>
   </div>
   <div class="panel" data-panel="services"><h2>⚙️ Services</h2><table id="services"></table></div>
   <div class="panel" data-panel="docker"><h2>🐳 Docker</h2><table id="docker"></table></div>
   <div class="panel w-full" data-panel="journal"><h2>📋 Journal errors (24 h)</h2><pre id="journal"></pre></div>
 </div>
+<dialog class="dlg" id="update-dialog" aria-labelledby="update-title">
+  <button class="mini xbtn" id="update-close" aria-label="Close updates">✕</button>
+  <h2 id="update-title">Updates &amp; restart</h2>
+  <p id="grave-release-current" class="dim">Checking installed release…</p>
+  <p>Updates Gravedecay and reloads this dashboard. No reboot needed.</p>
+  <div class="release-picker">
+    <label for="grave-release">Gravedecay release</label>
+    <select id="grave-release" aria-label="gravedecay release"><option value="">Loading releases…</option></select>
+    <div class="setrow">
+      <button id="install-grave-release" disabled>Apply update</button>
+      <button class="mini" id="refresh-grave-releases">↻ Check again</button>
+      <button id="reload-dashboard" hidden>Reload dashboard</button>
+    </div>
+    <p id="grave-release-state" role="status">Choose a release to apply.</p>
+    <details><summary>Update log</summary><pre id="update-log">No update log yet.</pre></details>
+  </div>
+  <div class="mac-linux-setting release-picker" id="update-restarts">
+    <h3>T3 Code &amp; machine</h3>
+    <div class="actions">
+      <button data-act="update-t3" data-confirm="Install the latest stable T3 Code release and restart its web service?">⬆ Update T3 Code</button>
+      <button data-act="restart-t3" data-confirm="Restart T3 Code on this machine? Its UI will reconnect.">↻ Restart T3 Code</button>
+      <button data-act="reboot" data-confirm="Reboot this machine now? Active agent sessions will end.">🔁 Reboot machine</button>
+    </div>
+    <p class="dim">Reboot ends active agent sessions. It is not required for an ordinary Gravedecay update.</p>
+  </div>
+</dialog>
 <footer id="foot">🪦 gravedecay © <span id="footyear"></span> — <span id="epitaph"></span></footer>
 <script>
 const $=id=>document.getElementById(id);
@@ -870,7 +893,7 @@ async function refreshDispatchPRs(){
   }
 }
 let cfg=null,cfgSrv='',envApps=[],layoutKey='';
-let graveReleasesLoaded=false,macUpdateChannel='release',macUpdateSeen=false;
+let macUpdateChannel='release',updatePending=null,updateTimer,updateBooted=false,updatePolling=false;
 let pollFailures=0,lastConnected=0;
 let activeTab=localStorage.getItem('grave-tab')||'work';
 let scrollInput=0;
@@ -896,8 +919,7 @@ function applyLayout(){
 document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
   activeTab=t.dataset.tab;localStorage.setItem('grave-tab',activeTab);
   if(cfg)applyLayout();
-  // Linux uses !macosCompanion&&!portableCompanion for its system actions; Mac has only this release picker.
-  if(activeTab==='system'&&!portableCompanion){loadGraveReleases();pollBenchmark();}
+  if(activeTab==='system'&&!portableCompanion)pollBenchmark();
 });
 let benchBusy=false,benchChecked=0,benchLatest=null,benchRunning=false;
 function renderBenchmark(b){
@@ -955,44 +977,118 @@ $('bench-export').onclick=()=>{
   const a=document.createElement('a');a.href=url;a.download=`${benchLatest.suite}-${benchLatest.measured_at}.json`;a.click();
   setTimeout(()=>URL.revokeObjectURL(url),1000);
 };
-async function loadGraveReleases(force=false){
-  if(graveReleasesLoaded&&!force)return;
-  graveReleasesLoaded=true;
-  const select=$('grave-release'),button=$('install-grave-release'),status=$('grave-release-state');
-  status.textContent='fetching stable releases…';button.disabled=true;
+function updateControls(busy){
+  $('grave-release').disabled=busy;
+  $('install-grave-release').disabled=busy||!$('grave-release').value;
+  $('update-restarts').querySelectorAll('button').forEach(b=>b.disabled=busy);
+}
+async function loadGraveReleases(){
+  const select=$('grave-release');
+  if(updatePending)return;
+  updateControls(true);
   try{
     const r=await fetch('api/admin/releases',{cache:'no-store'}),data=await r.json();
     if(!r.ok)throw new Error(data.output||`HTTP ${r.status}`);
-    select.innerHTML=(data.releases||[]).map(tag=>
-      `<option value="${esc(tag)}"${tag===data.current?' selected':''}>${esc(tag)}${tag===data.current?' (installed)':''}</option>`).join('');
-    if(!select.options.length)select.innerHTML='<option value="">no stable releases</option>';
-    // WebKit retains the removed placeholder's empty value after innerHTML is
-    // replaced; selected="..." on a new option is not enough in iOS Safari.
-    if(data.current&&(data.releases||[]).includes(data.current))select.value=data.current;
-    else if(select.options.length)select.selectedIndex=0;
-    button.disabled=!select.value;
-    macUpdateChannel=(data.channel==='edge'?'edge':'release');
-    status.textContent=`installed: ${data.current||data.checkout||'development checkout'} · channel: ${macUpdateChannel}`;
+    macUpdateChannel=data.channel==='edge'?'edge':'release';
+    select.innerHTML=`<option value="configured">Latest ${macUpdateChannel==='edge'?'edge build':'stable release'}</option>`+
+      (data.releases||[]).map(tag=>`<option value="${esc(tag)}">${esc(tag)}${tag===data.current?' (current checkout)':''}</option>`).join('');
+    select.value='configured';
+    $('grave-release-current').textContent=`Current checkout: ${data.current||data.checkout||'development'} · Channel: ${macUpdateChannel}`;
   }catch(e){
-    select.innerHTML='<option value="">release lookup failed</option>';
-    status.textContent=e.message;button.disabled=true;
+    select.innerHTML='<option value="">Release lookup failed</option>';
+    $('grave-release-current').textContent=e.message;
+  }finally{updateControls(!!updatePending);}
+}
+function rememberUpdate(){
+  try{if(updatePending)sessionStorage.setItem('grave-update-pending',JSON.stringify(updatePending));else sessionStorage.removeItem('grave-update-pending');}catch(_){}
+}
+async function updateStatus(){
+  if(updatePolling)return;
+  clearTimeout(updateTimer);updatePolling=true;
+  try{
+    const r=await fetch('api/admin/update-status',{cache:'no-store'}),x=await r.json();
+    if(!r.ok)throw new Error(x.output||x.error||`HTTP ${r.status}`);
+    $('update-log').textContent=x.log||'No update log yet.';
+    const fresh=!updatePending||(x.attempt&&x.attempt!==updatePending.previous);
+    const target=x.target||x.tag||x.channel;
+    if(updatePending&&fresh&&x.attempt&&target&&updatePending.target&&target!==updatePending.target){
+      updatePending.conflict=target;rememberUpdate();
+    }
+    if(updatePending&&fresh&&x.state==='ok'){
+      if(!x.dashboard_current){
+        $('grave-release-state').textContent='Installer finished, but the dashboard is still running older files. Check the update log and run grave doctor.';
+        $('reload-dashboard').hidden=false;
+      }else{
+        const message=updatePending.conflict
+          ?`Another update (${updatePending.conflict}) completed. Your selection (${updatePending.target}) was not confirmed; check the version before retrying.`
+          :'Update completed. The updated dashboard is loaded.';
+        updatePending=null;rememberUpdate();updateControls(false);
+        // A full navigation loads the new HTML/JS. Polling /api/state alone
+        // leaves an already-open phone/PWA running the previous interface.
+        try{sessionStorage.setItem('grave-update-result',message);location.reload();}
+        catch(_){$('grave-release-state').textContent='Update completed. Reload to load the updated dashboard.';$('reload-dashboard').hidden=false;}
+        return;
+      }
+    }else if(fresh&&x.state==='failed'){
+      $('grave-release-state').textContent='Update failed — '+(x.message||'see update log');
+      updatePending=null;rememberUpdate();updateControls(false);
+      loadGraveReleases();
+    }else if(fresh&&(x.state==='running'||x.state==='queued')){
+      if(!updatePending){updatePending={previous:'',started:Date.now()};rememberUpdate();}
+      $('grave-release-state').textContent=(x.state==='queued'?'Queued':'Updating')+' — '+(x.message||'the dashboard may briefly disconnect');
+      updateControls(true);
+    }else if(!updatePending){
+      $('grave-release-state').textContent=x.state==='ok'?'Last update completed. Choose a release to apply.':'Choose a release to apply.';
+      updateControls(false);
+    }
+    if(updatePending||x.state==='running'||x.state==='queued')updateTimer=setTimeout(updateStatus,2000);
+  }catch(e){
+    $('grave-release-state').textContent=updatePending?'Waiting for the updater/dashboard to reconnect… '+e.message:'Cannot read update status: '+e.message;
+    if(updatePending)updateTimer=setTimeout(updateStatus,3000);
+  }finally{
+    updatePolling=false;
+    if(updatePending&&Date.now()-updatePending.started>30*60*1000){
+      clearTimeout(updateTimer);
+      $('grave-release-state').textContent='Update completion could not be verified. Check the update log or reconnect and check again.';
+      $('reload-dashboard').hidden=false;
+    }
   }
 }
-$('grave-release').onchange=()=>{$('install-grave-release').disabled=!$('grave-release').value;};
+async function openUpdates(){
+  $('update-dialog').showModal();lockBody();
+  await loadGraveReleases();
+  await updateStatus();
+}
+$('update-open').onclick=openUpdates;
+$('update-close').onclick=()=>$('update-dialog').close();
+$('update-dialog').addEventListener('close',()=>{unlockBody();$('update-open').focus();});
+$('refresh-grave-releases').onclick=async()=>{await loadGraveReleases();await updateStatus();};
+$('reload-dashboard').onclick=()=>location.reload();
 $('install-grave-release').onclick=async()=>{
-  const tag=$('grave-release').value;
-  if(!tag||!confirm(`Install gravedecay ${tag} and re-raise the appliance?`))return;
-  const button=$('install-grave-release'),status=$('grave-release-state');
-  button.disabled=true;status.textContent=`queueing ${tag}…`;
+  const selection=$('grave-release').value;
+  if(!selection||updatePending)return;
+  updateControls(true);
   try{
-    const r=await fetch('api/admin/upgrade',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({tag})}),data=await r.json();
-    if(!r.ok)throw new Error(data.output||`HTTP ${r.status}`);
-    status.textContent=`${tag} queued — reconnecting after raise…`; if(macosCompanion)macUpdateStatus();
-  }catch(e){status.textContent=e.message;button.disabled=false;}
+    // Snapshot the previous attempt so an old success cannot complete a new
+    // asynchronous systemd start. Keep this identity through page reloads.
+    const before=await fetch('api/admin/update-status',{cache:'no-store'}),old=await before.json();
+    if(!before.ok)throw new Error(old.output||old.error||'Cannot read updater status');
+    if(old.state==='queued'||old.state==='running')throw new Error('An update is already running. Check its progress before starting another.');
+    const body=selection==='configured'?{channel:macosCompanion?macUpdateChannel:'configured'}:{tag:selection};
+    updatePending={previous:old.attempt||'',started:Date.now(),target:selection==='configured'?macUpdateChannel:selection};rememberUpdate();
+    $('grave-release-state').textContent='Queueing '+(selection==='configured'?'configured channel':selection)+'…';
+    const r=await fetch('api/admin/upgrade',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),data=await r.json();
+    if(!r.ok){updatePending=null;rememberUpdate();throw new Error(data.output||`HTTP ${r.status}`);}
+    $('grave-release-state').textContent='Update queued — waiting for the installer…';
+    updateStatus();
+  }catch(e){
+    // A lost POST response can still mean the job was accepted. Keep watching
+    // until a new attempt is observed; never automatically submit it again.
+    $('grave-release-state').textContent=e.message;
+    if(updatePending)updateStatus();else updateControls(false);
+  }
 };
-async function macUpdateStatus(retry=true){try{const r=await fetch('api/admin/update-status',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);const x=await r.json();if(x.state) $('grave-release-state').textContent=`update: ${x.state}${x.message?` — ${x.message}`:''}`;if(x.state==='queued'||x.state==='running')setTimeout(()=>macUpdateStatus(true),1500);}catch(_){if(retry)setTimeout(()=>macUpdateStatus(false),3000);}}
-$('update-macos-channel').onclick=async()=>{const status=$('grave-release-state'),button=$('update-macos-channel');button.disabled=true;try{const r=await fetch('api/admin/upgrade',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({channel:macUpdateChannel})}),data=await r.json();if(!r.ok)throw new Error(data.output||`HTTP ${r.status}`);status.textContent='configured update queued — reconnecting…';macUpdateStatus();}catch(e){status.textContent=e.message;}finally{button.disabled=false;}};
+
 function render(s){
   // Replacing live regions above the viewport can make iOS WebKit discard its
   // document scroll anchor and jump to the top. Preserve the window position
@@ -1032,8 +1128,17 @@ function render(s){
   $('settings-title').textContent=`⚙️ Settings · ${s.host}`;
   $('settings-title').style.color=plotAccent(location.hostname);
   openT3Setup();
-  if(macosCompanion&&!macUpdateSeen){macUpdateSeen=true;macUpdateStatus(true);}
-  if(macosCompanion)document.querySelector('[data-panel="actions"] h2').textContent='⬆ Update Gravedecay';
+  $('update-title').textContent=`Updates & restart · ${s.host} · ${location.hostname}`;
+  $('update-title').style.color=plotAccent(location.hostname);
+  if(!updateBooted&&!portableCompanion){
+    updateBooted=true;
+    try{
+      updatePending=JSON.parse(sessionStorage.getItem('grave-update-pending')||'null');
+      const result=sessionStorage.getItem('grave-update-result');
+      if(updatePending){$('update-dialog').showModal();lockBody();updateControls(true);updateStatus();}
+      else if(result){sessionStorage.removeItem('grave-update-result');$('update-dialog').showModal();lockBody();loadGraveReleases();$('grave-release-state').textContent=result;}
+    }catch(_){}
+  }
   if(portableCompanion&&activeTab!=='work'){
     activeTab='work';localStorage.setItem('grave-tab',activeTab);
   }
@@ -1047,7 +1152,7 @@ function render(s){
   if(modeChanged)schedule();
   const k=JSON.stringify([cfg.panel_order,cfg.hidden_panels,activeTab]);
   if(k!==layoutKey){layoutKey=k;applyLayout();}
-  if(activeTab==='system'&&!portableCompanion){loadGraveReleases();pollBenchmark();}
+  if(activeTab==='system'&&!portableCompanion)pollBenchmark();
   // 📁 Files is a built-in tile: opens the native file-manager modal.
   const tiles=(s.platform==='macos'?[]:[{name:'📁 Files',url:FILES_URL}]).concat(allApps());
   $('apps').innerHTML=tiles.filter(a=>!cfg.hidden_apps.includes(a.name)).map(a=>{
@@ -1405,6 +1510,7 @@ document.querySelectorAll('button[data-act]').forEach(b=>b.onclick=()=>{
   const act=b.dataset.act;
   if(act==='gaming'){openGameConfirm();return;}
   if(b.dataset.confirm&&!confirm(b.dataset.confirm))return;
+  if($('update-dialog').open)$('update-dialog').close();
   runStream(act);
 });
 // ---------- session output capture (📋 in the sessions panel) ----------
@@ -1688,7 +1794,7 @@ function syncVis(){
 // the page underneath the modal ("intermixed" scrolling)
 const lockBody=()=>{document.body.style.overflow='hidden'};
 const unlockBody=()=>{
-  if(![...document.querySelectorAll('.overlay')].some(o=>o.style.display==='block'))
+  if(!document.querySelector('dialog[open]')&&![...document.querySelectorAll('.overlay')].some(o=>o.style.display==='block'))
     document.body.style.overflow='';
 };
 document.querySelectorAll('.sec-toggle').forEach(h=>h.onclick=()=>{

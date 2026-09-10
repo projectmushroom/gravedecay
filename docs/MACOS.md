@@ -200,8 +200,11 @@ an installer-controlled checkout at `$GRAVE_ROOT/repos/gravedecay`, installs
 the user updater and records `$GRAVE_ROOT/config/release.json` (exact release
 or development checkout plus channel). Use `grave releases --json`, `grave
 upgrade --release`, `grave upgrade --tag v0.20.0`, or `grave upgrade --edge`.
-The dashboard provides the configured-channel action and exact picker through
-its fixed installed helper, never interactive `PATH`.
+The dashboard provides both choices in **System → Updates & restart** through
+its fixed installed helper, never interactive `PATH`. It follows the update
+through reconnects, shows failures and rollback messages, and reloads the HTML
+after a successful install. This dialog does not grant macOS reboot or T3
+service-control permissions.
 
 `io.gravedecay.updater` stages a clean trusted checkout, preserves component
 and Serve choice, and restarts only dashboard/network agents. Failed fetch,

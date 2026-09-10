@@ -90,3 +90,60 @@ time, and deep link). It is deliberately absent from `/api/v1/summary` and
 never requests a transcript or thread-detail endpoint. Upstream auth, timeout,
 or shape failures return `unauthorized`/`unreachable` there and never delay
 `/api/state`.
+
+## Owner-only updates
+
+`GET /grave/api/admin/releases` returns the current source checkout, configured
+channel, and stable release choices. A checked-out tag alone does not prove
+that its installer completed or its dashboard is running.
+
+`POST /grave/api/admin/upgrade` accepts an exact `{"tag":"vX.Y.Z"}` on
+Linux and macOS. The configured-channel choice sends `{"channel":"configured"}`
+on Linux, or the recorded `release`/`edge` channel on macOS. The owner and
+same-origin gates apply. A successful response means **queued**, not installed.
+The existing detached systemd/launchd worker performs the install.
+
+`GET /grave/api/admin/update-status` is owner-only and uncached on both platforms.
+It returns `state` (`idle`, `queued`, `running`, `ok`, `failed`), an `attempt`
+identity once the worker starts, optional `message`, the last 8 KiB of the
+fixed updater log, and `dashboard_current`. That last flag compares this
+process's loaded Python and HTML hashes with the installed files. Logs and
+update results never enter the public summary. Portable dashboards reject
+these endpoints.
+
+The web's **System → Updates & restart** dialog combines the configured-channel
+and exact-release flows. It remembers an in-flight attempt in session storage,
+ignores an earlier attempt's success, and reloads the page once the new attempt
+succeeds and the dashboard runs its installed files. Connection failures are
+retried; after 30 minutes it reports unverified completion rather than success.
+Reboot is a separate confirmed Linux action, disabled during a tracked update;
+macOS retains its existing restriction on host control.
+
+Linux `grave upgrade` records its outcome in `config/update-status.json`, with
+installer output in `logs/upgrade.log`. A shared `flock` prevents overlapping CLI
+and dashboard updates. `grave update-status` reports interrupted running jobs
+as failed when their lock has been released. The source checkout may already
+have moved when an installer fails; inspect the log and rerun the same release
+after fixing the reported error. This is not a Linux rollback mechanism.
+Doctor checks the updater status contract and loaded dashboard files.
+
+When upgrading from a dashboard predating this flow, reload `/grave/` manually
+after the installer finishes. The old page cannot gain the new completion logic
+until it loads the new HTML. If the interface is still old, run `grave doctor`
+and inspect the updater output (`journalctl -u 'gravedecay-upgrade*'` on older
+Linux installs) before retrying.
+
+## Shared web icon
+
+The dashboard, PWA manifest, Apple touch icon, notification icon, and favicons
+use the same skull artwork as the README and native clients. Committed PNGs
+at 16, 32, 180, 192, and 512 pixels live with the dashboard static files, so
+Linux, macOS, and portable installs need no image library to serve the declared
+sizes. Icon URLs include an artwork digest to invalidate browser caches.
+Doctor checks the PWA PNG dimensions. An explicit `GRAVEDECAY_ICON` retains
+the existing custom-PNG override.
+
+After changing `assets/gravedecay-skull.svg`, run
+`sh assets/generate-web-icons.sh` on macOS and commit the exports. This also
+refreshes the legacy installed PNG and the optional T3 branding assets; the
+existing `assets/apply-t3-icon.sh` remains their reapply mechanism.

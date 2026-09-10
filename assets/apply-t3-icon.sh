@@ -2,7 +2,7 @@
 # Brand the T3 Code web UI: gravedecay favicons + the back-to-gravedecay portal
 # pill (see t3-portal-snippet.html). T3 is a pinned npm package — updating it
 # overwrites dist/client, so rerun this after every `npm update -g t3`.
-# Regenerate the PNGs from ../gravedecay.png (imagemagick) if the logo changes.
+# Regenerate with assets/generate-web-icons.sh if the shared skull changes.
 set -e
 ASSETS="$(cd "$(dirname "$0")" && pwd)"
 SRC="$ASSETS/t3-icon"

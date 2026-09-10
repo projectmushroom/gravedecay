@@ -60,7 +60,7 @@ MACOS_GETS = frozenset((
     "/", "/healthz", "/api/auth-check", "/api/state", "/api/graveyard", "/api/t3-activity", "/api/v1/summary", "/api/admin/releases",
     "/api/admin/update-status", "/api/admin/benchmark", "/manifest.webmanifest", "/sw.js",
     "/offline.html", "/apple-touch-icon.png", "/icon-180.png",
-    "/icon-192.png", "/icon-512.png",
+    "/icon-192.png", "/icon-512.png", "/icon-16.png", "/icon-32.png", "/favicon.ico",
 ) + (("/api/action-stream",) if MACOS_AGENTS else ()))
 MACOS_POSTS = frozenset(("/api/settings", "/api/admin/upgrade", "/api/admin/benchmark")
                         + (("/api/action", "/api/session-kill", "/api/session-capture")
@@ -373,6 +373,12 @@ ACTION_LOCK = threading.Lock()
 @functools.cache
 def icon_png(size):
     """Home-screen icon from the installed gravedecay PNG. Never returns 404."""
+    # Bundled exports work on every appliance, including portable images
+    # without Pillow. An explicit custom icon keeps its existing override.
+    bundled = static_asset_path(f"icon-{size}.png")
+    if bundled and not os.environ.get("GRAVEDECAY_ICON"):
+        with open(bundled, "rb") as source:
+            return source.read()
     try:
         from PIL import Image
         with Image.open(ICON_PATH) as src:
@@ -411,8 +417,8 @@ MANIFEST = json.dumps({
     "id": f"{BASE or '/grave'}/", "name": "gravedecay", "short_name": "gravedecay",
     "start_url": "./", "scope": "/",
     "display": "standalone", "background_color": "#070907", "theme_color": "#070907",
-    "icons": [{"src": "icon-192.png", "sizes": "192x192", "type": "image/png"},
-              {"src": "icon-512.png", "sizes": "512x512", "type": "image/png"}],
+    "icons": [{"src": "icon-192.png?v=@ICON@", "sizes": "192x192", "type": "image/png"},
+              {"src": "icon-512.png?v=@ICON@", "sizes": "512x512", "type": "image/png"}],
 })
 
 # Network-first navigation only.  The dashboard is a remote control, so stale
@@ -515,9 +521,13 @@ MISSING_SHELL = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 </body></html>"""
 
 
+ICON_VERSION = (static_asset_sha("icon-512.png") or "legacy")[:12]
+MANIFEST = MANIFEST.replace("@ICON@", ICON_VERSION)
+
+
 def load_page():
     return static_asset("index.html", MISSING_SHELL).replace(
-        "@HOST@", HOST).replace("@BASE@", BASE or "/grave")
+        "@HOST@", HOST).replace("@BASE@", BASE or "/grave").replace("@ICON@", ICON_VERSION)
 
 
 PAGE = load_page()
@@ -534,7 +544,7 @@ def load_service_worker():
     offline.html would leave the old copy in CacheStorage forever."""
     offline = static_asset("offline.html", OFFLINE_PAGE)
     stamp = hashlib.sha256(offline.encode()).hexdigest()[:12]
-    return static_asset("sw.js", SERVICE_WORKER).replace("@OFFLINE@", stamp), stamp
+    return static_asset("sw.js", SERVICE_WORKER).replace("@OFFLINE@", stamp).replace("@ICON@", ICON_VERSION), stamp
 
 
 SW, SW_ID = load_service_worker()
@@ -2898,10 +2908,29 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send(200, out)
         elif p == "/api/admin/update-status":
-            if not MACOS: self._send(404, '{"error":"unavailable outside macOS companion"}'); return
+            if PORTABLE: self._send(404, '{"error":"unavailable in portable workspace"}'); return
             if self._forbidden(): return
-            rc, out, err = sh([MACOS_GRAVE, "update-status"], timeout=10)
-            self._send(200 if not rc else 502, out if not rc else json.dumps({"ok": False, "output": ANSI.sub("", out + err)}))
+            rc, out, err = sh([MACOS_GRAVE if MACOS else GRAVE, "update-status"], timeout=10)
+            if rc:
+                self._send(502, json.dumps({"ok": False, "output": ANSI.sub("", out + err)})); return
+            try:
+                result = json.loads(out)
+                if not isinstance(result, dict) or result.get("state") not in ("idle", "queued", "running", "ok", "failed"):
+                    raise ValueError("invalid update status")
+                with open(__file__, "rb") as source:
+                    result["dashboard_current"] = (hashlib.sha256(source.read()).hexdigest() == BUILD_ID
+                                                   and static_asset_sha("index.html") == SHELL_ID)
+                # Owner-only, fixed path, bounded output. Installer errors must
+                # remain visible even when the dashboard restarted mid-update.
+                path = os.path.join(GRAVE_ROOT, "logs", "updater.log" if MACOS else "upgrade.log")
+                result["log"] = ""
+                if os.path.isfile(path):
+                    with open(path, "rb") as log_file:
+                        log_file.seek(max(0, os.fstat(log_file.fileno()).st_size - 8192))
+                        result["log"] = ANSI.sub("", log_file.read(8192).decode("utf-8", errors="replace"))
+            except (OSError, ValueError, TypeError):
+                self._send(502, '{"error":"update status unavailable"}'); return
+            self._send(200, json.dumps(result))
         elif p == "/api/agent-log":
             # Session transcript viewer (#110). Owner-gated like the file
             # manager — transcripts show everything an agent saw or did. Both
@@ -2968,6 +2997,15 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, icon_png(192), "image/png", "public, max-age=86400")
         elif p == "/icon-512.png":
             self._send(200, icon_png(512), "image/png", "public, max-age=86400")
+        elif p in ("/icon-16.png", "/icon-32.png"):
+            self._send(200, icon_png(16 if p == "/icon-16.png" else 32), "image/png", "public, max-age=86400")
+        elif p == "/favicon.ico":
+            path = static_asset_path("favicon.ico")
+            if path:
+                with open(path, "rb") as icon:
+                    self._send(200, icon.read(), "image/x-icon", "public, max-age=86400")
+            else:
+                self._send(404, '{"error":"favicon missing"}')
         else:
             self._send(404, '{"error":"not found"}')
 
@@ -3145,8 +3183,10 @@ class Handler(BaseHTTPRequestHandler):
                 rc, out, err = sh(cmd, timeout=15)
             else:
                 tag = str(data.get("tag", ""))
-                if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag): self._send(400, json.dumps({"ok":False,"output":"invalid release tag"})); return
-                unit = f"gravedecay-upgrade@{tag}.service"; rc, out, err = sh(["sudo", "-n", "systemctl", "--no-block", "start", unit])
+                if data == {"channel": "configured"}: unit = "gravedecay-upgrade.service"
+                elif set(data) == {"tag"} and re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag): unit = f"gravedecay-upgrade@{tag}.service"
+                else: self._send(400, json.dumps({"ok":False,"output":"invalid release tag"})); return
+                rc, out, err = sh(["sudo", "-n", "systemctl", "--no-block", "start", unit])
             self._send(200 if rc == 0 else 500, json.dumps({
                 "ok": rc == 0,
                 "output": "upgrade queued; the dashboard will reconnect" if rc == 0
@@ -3195,6 +3235,15 @@ if __name__ == "__main__":
                 sys.exit("headerless dashboard request unexpectedly authorized")
         with maintenance_request("/api/auth-check") as response:
             assert response.status == 200
+        for size in (180, 192, 512):
+            with maintenance_request(f"/icon-{size}.png") as response:
+                png = response.read(24)
+                assert png[:8] == b"\x89PNG\r\n\x1a\n" and png[16:24] == size.to_bytes(4, "big") * 2, "invalid PWA icon dimensions"
+        if not PORTABLE:
+            with maintenance_request("/api/admin/update-status") as response:
+                update = json.load(response)
+                assert update["state"] in ("idle", "queued", "running", "ok", "failed"), "invalid updater status"
+                assert update["dashboard_current"], "dashboard has not loaded the installed update"
         with maintenance_request("/api/v1/summary") as response:
             summary_result = json.load(response)
             assert summary_result["health"]["t3"] in T3_SERVICE_STATES, "T3 service status is missing or invalid"

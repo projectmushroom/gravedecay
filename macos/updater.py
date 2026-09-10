@@ -16,7 +16,9 @@ def note(x):
   with open(LOG,"rb") as f: f.seek(-32768,2); tail=f.read()
   with open(LOG+".tmp","wb") as f: f.write(tail)
   os.replace(LOG+".tmp",LOG)
+ATTEMPT = str(time.time_ns())
 def status(x):
+ x["attempt"] = ATTEMPT
  t=STATUS+".tmp"
  with open(t,"w") as f: json.dump(x,f,separators=(",",":"))
  os.replace(t,STATUS); note(x)

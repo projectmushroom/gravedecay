@@ -36,8 +36,8 @@ self.addEventListener('push', event => {
   catch (e) { d = { body: event.data && event.data.text() }; }
   event.waitUntil(self.registration.showNotification(d.title || 'gravedecay', {
     body: d.body || '',
-    icon: 'icon-192.png',
-    badge: 'icon-192.png',
+    icon: 'icon-192.png?v=@ICON@',
+    badge: 'icon-192.png?v=@ICON@',
     tag: d.tag || 'gravedecay',
     data: { url: d.url || './' },
   }));

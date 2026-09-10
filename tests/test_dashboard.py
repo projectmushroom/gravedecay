@@ -81,6 +81,23 @@ class DashboardContractTests(unittest.TestCase):
         self.assertEqual(manifest["display"], "standalone")
         self.assertTrue(manifest["id"].endswith("/grave/"))
         self.assertEqual(manifest["start_url"], "./")
+        for icon in manifest["icons"]:
+            self.assertIn("?v=" + DASHBOARD.ICON_VERSION, icon["src"])
+            with self.get("/" + icon["src"]) as response:
+                png = response.read()
+                self.assertEqual(response.headers["Content-Type"], "image/png")
+            size = int(icon["sizes"].split("x")[0])
+            self.assertEqual(png[16:24], size.to_bytes(4, "big") * 2)
+            self.assertEqual(png, (ROOT / f"dashboard/static/icon-{size}.png").read_bytes())
+        for size in (16, 32, 180):
+            with self.get(f"/icon-{size}.png?v=" + DASHBOARD.ICON_VERSION) as response:
+                self.assertEqual(response.read()[16:24], size.to_bytes(4, "big") * 2)
+        with self.get("/apple-touch-icon.png") as response:
+            self.assertEqual(response.read(), (ROOT / "dashboard/static/icon-180.png").read_bytes())
+        with self.get("/favicon.ico") as response:
+            self.assertEqual(response.read()[:6], b"\x00\x00\x01\x00\x02\x00")
+        self.assertNotIn("@ICON@", DASHBOARD.PAGE)
+        self.assertNotIn("@ICON@", DASHBOARD.SW)
 
     def test_multi_user_backend_requires_gateway_capability_except_health(self):
         secured = load_dashboard({"GRAVEDECAY_BACKEND_TOKEN": "a" * 64})
@@ -651,7 +668,8 @@ class DashboardContractTests(unittest.TestCase):
         command = DASHBOARD.ACTIONS["update-grave"]
         self.assertIn("--no-block", command)
         self.assertEqual(command[-1], "gravedecay-upgrade.service")
-        self.assertIn('data-act="update-grave"', DASHBOARD.PAGE)
+        self.assertIn('id="update-open"', DASHBOARD.PAGE)
+        self.assertNotIn('data-act="update-grave"', DASHBOARD.PAGE)
         unit = (ROOT / "systemd/gravedecay-upgrade.service.tmpl").read_text()
         self.assertIn("Type=oneshot", unit)
         self.assertIn("ExecStart=@GRAVE_BIN@ upgrade", unit)
@@ -674,10 +692,33 @@ class DashboardContractTests(unittest.TestCase):
             with self.post("/api/admin/upgrade", {"tag": "v0.5.0"}) as response:
                 payload = json.loads(response.read())
             self.assertTrue(payload["ok"])
+            with self.post("/api/admin/upgrade", {"channel": "configured"}) as response:
+                self.assertEqual(response.status, 200)
+            with self.assertRaises(urllib.error.HTTPError):
+                self.post("/api/admin/upgrade", {"tag": "v0.5.0", "channel": "edge"})
         finally:
             DASHBOARD.sh = original
-        self.assertEqual(calls, [["sudo", "-n", "systemctl", "--no-block", "start",
-                                  "gravedecay-upgrade@v0.5.0.service"]])
+        self.assertEqual(calls, [["sudo", "-n", "systemctl", "--no-block", "start", unit]
+                                for unit in ("gravedecay-upgrade@v0.5.0.service", "gravedecay-upgrade.service")])
+
+    def test_update_status_is_owner_only_and_checks_loaded_dashboard(self):
+        original, shell = DASHBOARD.sh, DASHBOARD.SHELL_ID
+        DASHBOARD.sh = lambda cmd, timeout=10: (0, '{"state":"ok","attempt":"one"}', "")
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as denied:
+                urllib.request.urlopen(self.origin + "/api/admin/update-status")
+            self.assertEqual(denied.exception.code, 403)
+            request = urllib.request.Request(self.origin + "/api/admin/update-status",
+                                            headers={"Tailscale-User-Login": "owner@example.test"})
+            with urllib.request.urlopen(request) as response:
+                result = json.load(response)
+                self.assertEqual(response.headers["Cache-Control"], "no-store")
+            self.assertTrue(result["dashboard_current"])
+            DASHBOARD.SHELL_ID = "old-shell"
+            with urllib.request.urlopen(request) as response:
+                self.assertFalse(json.load(response)["dashboard_current"])
+        finally:
+            DASHBOARD.sh, DASHBOARD.SHELL_ID = original, shell
 
     def test_session_capture_validates_name_and_targets_exactly(self):
         # Issue #104: the universal copy path. Names are charset-gated (same

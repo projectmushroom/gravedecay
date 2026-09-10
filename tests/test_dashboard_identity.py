@@ -21,6 +21,9 @@ class DashboardIdentityTests(unittest.TestCase):
                 dash = load_dashboard({"GRAVE_ROOT": tmp, "GRAVEDECAY_PLATFORM": platform,
                     "GRAVEDECAY_MACOS_AGENTS": "1", "GRAVEDECAY_ALLOWED_USERS": "owner@example.test"})
                 token = dash.local_token(create=True)
+                real_sh = dash.sh
+                dash.sh = lambda cmd, timeout=10: ((0, '{"state":"idle"}', "")
+                    if cmd[-1] == "update-status" else real_sh(cmd, timeout=timeout))
                 dash.unit_state = lambda _: {"active": active}
                 for name in ("collect_services", "collect_repos", "collect_journal", "collect_inbox", "collect_agent_history"):
                     setattr(dash, name, lambda: [])
@@ -69,7 +72,8 @@ class DashboardIdentityTests(unittest.TestCase):
                         self.assertNotIn(token, json.dumps(state))
                         self.assertEqual(request("/api/settings", {**headers, "Sec-Fetch-Site": "cross-site"}, {})[0], 403)
                     # CLI proves the explicit maintenance protocol against the real server.
-                    env = dict(os.environ, GRAVE_ROOT=tmp, GRAVEDECAY_PORT=str(server.server_port))
+                    env = dict(os.environ, GRAVE_ROOT=tmp, GRAVEDECAY_PORT=str(server.server_port),
+                               GRAVEDECAY_PLATFORM=platform)
                     checked = subprocess.run([sys.executable, str(ROOT / "dashboard/gravedecay.py"), "--check-auth"],
                                              env=env, capture_output=True, text=True)
                     self.assertEqual(checked.returncode, 0, checked.stderr)

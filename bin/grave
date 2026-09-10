@@ -1299,17 +1299,47 @@ cmd_releases() { # grave releases [--json] — list selectable stable releases
   if [[ "$format" == "--json" ]]; then
     jq -n --arg current "$current" --arg checkout "$checkout" \
       --argjson releases "$(printf '%s\n' "$tags" | jq -Rsc 'split("\n")|map(select(length>0))')" \
-      '{current:$current,checkout:$checkout,releases:$releases}'
+      --arg channel "${UPGRADE_CHANNEL:-release}" \
+      '{current:$current,checkout:$checkout,channel:$channel,releases:$releases}'
   else
     say "gravedecay checkout: $checkout"
     [[ -n "$tags" ]] && printf '  %s\n' $tags || say "  no stable releases found"
   fi
 }
 
-cmd_upgrade() { # grave upgrade [--edge|--release|--tag vX.Y.Z]
+cmd_update_status() (
+  local status="$GRAVE_ROOT/config/update-status.json"
+  if [[ ! -f "$status" ]]; then printf '{"state":"idle"}\n'; return; fi
+  # SIGKILL or a power loss cannot run the EXIT trap. A released lock means
+  # a recorded running attempt was interrupted, never that it succeeded.
+  exec 9>"$GRAVE_ROOT/config/upgrade.lock"
+  if flock -n 9; then
+    jq 'if .state=="running" then .state="failed" | .message="Update interrupted; inspect the update log before retrying." else . end' "$status"
+  else
+    cat "$status"
+  fi
+)
+
+upgrade_record() (
+  umask 077
+  jq -n --arg state "$1" --arg message "$2" --arg attempt "$upgrade_attempt" \
+    --arg target "$upgrade_target" '{state:$state,message:$message,attempt:$attempt,target:$target}' \
+    > "$GRAVE_ROOT/config/update-status.json.tmp"
+  mv "$GRAVE_ROOT/config/update-status.json.tmp" "$GRAVE_ROOT/config/update-status.json"
+)
+
+cmd_upgrade() ( # subshell keeps the lock and EXIT trap scoped to this update
+  # Re-raise already runs as the appliance owner. Keep its lock and status
+  # owner-writable too when a human invokes the CLI through sudo.
+  if (( EUID == 0 )) && [[ -r "$GRAVE_ROOT/config/owner" ]]; then
+    local owner
+    owner=$(<"$GRAVE_ROOT/config/owner")
+    if [[ -n "$owner" && "$owner" != root ]]; then
+      exec sudo -H -u "$owner" env GRAVE_CONF="$CONF" "$0" upgrade "$@"
+    fi
+  fi
   local channel="${UPGRADE_CHANNEL:-release}"
   local repo tag="" dirty git_error
-  repo=$(upgrade_repo)
   while (($#)); do
     case "$1" in
       --edge) channel=edge; shift ;;
@@ -1322,6 +1352,18 @@ cmd_upgrade() { # grave upgrade [--edge|--release|--tag vX.Y.Z]
       *) say "usage: grave upgrade [--edge|--release|--tag vX.Y.Z]"; exit 1 ;;
     esac
   done
+  local upgrade_umask
+  upgrade_umask=$(umask)
+  umask 077
+  mkdir -p "$GRAVE_ROOT/config" "$GRAVE_ROOT/logs"
+  exec 9>"$GRAVE_ROOT/config/upgrade.lock"
+  flock -w 1 9 || { bad "an update is already running"; exit 1; }
+  local upgrade_attempt="$(date +%s)-$$-$RANDOM" upgrade_target="${tag:-$channel}"
+  upgrade_record running "Fetching and applying $upgrade_target"
+  trap 'rc=$?; if (( rc == 0 )); then upgrade_record ok "Update and installer completed"; else upgrade_record failed "Update failed (exit $rc); see update log"; fi' EXIT
+  exec > >(tee "$GRAVE_ROOT/logs/upgrade.log") 2>&1
+  umask "$upgrade_umask"
+  repo=$(upgrade_repo)
   # Untracked field notes and command transcripts are safe to preserve when
   # Git can switch to the requested release without overwriting them. Blocking
   # every untracked path made an otherwise clean appliance impossible to
@@ -1375,7 +1417,7 @@ cmd_upgrade() { # grave upgrade [--edge|--release|--tag vX.Y.Z]
   say "Re-running the ritual (idempotent)..."
   bash "$repo/raise.sh"
   log "upgrade: $target"
-}
+)
 
 # ------------------------------------------------------------------ logs ----
 cmd_logs() {
@@ -2620,6 +2662,7 @@ grave — gravedecay appliance control 🪦
                              tailnet), full (managed relay tunnel, no VPN
                              needed), off. Doctor enforces the declared mode
   grave releases            list selectable stable gravedecay releases
+  grave update-status       last appliance update outcome (JSON)
   grave update               snapshot (if snapper), update pkgs/npm/images
   grave upgrade              update gravedecay itself: pull latest release
                              (--tag vX.Y.Z pins one; --edge follows main)
@@ -2674,6 +2717,7 @@ case "${1:-help}" in
   update)     cmd_update ;;
   releases)   shift || true; cmd_releases "$@" ;;
   upgrade)    shift || true; cmd_upgrade "$@" ;;
+  update-status) cmd_update_status ;;
   bootmode)   shift || true; cmd_bootmode "$@" ;;
   gamewatch)  shift || true; cmd_gamewatch "$@" ;;
   keepalive)  shift || true; cmd_keepalive "$@" ;;
