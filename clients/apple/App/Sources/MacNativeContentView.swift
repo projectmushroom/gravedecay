@@ -355,7 +355,7 @@ final class MacDashboardModel: ObservableObject {
     @Published private(set) var workRoot: String
     @Published private(set) var keychainStatus = "Stored in this Mac’s Keychain. Assigned issues are read-only."
     @Published private(set) var workRootStatus: String?
-    @Published var launchAtLogin = SMAppService.mainApp.status != .notRegistered
+    @Published var launchAtLogin = MacDashboardModel.loginRequested
     @Published private(set) var launchAtLoginError: String?
     private let defaults = UserDefaults.standard
     private var refreshTask: Task<Void, Never>?
@@ -372,9 +372,13 @@ final class MacDashboardModel: ObservableObject {
     func setWorkRoot(_ value: String) { let url = URL(fileURLWithPath: (value as NSString).expandingTildeInPath); var directory: ObjCBool = false; guard FileManager.default.fileExists(atPath: url.path, isDirectory: &directory), directory.boolValue else { workRootStatus = "Repository folder must be an existing directory."; return }; workRootStatus = nil; workRoot = url.path; defaults.set(workRoot, forKey: "macWorkRoot"); refresh() }
     func saveLinearKey(_ key: String) { guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }; keychainStatus = Keychain.set(key, account: "linear-api-key") ? "Stored in this Mac’s Keychain." : "Could not save the Linear key to Keychain."; refresh() }
     func removeLinearKey() { keychainStatus = Keychain.remove(account: "linear-api-key") ? "Linear key removed." : "Could not remove the Linear key from Keychain."; refresh() }
+    private static var loginRequested: Bool {
+        let status = SMAppService.mainApp.status
+        return status == .enabled || status == .requiresApproval
+    }
     func setLaunchAtLogin(_ enabled: Bool) {
-        do { if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }; launchAtLogin = SMAppService.mainApp.status != .notRegistered; launchAtLoginError = SMAppService.mainApp.status == .requiresApproval ? "Launch at Login needs approval in System Settings." : nil }
-        catch { launchAtLogin = SMAppService.mainApp.status != .notRegistered; launchAtLoginError = "Launch at Login: \(error.localizedDescription)" }
+        do { if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }; launchAtLogin = Self.loginRequested; launchAtLoginError = SMAppService.mainApp.status == .requiresApproval ? "Launch at Login needs approval in System Settings." : nil }
+        catch { launchAtLogin = Self.loginRequested; launchAtLoginError = "Launch at Login: \(error.localizedDescription)" }
     }
     func setNativeHost(_ host: MacNativeHost) { nativeHost = host; host.update(snapshot: snapshot) }
     private func apply(_ result: CollectionResult) { snapshot = result.snapshot; nativeHost?.update(snapshot: result.snapshot); repositories = result.repositories; tailnetStatus = result.tailnetStatus; tailnetName = result.tailnetName; githubStatus = result.githubStatus; linearStatus = result.linearStatus; linearIssues = result.linearIssues; networkInterfaces = result.networkInterfaces }

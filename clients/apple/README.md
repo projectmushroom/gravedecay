@@ -127,10 +127,12 @@ lipo -info ~/Library/Developer/Xcode/DerivedData/Gravedecay-*/Build/Products/Rel
 
 ## Distribution notes
 
-`make package-dmg` creates an unsigned, mountable Universal 2 DMG at
+`make package-dmg` creates a mountable Universal 2 DMG at
 `build/Gravedecay-macOS.dmg`; CI publishes that artifact, and tagged releases
 attach it as `Gravedecay-macOS.dmg` with its SHA-256 in the release notes.
-Because the DMG is unsigned, macOS 15 Gatekeeper blocks the first launch:
+The packager preserves an existing app signature or adds an ad-hoc signature
+so Launch at Login can identify the app. Ad-hoc signing does not notarize the
+app or establish a verified publisher; macOS 15 Gatekeeper can block first launch:
 open the app once, dismiss the warning, then allow it under **System
 Settings → Privacy & Security → Open Anyway** (or clear the quarantine flag
 with `xattr -d com.apple.quarantine /Applications/Gravedecay.app`). Set
@@ -138,6 +140,19 @@ with `xattr -d com.apple.quarantine /Applications/Gravedecay.app`). Set
 and `NOTARY_PROFILE` to a configured `notarytool` Keychain profile for a
 signed, verified, notarized, and stapled release. Notarization refuses an
 unsigned app; a Developer ID certificate/profile remains a release prerequisite.
+
+If Launch at Login fails with “Operation not permitted” on an older unsigned or local
+build, quit the app and give it a local ad-hoc signature:
+
+```sh
+codesign --sign - /Applications/Gravedecay.app
+codesign --verify --strict /Applications/Gravedecay.app
+```
+
+Reopen the app and enable Launch at Login. This does not notarize the app or
+replace Developer ID distribution signing. Repeat for an unsigned replacement
+build; do not re-sign an already valid Developer ID-signed release.
+
 - iOS personal: development signing / TestFlight ($99 dev account).
 - iOS public (EU): AltStore PAL self-publishing — Apple notarization only,
   host the signed package ourselves.
