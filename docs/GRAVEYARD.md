@@ -9,6 +9,12 @@ credentials, and services remain on their original plot.
 - Web dashboard: open **Graveyard — your plots**, above the launcher. **All
   plots** shows the overview; the plot picker narrows it to one appliance.
   Dashboard, T3, Terminal, and Network links open that plot's advertised apps.
+  CPU, memory, and disk percentages show the latest reachable summary.
+- **Set up T3** opens the selected plot's dashboard at its pairing controls
+  in web, macOS, and Omarchy. Create a fresh link there and add it as an
+  environment in the official T3 app. Opening setup never creates a token;
+  the destination's usual owner/workspace checks still apply. Older plots
+  without the setup capability keep their existing Dashboard and T3 links.
 - macOS app: **Graveyard** starts with all plots. Select a card to inspect it;
   the header and menu-bar plot pickers select the destination. Terminal stays
   native; Dashboard and T3 open in the browser. This Mac, Work, and Network
@@ -53,7 +59,9 @@ contract, subject to each destination's access checks.
 `grave doctor`'s existing identity/maintenance check now also verifies the
 Graveyard endpoint denies headerless inventory reads and that authenticated
 responses have the expected shape, `no-store`, and no CORS header. Offline
-peers do not fail doctor. Re-raise Linux or rerun the macOS installer to apply
+peers do not fail doctor. It also checks that the local summary advertises T3
+setup on the dashboard only when it advertises T3. Re-raise Linux or rerun the
+macOS installer to apply
 the updated dashboard; rebuild the native app or update the Omarchy plugin for
 their saved inventories.
 
@@ -67,6 +75,41 @@ host need explicit instance identities and endpoint registration in a later
 release. Saved plots on another tailnet remain unreachable until that network
 is accessible.
 
-Shared work/attention feeds, choosing where a new task runs, and fleet
-maintenance are subsequent steps. This release opens the existing apps of a
-selected plot and leaves work execution on that plot.
+Gravedecay manages machine health, storage, services, updates, and T3 pairing.
+Coding, approvals, and choosing where a new thread runs belong in T3. A separate
+Graveyard activity feed or task dispatcher is deferred.
+
+## Reusing T3
+
+Use the official T3 app as the coding interface for all plots. Pair each plot
+over its existing Tailscale HTTPS origin; each remains an independent T3
+environment. GD's Tailscale node ID and T3's environment ID are different
+identities. Discovery does not enroll a device in T3 or copy T3 credentials.
+
+The [T3 v0.0.40 remote-access guide](https://github.com/pingdotgg/t3code/blob/v0.0.40/docs/user/remote-access.md)
+documents multiple environments and optional **Settings → Connections → Load
+balancing** on web/desktop. This chooses machines for new threads in grouped
+projects; existing threads stay on their original machine. Mobile selection
+is manual. GD does not implement another scheduler or synchronize these
+client-local preferences.
+
+Reuse T3's pairing links and app hand-off, its Connect activity publishing
+(`grave t3 connect publish` on supported Linux appliances), and its optional
+**Continue threads after restarts** setting. That setting resumes supported
+threads once T3 starts again; it does not start the server or preserve every
+terminal command. See [CLIENTS.md](CLIENTS.md) and the
+[updating guide](https://github.com/pingdotgg/t3code/blob/v0.0.40/docs/user/updating.md).
+
+T3's [connection catalog](https://github.com/pingdotgg/t3code/blob/v0.0.40/apps/web/src/state/environments.ts)
+separates saved environments from live connection state. GD follows the same
+principle with saved plots, explicit destinations, and unavailable states.
+Its implementation depends on T3's TypeScript client runtime and auth; GD's
+Python, Swift, and QML clients keep their small summary readers instead of
+importing that stack. No upstream code is copied for this integration.
+
+Keep GD as the service and Tailscale-route owner on raised appliances. T3's
+own service installer, SSH launcher, and automatic Serve setup can create a
+second server/profile or change routes. Use the existing GD pairing controls
+and platform updater; enabling T3's remote service updater would require a
+separate compatibility check for GD-managed services. Machine version and
+connection diagnostics are a subsequent slice, not inferred from a T3 link.

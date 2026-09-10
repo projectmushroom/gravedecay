@@ -31,6 +31,15 @@ or `container`. Portable (`container`) summaries intentionally return `null`
 host resource and uptime values, retain `dashboard`, `t3`, and `terminal`
 links, and omit `network`.
 
+`links.t3_setup` is an optional dashboard path (`/`, `/grave`, or `/grave/`)
+advertised by dashboards with T3 pairing controls, including macOS with the
+agents layer. Clients append the fixed `#t3-setup` fragment to open those
+controls. It carries no credential, makes no remote action request, and does
+not establish that T3 is running or that the client is paired. Other paths,
+queries, and fragments are rejected for this capability. Older summaries and
+the native macOS summary publisher may omit it. Clients hide setup when a
+plot is unreachable; a destination still enforces its own access checks.
+
 ## Owner-only Graveyard overview
 
 `GET /grave/api/graveyard` returns `{state, plots, checked_at, limited}`.

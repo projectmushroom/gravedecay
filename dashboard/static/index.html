@@ -422,7 +422,8 @@ body.portable #sec-notify{display:none!important}
     <span class="setlabel dim2" id="keepalive-state"></span>
   </div>
 
-  <div class="sethead mac-linux-setting macagents-setting">Auth &amp; pairing</div>
+  <div class="sethead mac-linux-setting macagents-setting" id="t3-setup">Set up T3 on this plot</div>
+  <div class="setrow mac-linux-setting macagents-setting"><p class="dim">Create a pairing link, then open it in the official T3 app or paste it into Add environment. Repeat for each plot you want to code on. Keep Tailscale connected on both devices.</p></div>
   <div class="setrow mac-linux-setting macagents-setting">
     <button class="mini" id="t3-pair-btn">🔑 New T3 pairing token</button>
     <a class="mini abtn" data-auth="auth-claude">🤖 Re-auth Claude</a>
@@ -699,6 +700,7 @@ function rememberPlots(){
 }
 function plotLink(plot,key){
   const path=plot.summary.links[key];
+  if(key==='t3_setup')return ['/','/grave','/grave/'].includes(path)?`https://${plot.dns}${path}#t3-setup`:null;
   return ['/','/grave','/grave/','/term','/term/','/net','/net/'].includes(path)?`https://${plot.dns}${path}`:null;
 }
 function renderGraveyard(message){
@@ -710,11 +712,13 @@ function renderGraveyard(message){
     const s=p.summary,problems=(s.health.services_failed||0)+(s.health.containers_problem||0);
     const age=Math.max(0,Math.floor((Date.now()/1000-p.lastSeen)/60));
     const condition=!p.reachable?'Unreachable':problems?'Needs attention':s.node.mode==='gaming'?'Gaming':'Online';
-    const links=['dashboard','t3','terminal','network'].map(key=>{
-      const url=plotLink(p,key);return p.reachable&&url?`<a href="${esc(url)}" rel="noreferrer">${{dashboard:'Dashboard',t3:'T3',terminal:'Terminal',network:'Network'}[key]}</a>`:'';
+    const links=['dashboard','t3','t3_setup','terminal','network'].map(key=>{
+      const url=plotLink(p,key);return p.reachable&&url?`<a href="${esc(url)}" rel="noreferrer">${{dashboard:'Dashboard',t3:'T3',t3_setup:'Set up T3',terminal:'Terminal',network:'Network'}[key]}</a>`:'';
     }).join('');
+    const percent=n=>typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=100?`${Math.round(n)}%`:'—';
     return `<article class="plot-card" data-plot="${esc(p.id)}"><h3>${esc(p.name)}</h3>
       <p>${condition} · ${esc(s.node.platform)}</p>
+      ${p.reachable?`<p class="dim">CPU ${percent(s.resources.cpu_pct)} · Memory ${percent(s.resources.memory_pct)} · Disk ${percent(s.resources.disk_pct)}</p>`:''}
       <p class="dim">${p.reachable?`${esc(s.activity.sessions_live??'—')} live sessions · ${esc(problems)} problems`:`Last seen ${age<1?'just now':age<60?age+'m ago':Math.floor(age/60)+'h ago'}`}</p>
       <div class="plot-links">${links}${!p.reachable?`<button data-forget-plot="${esc(p.id)}">Forget plot</button>`:''}</div></article>`;
   }).join('');
@@ -1002,6 +1006,7 @@ function render(s){
   document.body.classList.toggle('macos',macosCompanion);
   document.body.classList.toggle('macagents',macosCompanion&&!!s.macos_agents);
   document.body.classList.toggle('portable',portableCompanion);
+  openT3Setup();
   if(macosCompanion&&!macUpdateSeen){macUpdateSeen=true;macUpdateStatus(true);}
   if(macosCompanion)document.querySelector('[data-panel="actions"] h2').textContent='⬆ Update Gravedecay';
   if(portableCompanion&&activeTab!=='work'){
@@ -1670,6 +1675,10 @@ function closeSettings(){$('settings-panel').style.display='none';unlockBody();}
 $('gear').onclick=()=>{
   const p=$('settings-panel');
   if(p.style.display==='block'){closeSettings();return;}
+  openSettings();
+};
+function openSettings(){
+  const p=$('settings-panel');
   if(!cfg)return;
   buildSettings();
   // sections start collapsed — the modal opens phone-sized
@@ -1678,7 +1687,14 @@ $('gear').onclick=()=>{
     h.textContent='▸'+h.textContent.slice(1);
   });
   p.style.display='block';p.scrollTop=0;lockBody();
-};
+}
+function openT3Setup(){
+  if(location.hash!=='#t3-setup'||!cfg||macosCompanion&&!document.body.classList.contains('macagents'))return;
+  history.replaceState(null,'',location.pathname+location.search);
+  openSettings();
+  requestAnimationFrame(()=>{$('t3-setup').scrollIntoView({block:'start'});$('t3-pair-btn').focus({preventScroll:true});});
+}
+window.addEventListener('hashchange',openT3Setup);
 $('close-set').onclick=closeSettings;
 $('settings-x').onclick=closeSettings;
 $('settings-panel').addEventListener('click',e=>{

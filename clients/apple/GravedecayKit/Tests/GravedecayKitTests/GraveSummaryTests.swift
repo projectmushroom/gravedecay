@@ -69,6 +69,20 @@ final class GraveSummaryTests: XCTestCase {
         XCTAssertNil(GravePresentation.link(host: "grave.tail.ts.net", path: "/bad\\path"))
     }
 
+    func testSetupCapabilityIsOptionalAndOnlyOpensDashboardControls() throws {
+        let data = MacPublisherSummary.data(host: "Mac", uptime: nil, cpu: nil, memory: nil, disk: nil)
+        var value = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertNil(GraveSummary.decode(data)?.links.t3_setup)
+        value["links"] = ["t3_setup": "/grave/"]
+        let summary = try XCTUnwrap(GraveSummary.decode(JSONSerialization.data(withJSONObject: value)))
+        XCTAssertEqual(summary.links.t3_setup, "/grave/")
+        XCTAssertEqual(GravePresentation.t3SetupLink(host: "vm.tail.ts.net", path: summary.links.t3_setup)?.absoluteString,
+                       "https://vm.tail.ts.net/grave/#t3-setup")
+        for path in ["//evil.example", "/term/", "/grave/?token=secret", "/grave/#token=secret"] {
+            XCTAssertNil(GravePresentation.t3SetupLink(host: "vm.tail.ts.net", path: path))
+        }
+    }
+
     func testCapabilitiesRequirePublishedSafeTerminal() throws {
         let summary = try XCTUnwrap(GraveSummary.decode(Data(#"{"product":"gravedecay","api_version":1,"node":{"host":"grave","platform":"macos","mode":"companion"},"resources":{},"activity":{"sessions_live":0,"sessions_frozen":0},"health":{"services_failed":0,"containers_problem":0},"links":{"dashboard":"/grave/","terminal":"/elsewhere","network":"/net/"}}"#.utf8)))
         XCTAssertNil(summary.capabilities.terminal)

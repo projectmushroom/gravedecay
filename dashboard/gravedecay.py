@@ -1127,7 +1127,7 @@ def _summary_links():
     if not PORTABLE and (not MACOS or any(a.get("url") == "/net/" for a in APPS)):
         links["network"] = "/net/"
     if not MACOS or MACOS_AGENTS:
-        links.update({"t3": "/", "terminal": "/term/"})
+        links.update({"t3": "/", "terminal": "/term/", "t3_setup": links["dashboard"]})
     return links
 
 
@@ -1250,6 +1250,10 @@ def graveyard_summary(raw):
             for key in keys:
                 number = value[section].get(key)
                 result[section][key] = number if type(number) in (int, float) and 0 <= number <= 1e12 else None
+        # Setup is a dashboard hand-off, never a token or remote action URL.
+        setup = value["links"].get("t3_setup")
+        if setup in ("/", "/grave", "/grave/"):
+            result["links"]["t3_setup"] = setup
         return result
     except (ValueError, TypeError):
         return None
@@ -3167,6 +3171,9 @@ if __name__ == "__main__":
                 sys.exit("headerless dashboard request unexpectedly authorized")
         with maintenance_request("/api/auth-check") as response:
             assert response.status == 200
+        with maintenance_request("/api/v1/summary") as response:
+            links = json.load(response)["links"]
+            assert links.get("t3_setup") == (links["dashboard"] if "t3" in links else None), "T3 setup capability does not match this plot"
         with maintenance_request("/api/graveyard") as response:
             result = json.load(response)
             assert result["state"] in ("idle", "scanning", "ready", "unavailable", "tailscale-unavailable", "unsupported")

@@ -106,7 +106,10 @@ public struct GraveSummary: Codable, Equatable, Sendable {
     public struct Resources: Codable, Equatable, Sendable { public let cpu_pct, memory_pct, disk_pct, cpu_temp_c, gpu_temp_c: Double? }
     public struct Activity: Codable, Equatable, Sendable { public let sessions_live, sessions_frozen: Int }
     public struct Health: Codable, Equatable, Sendable { public let services_failed, containers_problem: Int }
-    public struct Links: Codable, Equatable, Sendable { public let dashboard, t3, terminal, network: String? }
+    public struct Links: Codable, Equatable, Sendable {
+        public let dashboard, t3, terminal, network: String?
+        public var t3_setup: String? = nil
+    }
     public let product: String
     public let api_version: Int
     public let observed_at: Date?
@@ -190,6 +193,14 @@ public enum GravePresentation {
     public static func link(host: String, path: String?) -> URL? {
         guard let host = GraveDiscovery.dnsName(host), let path = safePath(path) else { return nil }
         var components = URLComponents(); components.scheme = "https"; components.host = host; components.percentEncodedPath = path
+        return components.url
+    }
+
+    public static func t3SetupLink(host: String, path: String?) -> URL? {
+        guard let path, ["/", "/grave", "/grave/"].contains(path),
+              let url = link(host: host, path: path),
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        components.fragment = "t3-setup"
         return components.url
     }
 }

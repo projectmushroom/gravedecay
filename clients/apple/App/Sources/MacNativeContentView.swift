@@ -204,6 +204,7 @@ private struct GraveyardView: View {
                     if let summary = grave.summary { Text("\(summary.node.platform.uppercased()) // CPU \(GravePresentation.percent(summary.resources.cpu_pct))").font(.system(size: 9, design: .monospaced)).foregroundStyle(GraveTheme.ink2) }
                     if let s = grave.summary { VStack(alignment: .leading, spacing: 5) { HStack { Text("MEM \(GravePresentation.percent(s.resources.memory_pct))"); Text("DISK \(GravePresentation.percent(s.resources.disk_pct))"); Spacer(); Text("UP \(GravePresentation.uptime(s.node.uptime_s))") }.foregroundStyle(GraveTheme.muted); HStack { Text("SESSIONS \(s.activity.sessions_live)"); Text("PROBLEMS \(s.problems)").foregroundStyle(s.problems > 0 ? GraveTheme.crit : GraveTheme.good) } }.font(.system(size: 9, design: .monospaced)) }
                     HStack { CapabilityButton(title: "DASHBOARD", host: grave.candidate.dns, path: grave.summary?.links.dashboard); CapabilityButton(title: "T3", host: grave.candidate.dns, path: grave.summary?.capabilities.t3); if grave.summary?.capabilities.terminal != nil { Button("TERMINAL") { graves.select(grave); selection = .terminal }.buttonStyle(GraveButton()) } }.disabled(!grave.reachable)
+                    if let url = GravePresentation.t3SetupLink(host: grave.candidate.dns, path: grave.summary?.links.t3_setup) { Link("SET UP T3", destination: url).buttonStyle(GraveButton()).disabled(!grave.reachable) }
                 }}.contentShape(Rectangle()).onTapGesture { graves.select(grave); showingAll = false }
             }
         }.frame(maxWidth: 980).padding(24) }.background(GraveTheme.page)
@@ -248,6 +249,7 @@ private struct GraveDetailView: View {
                     HStack { Text("SESSIONS \(summary.activity.sessions_live) LIVE"); Text("\(summary.activity.sessions_frozen) FROZEN"); Spacer(); Text("SERVICES \(summary.health.services_failed) FAILED"); Text("CONTAINERS \(summary.health.containers_problem) PROBLEM") }
                 }.font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.ink2) }
                 HStack { CapabilityButton(title: "DASHBOARD", host: grave.candidate.dns, path: summary.links.dashboard); CapabilityButton(title: "T3", host: grave.candidate.dns, path: summary.capabilities.t3); if summary.capabilities.terminal != nil { Button("TERMINAL") { graves.select(grave); selection = .terminal }.buttonStyle(GraveButton()) } }.disabled(!grave.reachable)
+                if let url = GravePresentation.t3SetupLink(host: grave.candidate.dns, path: summary.links.t3_setup) { Link("SET UP T3", destination: url).buttonStyle(GraveButton()).disabled(!grave.reachable) }
             }
         }.frame(maxWidth: 980).padding(24) }.background(GraveTheme.page)
     }

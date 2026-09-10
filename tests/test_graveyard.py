@@ -43,6 +43,17 @@ class GraveyardTests(unittest.TestCase):
         for raw in ("[]", "{}", '"text"', "x" * 65537, json.dumps(dict(SUMMARY, api_version=2))):
             self.assertIsNone(self.dash.graveyard_summary(raw))
 
+    def test_setup_is_an_optional_dashboard_capability_without_credentials(self):
+        for platform, agents, expected in (("linux", "0", True), ("container", "0", True),
+                                           ("macos", "0", False), ("macos", "1", True)):
+            dash = load_dashboard({"GRAVEDECAY_PLATFORM": platform, "GRAVEDECAY_MACOS_AGENTS": agents})
+            links = dash._summary_links()
+            self.assertEqual(links.get("t3_setup"), links["dashboard"] if expected else None)
+        for path in ("/", "/grave", "/grave/", "//elsewhere", "/term/", "/grave/?token=secret", "/grave/#token=secret"):
+            value = dict(SUMMARY, links={**SUMMARY["links"], "t3_setup": path})
+            clean = self.dash.graveyard_summary(json.dumps(value))
+            self.assertEqual(clean["links"].get("t3_setup"), path if path in ("/", "/grave", "/grave/") else None)
+
     def test_probe_has_bounded_timeout_no_redirects_or_forwarded_credentials(self):
         with patch.object(self.dash, "sh", return_value=(0, json.dumps(SUMMARY), "")) as run:
             plot = self.dash.graveyard_probe({"id": "one", "dns": "vm.tail.ts.net", "name": "VM"})

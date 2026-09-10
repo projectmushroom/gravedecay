@@ -14,6 +14,10 @@ function safePath(value) {
     return ["/", "/grave", "/grave/", "/term", "/term/", "/net", "/net/"].indexOf(path) >= 0 ? path : ""
 }
 
+function setupPath(value) {
+    return ["/", "/grave", "/grave/"].indexOf(value) >= 0 ? value + "#t3-setup" : ""
+}
+
 function candidates(status) {
     var nodes = []
     if (!status || typeof status !== "object") return nodes
@@ -45,6 +49,7 @@ function summary(raw) {
             clean[section][key] = typeof n === "number" && isFinite(n) && n >= 0 && n <= 1e12 ? n : null
         })
         ;["dashboard", "t3", "terminal", "network"].forEach(function(key) { var path = safePath(value.links[key]); if (path) clean.links[key] = path })
+        if (setupPath(value.links.t3_setup)) clean.links.t3_setup = value.links.t3_setup
         return clean
     } catch (_) { return null }
 }

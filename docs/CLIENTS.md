@@ -2,6 +2,9 @@
 
 The [Graveyard overview](GRAVEYARD.md) remembers your appliance instances (plots)
 and opens their advertised apps from web, native macOS, and Omarchy.
+**Set up T3** opens a supported plot's pairing controls; add each plot as an
+environment in the official T3 app to code across machines. GD keeps ownership
+of appliance services and updates; see [Reusing T3](GRAVEYARD.md#reusing-t3).
 
 The box serves web UIs only (docs/PORTS.md); native clients are thin shells
 over the same origins and never require new listening ports on the box.
