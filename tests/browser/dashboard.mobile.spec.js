@@ -321,10 +321,20 @@ test('macOS uses the same updater dialog with its configured channel and no host
 
 });
 
-test('PWA contract spans the appliance origin', async ({ request, baseURL }) => {
+test('PWA contract spans the appliance origin', async ({ page, request, baseURL }) => {
   const manifest = await (await request.get(new URL('manifest.webmanifest', baseURL).href)).json();
   expect(manifest.scope).toBe('/');
   expect(manifest.id).toBe('/grave/');
+  for(const icon of manifest.icons){
+    expect(icon.src).toMatch(/\?v=[a-f0-9]{12}$/);
+    const response=await request.get(new URL(icon.src,baseURL).href);
+    expect(response.status()).toBe(200);
+    const png=await response.body(),size=Number(icon.sizes.split('x')[0]);
+    expect(png.readUInt32BE(16)).toBe(size);
+    expect(png.readUInt32BE(20)).toBe(size);
+  }
+  await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveAttribute('href',/apple-touch-icon\.png\?v=[a-f0-9]{12}$/);
+  await expect(page.locator('link[rel="icon"][sizes="32x32"]')).toHaveAttribute('href',/icon-32\.png\?v=[a-f0-9]{12}$/);
   const worker = await request.get(new URL('sw.js', baseURL).href);
   expect(worker.headers()['service-worker-allowed']).toBe('/');
 });

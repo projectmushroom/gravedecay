@@ -81,6 +81,23 @@ class DashboardContractTests(unittest.TestCase):
         self.assertEqual(manifest["display"], "standalone")
         self.assertTrue(manifest["id"].endswith("/grave/"))
         self.assertEqual(manifest["start_url"], "./")
+        for icon in manifest["icons"]:
+            self.assertIn("?v=" + DASHBOARD.ICON_VERSION, icon["src"])
+            with self.get("/" + icon["src"]) as response:
+                png = response.read()
+                self.assertEqual(response.headers["Content-Type"], "image/png")
+            size = int(icon["sizes"].split("x")[0])
+            self.assertEqual(png[16:24], size.to_bytes(4, "big") * 2)
+            self.assertEqual(png, (ROOT / f"dashboard/static/icon-{size}.png").read_bytes())
+        for size in (16, 32, 180):
+            with self.get(f"/icon-{size}.png?v=" + DASHBOARD.ICON_VERSION) as response:
+                self.assertEqual(response.read()[16:24], size.to_bytes(4, "big") * 2)
+        with self.get("/apple-touch-icon.png") as response:
+            self.assertEqual(response.read(), (ROOT / "dashboard/static/icon-180.png").read_bytes())
+        with self.get("/favicon.ico") as response:
+            self.assertEqual(response.read()[:6], b"\x00\x00\x01\x00\x02\x00")
+        self.assertNotIn("@ICON@", DASHBOARD.PAGE)
+        self.assertNotIn("@ICON@", DASHBOARD.SW)
 
     def test_multi_user_backend_requires_gateway_capability_except_health(self):
         secured = load_dashboard({"GRAVEDECAY_BACKEND_TOKEN": "a" * 64})

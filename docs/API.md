@@ -132,3 +132,18 @@ after the installer finishes. The old page cannot gain the new completion logic
 until it loads the new HTML. If the interface is still old, run `grave doctor`
 and inspect the updater output (`journalctl -u 'gravedecay-upgrade*'` on older
 Linux installs) before retrying.
+
+## Shared web icon
+
+The dashboard, PWA manifest, Apple touch icon, notification icon, and favicons
+use the same skull artwork as the README and native clients. Committed PNGs
+at 16, 32, 180, 192, and 512 pixels live with the dashboard static files, so
+Linux, macOS, and portable installs need no image library to serve the declared
+sizes. Icon URLs include an artwork digest to invalidate browser caches.
+Doctor checks the PWA PNG dimensions. An explicit `GRAVEDECAY_ICON` retains
+the existing custom-PNG override.
+
+After changing `assets/gravedecay-skull.svg`, run
+`sh assets/generate-web-icons.sh` on macOS and commit the exports. This also
+refreshes the legacy installed PNG and the optional T3 branding assets; the
+existing `assets/apply-t3-icon.sh` remains their reapply mechanism.

@@ -60,7 +60,7 @@ MACOS_GETS = frozenset((
     "/", "/healthz", "/api/auth-check", "/api/state", "/api/graveyard", "/api/t3-activity", "/api/v1/summary", "/api/admin/releases",
     "/api/admin/update-status", "/api/admin/benchmark", "/manifest.webmanifest", "/sw.js",
     "/offline.html", "/apple-touch-icon.png", "/icon-180.png",
-    "/icon-192.png", "/icon-512.png",
+    "/icon-192.png", "/icon-512.png", "/icon-16.png", "/icon-32.png", "/favicon.ico",
 ) + (("/api/action-stream",) if MACOS_AGENTS else ()))
 MACOS_POSTS = frozenset(("/api/settings", "/api/admin/upgrade", "/api/admin/benchmark")
                         + (("/api/action", "/api/session-kill", "/api/session-capture")
@@ -373,6 +373,12 @@ ACTION_LOCK = threading.Lock()
 @functools.cache
 def icon_png(size):
     """Home-screen icon from the installed gravedecay PNG. Never returns 404."""
+    # Bundled exports work on every appliance, including portable images
+    # without Pillow. An explicit custom icon keeps its existing override.
+    bundled = static_asset_path(f"icon-{size}.png")
+    if bundled and not os.environ.get("GRAVEDECAY_ICON"):
+        with open(bundled, "rb") as source:
+            return source.read()
     try:
         from PIL import Image
         with Image.open(ICON_PATH) as src:
@@ -411,8 +417,8 @@ MANIFEST = json.dumps({
     "id": f"{BASE or '/grave'}/", "name": "gravedecay", "short_name": "gravedecay",
     "start_url": "./", "scope": "/",
     "display": "standalone", "background_color": "#070907", "theme_color": "#070907",
-    "icons": [{"src": "icon-192.png", "sizes": "192x192", "type": "image/png"},
-              {"src": "icon-512.png", "sizes": "512x512", "type": "image/png"}],
+    "icons": [{"src": "icon-192.png?v=@ICON@", "sizes": "192x192", "type": "image/png"},
+              {"src": "icon-512.png?v=@ICON@", "sizes": "512x512", "type": "image/png"}],
 })
 
 # Network-first navigation only.  The dashboard is a remote control, so stale
@@ -515,9 +521,13 @@ MISSING_SHELL = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 </body></html>"""
 
 
+ICON_VERSION = (static_asset_sha("icon-512.png") or "legacy")[:12]
+MANIFEST = MANIFEST.replace("@ICON@", ICON_VERSION)
+
+
 def load_page():
     return static_asset("index.html", MISSING_SHELL).replace(
-        "@HOST@", HOST).replace("@BASE@", BASE or "/grave")
+        "@HOST@", HOST).replace("@BASE@", BASE or "/grave").replace("@ICON@", ICON_VERSION)
 
 
 PAGE = load_page()
@@ -534,7 +544,7 @@ def load_service_worker():
     offline.html would leave the old copy in CacheStorage forever."""
     offline = static_asset("offline.html", OFFLINE_PAGE)
     stamp = hashlib.sha256(offline.encode()).hexdigest()[:12]
-    return static_asset("sw.js", SERVICE_WORKER).replace("@OFFLINE@", stamp), stamp
+    return static_asset("sw.js", SERVICE_WORKER).replace("@OFFLINE@", stamp).replace("@ICON@", ICON_VERSION), stamp
 
 
 SW, SW_ID = load_service_worker()
@@ -2987,6 +2997,15 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, icon_png(192), "image/png", "public, max-age=86400")
         elif p == "/icon-512.png":
             self._send(200, icon_png(512), "image/png", "public, max-age=86400")
+        elif p in ("/icon-16.png", "/icon-32.png"):
+            self._send(200, icon_png(16 if p == "/icon-16.png" else 32), "image/png", "public, max-age=86400")
+        elif p == "/favicon.ico":
+            path = static_asset_path("favicon.ico")
+            if path:
+                with open(path, "rb") as icon:
+                    self._send(200, icon.read(), "image/x-icon", "public, max-age=86400")
+            else:
+                self._send(404, '{"error":"favicon missing"}')
         else:
             self._send(404, '{"error":"not found"}')
 
@@ -3216,6 +3235,10 @@ if __name__ == "__main__":
                 sys.exit("headerless dashboard request unexpectedly authorized")
         with maintenance_request("/api/auth-check") as response:
             assert response.status == 200
+        for size in (180, 192, 512):
+            with maintenance_request(f"/icon-{size}.png") as response:
+                png = response.read(24)
+                assert png[:8] == b"\x89PNG\r\n\x1a\n" and png[16:24] == size.to_bytes(4, "big") * 2, "invalid PWA icon dimensions"
         if not PORTABLE:
             with maintenance_request("/api/admin/update-status") as response:
                 update = json.load(response)

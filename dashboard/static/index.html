@@ -17,8 +17,10 @@ if(!location.pathname.endsWith('/'))history.replaceState(null,'',location.pathna
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="gravedecay">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="apple-touch-icon" href="apple-touch-icon.png">
-<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png?v=@ICON@">
+<link rel="icon" type="image/png" sizes="32x32" href="icon-32.png?v=@ICON@">
+<link rel="icon" type="image/png" sizes="16x16" href="icon-16.png?v=@ICON@">
+<link rel="shortcut icon" href="favicon.ico?v=@ICON@">
 <title>gravedecay · @HOST@</title>
 <style>
 /* grave-term — native terminal skin. Phosphor green on near-black, square
@@ -361,7 +363,7 @@ body.portable #sec-notify{display:none!important}
 </style></head><body>
 <div id="topcover"></div>
 <div class="topbar">
-  <img id="toplogo" src="icon-180.png" alt="">
+  <img id="toplogo" src="icon-180.png?v=@ICON@" alt="">
   <h1>gravedecay</h1>
   <span class="meta" id="meta">connecting…</span>
   <span class="badge" id="mode" role="button" title="Tap to switch mode" style="display:none;cursor:pointer">…</span>
