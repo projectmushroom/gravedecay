@@ -105,8 +105,14 @@ public struct GraveSummary: Codable, Equatable, Sendable {
     public struct Node: Codable, Equatable, Sendable { public let host, platform, mode: String; public let uptime_s: Double? }
     public struct Resources: Codable, Equatable, Sendable { public let cpu_pct, memory_pct, disk_pct, cpu_temp_c, gpu_temp_c: Double? }
     public struct Activity: Codable, Equatable, Sendable { public let sessions_live, sessions_frozen: Int }
-    public struct Health: Codable, Equatable, Sendable { public let services_failed, containers_problem: Int }
-    public struct Links: Codable, Equatable, Sendable { public let dashboard, t3, terminal, network: String? }
+    public struct Health: Codable, Equatable, Sendable {
+        public let services_failed, containers_problem: Int
+        public var t3: String? = nil
+    }
+    public struct Links: Codable, Equatable, Sendable {
+        public let dashboard, t3, terminal, network: String?
+        public var t3_setup: String? = nil
+    }
     public let product: String
     public let api_version: Int
     public let observed_at: Date?
@@ -147,11 +153,29 @@ public struct GraveCapabilities: Equatable, Sendable {
 }
 
 public enum GravePresentation {
+    public static func accent(_ dns: String) -> UInt32 {
+        let colors: [UInt32] = [0xe8b44c, 0x78b7ef, 0xc399ed, 0x64c9b0, 0xf194b0, 0xb3c875, 0xe89b6b]
+        let name = dns.lowercased().hasSuffix(".") ? String(dns.lowercased().dropLast()) : dns.lowercased()
+        return colors[name.utf16.reduce(0) { ($0 * 31 + Int($1)) % colors.count }]
+    }
+
+    public static func machineIcon(_ platform: String?) -> String {
+        switch platform { case "macos": return "apple.logo"; case "container": return "shippingbox"; default: return "desktopcomputer" }
+    }
+
+    public static func connection(summary: GraveSummary?, reachable: Bool, checking: Bool = false) -> String {
+        if checking { return "Checking connection…" }
+        guard reachable, let summary else { return "Unreachable — check Tailscale or dashboard" }
+        let status = ["running": "T3 service running", "stopped": "T3 stopped", "starting": "T3 starting",
+                      "failed": "T3 service failed", "not-configured": "T3 not configured"][summary.health.t3 ?? ""] ?? "T3 status unknown"
+        return "Dashboard reachable · " + status
+    }
+
     public enum Condition: Equatable { case unreachable, warning, active, frozen, healthy }
 
     public static func condition(summary: GraveSummary?, reachable: Bool) -> Condition {
         guard reachable, let summary else { return .unreachable }
-        if summary.problems > 0 { return .warning }
+        if summary.problems > 0 || summary.health.t3 == "failed" { return .warning }
         if summary.activity.sessions_live > 0 { return .active }
         if summary.activity.sessions_frozen > 0 { return .frozen }
         return .healthy
@@ -190,6 +214,14 @@ public enum GravePresentation {
     public static func link(host: String, path: String?) -> URL? {
         guard let host = GraveDiscovery.dnsName(host), let path = safePath(path) else { return nil }
         var components = URLComponents(); components.scheme = "https"; components.host = host; components.percentEncodedPath = path
+        return components.url
+    }
+
+    public static func t3SetupLink(host: String, path: String?) -> URL? {
+        guard let path, ["/", "/grave", "/grave/"].contains(path),
+              let url = link(host: host, path: path),
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        components.fragment = "t3-setup"
         return components.url
     }
 }

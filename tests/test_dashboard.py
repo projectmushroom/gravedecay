@@ -175,7 +175,7 @@ class DashboardContractTests(unittest.TestCase):
         self.assertEqual(body["api_version"], 1)
         self.assertEqual(body["links"]["dashboard"], "/grave/")
         self.assertEqual(body["activity"], {"sessions_live": 1, "sessions_frozen": 0})
-        self.assertEqual(body["health"], {"services_failed": 1, "containers_problem": 2})
+        self.assertEqual(body["health"], {"services_failed": 1, "containers_problem": 2, "t3": "running"})
         self.assertNotIn("secret", json.dumps(body))
         self.assertEqual(len(calls), 1)
         self.assertIs(again, DASHBOARD.summary())
@@ -196,14 +196,14 @@ class DashboardContractTests(unittest.TestCase):
         finally:
             for name, fn in saved.items(): setattr(linux, name, fn)
         self.assertEqual(body["node"]["mode"], "gaming")
-        self.assertEqual(body["health"], {"services_failed": 0, "containers_problem": 0})
+        self.assertEqual(body["health"], {"services_failed": 0, "containers_problem": 0, "t3": "stopped"})
         mac = load_dashboard({"GRAVEDECAY_PLATFORM": "macos"})
         mac._ttl_cache.pop("summary", None)
         mac.collect_system = lambda: {"uptime_s": 1, "cpu": {}, "mem": {}, "disks": [], "temps": {}}
         mac.collect_services = lambda: [{"active": "inactive"}]
         body = mac.summary()
         self.assertEqual(body["links"], {"dashboard": "/grave/", "network": "/net/"})
-        self.assertEqual(body["health"], {"services_failed": 0, "containers_problem": 0})
+        self.assertEqual(body["health"], {"services_failed": 0, "containers_problem": 0, "t3": "not-configured"})
 
     def test_pwa_shell_is_a_file_raise_installs_beside_the_python(self):
         # The dashboard page is the existing dashboard-static/ install, not a

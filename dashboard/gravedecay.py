@@ -1127,8 +1127,28 @@ def _summary_links():
     if not PORTABLE and (not MACOS or any(a.get("url") == "/net/" for a in APPS)):
         links["network"] = "/net/"
     if not MACOS or MACOS_AGENTS:
-        links.update({"t3": "/", "terminal": "/term/"})
+        links.update({"t3": "/", "terminal": "/term/", "t3_setup": links["dashboard"]})
     return links
+
+
+T3_SERVICE_STATES = ("running", "stopped", "starting", "failed", "unknown", "not-configured")
+
+
+def t3_service_status(active=None):
+    """Local supervisor state, not HTTP readiness or this viewer's T3 pairing."""
+    if MACOS and not MACOS_AGENTS:
+        return "not-configured"
+    if PORTABLE or BACKEND_TOKEN or REQUIRE_BACKEND_TOKEN:
+        return "unknown"  # These instances are not the single-owner host service.
+    if MACOS:
+        rc, out, _ = sh(["launchctl", "print", f"gui/{os.getuid()}/io.gravedecay.t3"], timeout=2)
+        if rc != 0:
+            return "unknown"
+        match = re.search(r"^\s*state = (.+)$", out, re.MULTILINE)
+        return {"running": "running", "not running": "stopped", "waiting": "starting"}.get(
+            match.group(1).strip() if match else "", "unknown")
+    return {"active": "running", "inactive": "stopped", "activating": "starting",
+            "failed": "failed"}.get(active, "unknown")
 
 
 def _summary():
@@ -1147,7 +1167,7 @@ def _summary():
             "resources": {"cpu_pct": None, "memory_pct": None, "disk_pct": None,
                           "cpu_temp_c": None, "gpu_temp_c": None},
             "activity": {"sessions_live": len(tmux), "sessions_frozen": 0},
-            "health": {"services_failed": 0, "containers_problem": 0},
+            "health": {"services_failed": 0, "containers_problem": 0, "t3": "unknown"},
             "links": _summary_links(),
         }
 
@@ -1156,12 +1176,14 @@ def _summary():
     frozen = False
     tmux = []
     services = collect_services()
+    t3_active = None
     containers_problem = 0
     if MACOS:
         if MACOS_AGENTS:
             tmux = collect_tmux()
     else:
-        mode = "developer" if unit_state("t3code").get("active") == "active" else "gaming"
+        t3_active = unit_state("t3code").get("active")
+        mode = "developer" if t3_active == "active" else "gaming"
         tmux = collect_tmux()
         try:
             with open("/sys/fs/cgroup/grave-torpor/cgroup.freeze") as f:
@@ -1189,7 +1211,7 @@ def _summary():
         "activity": {"sessions_live": 0 if frozen else len(tmux),
                      "sessions_frozen": len(tmux) if frozen else 0},
         "health": {"services_failed": sum(1 for row in services if row.get("active") == "failed"),
-                   "containers_problem": containers_problem},
+                   "containers_problem": containers_problem, "t3": t3_service_status(t3_active)},
         "links": _summary_links(),
     }
 
@@ -1250,6 +1272,12 @@ def graveyard_summary(raw):
             for key in keys:
                 number = value[section].get(key)
                 result[section][key] = number if type(number) in (int, float) and 0 <= number <= 1e12 else None
+        t3 = value["health"].get("t3")
+        result["health"]["t3"] = t3 if t3 in T3_SERVICE_STATES else "unknown"
+        # Setup is a dashboard hand-off, never a token or remote action URL.
+        setup = value["links"].get("t3_setup")
+        if setup in ("/", "/grave", "/grave/"):
+            result["links"]["t3_setup"] = setup
         return result
     except (ValueError, TypeError):
         return None
@@ -3167,6 +3195,11 @@ if __name__ == "__main__":
                 sys.exit("headerless dashboard request unexpectedly authorized")
         with maintenance_request("/api/auth-check") as response:
             assert response.status == 200
+        with maintenance_request("/api/v1/summary") as response:
+            summary_result = json.load(response)
+            assert summary_result["health"]["t3"] in T3_SERVICE_STATES, "T3 service status is missing or invalid"
+            links = summary_result["links"]
+            assert links.get("t3_setup") == (links["dashboard"] if "t3" in links else None), "T3 setup capability does not match this plot"
         with maintenance_request("/api/graveyard") as response:
             result = json.load(response)
             assert result["state"] in ("idle", "scanning", "ready", "unavailable", "tailscale-unavailable", "unsupported")

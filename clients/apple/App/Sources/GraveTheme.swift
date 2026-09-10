@@ -1,7 +1,12 @@
 #if os(macOS)
 import SwiftUI
+import GravedecayKit
 
 enum GraveTheme {
+    static func plotAccent(_ dns: String) -> Color {
+        let rgb = GravePresentation.accent(dns)
+        return Color(red: Double((rgb >> 16) & 255) / 255, green: Double((rgb >> 8) & 255) / 255, blue: Double(rgb & 255) / 255)
+    }
     static let page = Color(red: 7/255, green: 9/255, blue: 7/255)
     static let surface = Color(red: 10/255, green: 13/255, blue: 10/255)
     static let inset = Color(red: 5/255, green: 7/255, blue: 5/255)
@@ -25,12 +30,12 @@ struct GraveMark: View {
 }
 
 struct GravePanel<Content: View>: View {
-    let title: String; @ViewBuilder let content: Content
-    init(_ title: String, @ViewBuilder content: () -> Content) { self.title = title; self.content = content() }
+    let title: String; let accent: Color; @ViewBuilder let content: Content
+    init(_ title: String, accent: Color = GraveTheme.amber, @ViewBuilder content: () -> Content) { self.title = title; self.accent = accent; self.content = content() }
     var body: some View {
         content.padding(14).frame(maxWidth: .infinity, alignment: .leading)
             .background(GraveTheme.surface).overlay(Rectangle().stroke(GraveTheme.ring, lineWidth: 1))
-            .overlay(alignment: .topLeading) { Text(" \(title.uppercased()) ").font(.system(size: 10, weight: .bold, design: .monospaced)).tracking(1.2).foregroundStyle(GraveTheme.amber).background(GraveTheme.page).offset(x: 9, y: -7) }
+            .overlay(alignment: .topLeading) { Text(" \(title.uppercased()) ").font(.system(size: 10, weight: .bold, design: .monospaced)).tracking(1.2).foregroundStyle(accent).background(GraveTheme.page).offset(x: 9, y: -7) }
     }
 }
 

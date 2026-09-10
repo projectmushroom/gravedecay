@@ -26,3 +26,19 @@ assert.equal(model.restore('invalid').length,0);
 const cleaned = model.summary(JSON.stringify({...summary,secret:'hidden',links:{terminal:'//evil.example',dashboard:'/grave/'}}));
 assert.equal(cleaned.secret,undefined);
 assert.equal(cleaned.links.terminal,undefined);
+assert.equal(model.setupPath('/grave/'), '/grave/#t3-setup');
+for (const value of [undefined, '//evil.example', '/term/', '/grave/?token=secret', '/grave/#token=secret']) {
+    assert.equal(model.setupPath(value), '');
+    assert.equal(model.summary(JSON.stringify({...summary, links:{t3_setup:value}})).links.t3_setup, undefined);
+}
+const withSetup = {...mac, summary:{...summary, links:{t3_setup:'/grave/'}}};
+assert.equal(model.restore(JSON.stringify({nodes:[withSetup]}))[0].summary.links.t3_setup, '/grave/');
+assert.equal(model.accent('MAC.TAIL.TS.NET.'), '#c399ed');
+assert.equal(model.accent('vm.tail.ts.net'), '#f194b0');
+assert.equal(model.icon('container'), '📦');
+const stopped = {...mac, summary:{...summary, health:{t3:'stopped'}}};
+assert.equal(model.connection(stopped, false), 'Dashboard reachable · T3 stopped');
+assert.equal(model.connection(stopped, true), 'Checking connection…');
+assert.equal(model.connection({...stopped, reachable:false}, false), 'Unreachable — check Tailscale or dashboard');
+assert.equal(model.connection(mac, false), 'Dashboard reachable · T3 status unknown');
+assert.equal(model.summary(JSON.stringify({...summary, health:{t3:'secret'}})).health.t3, 'unknown');

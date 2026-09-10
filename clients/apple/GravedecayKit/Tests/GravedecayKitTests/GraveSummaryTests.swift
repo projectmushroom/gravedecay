@@ -2,6 +2,20 @@ import XCTest
 @testable import GravedecayKit
 
 final class GraveSummaryTests: XCTestCase {
+    func testPlotIdentityAndConnectionAreIndependentOfT3State() throws {
+        XCTAssertEqual(GravePresentation.accent("MAC.TAIL.TS.NET."), 0xc399ed)
+        XCTAssertEqual(GravePresentation.accent("vm.tail.ts.net"), 0xf194b0)
+        XCTAssertEqual(GravePresentation.machineIcon("container"), "shippingbox")
+        let data = MacPublisherSummary.data(host: "Mac", uptime: nil, cpu: nil, memory: nil, disk: nil)
+        let old = try XCTUnwrap(GraveSummary.decode(data))
+        XCTAssertEqual(GravePresentation.connection(summary: old, reachable: true), "Dashboard reachable · T3 status unknown")
+        var value = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        value["health"] = ["services_failed": 0, "containers_problem": 0, "t3": "stopped"]
+        let stopped = try XCTUnwrap(GraveSummary.decode(JSONSerialization.data(withJSONObject: value)))
+        XCTAssertEqual(GravePresentation.connection(summary: stopped, reachable: true), "Dashboard reachable · T3 stopped")
+        XCTAssertEqual(GravePresentation.connection(summary: stopped, reachable: true, checking: true), "Checking connection…")
+        XCTAssertEqual(GravePresentation.connection(summary: stopped, reachable: false), "Unreachable — check Tailscale or dashboard")
+    }
     func testSavedPlotsSurviveRestartAndFailedDiscoveryWithoutLosingIdentity() throws {
         let summary = try XCTUnwrap(GraveSummary.decode(MacPublisherSummary.data(host: "Mac", uptime: nil, cpu: nil, memory: nil, disk: nil)))
         let mac = GravePlot(candidate: .init(id: "mac", dns: "mac.tail.ts.net", name: "Mac"), summary: summary)
@@ -67,6 +81,20 @@ final class GraveSummaryTests: XCTestCase {
         XCTAssertNil(GravePresentation.link(host: "gråve.tail.ts.net", path: "/grave/"))
         XCTAssertNil(GravePresentation.link(host: "grave.tail.ts.net", path: "//elsewhere"))
         XCTAssertNil(GravePresentation.link(host: "grave.tail.ts.net", path: "/bad\\path"))
+    }
+
+    func testSetupCapabilityIsOptionalAndOnlyOpensDashboardControls() throws {
+        let data = MacPublisherSummary.data(host: "Mac", uptime: nil, cpu: nil, memory: nil, disk: nil)
+        var value = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertNil(GraveSummary.decode(data)?.links.t3_setup)
+        value["links"] = ["t3_setup": "/grave/"]
+        let summary = try XCTUnwrap(GraveSummary.decode(JSONSerialization.data(withJSONObject: value)))
+        XCTAssertEqual(summary.links.t3_setup, "/grave/")
+        XCTAssertEqual(GravePresentation.t3SetupLink(host: "vm.tail.ts.net", path: summary.links.t3_setup)?.absoluteString,
+                       "https://vm.tail.ts.net/grave/#t3-setup")
+        for path in ["//evil.example", "/term/", "/grave/?token=secret", "/grave/#token=secret"] {
+            XCTAssertNil(GravePresentation.t3SetupLink(host: "vm.tail.ts.net", path: path))
+        }
     }
 
     func testCapabilitiesRequirePublishedSafeTerminal() throws {
