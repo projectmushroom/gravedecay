@@ -59,6 +59,7 @@ jobs:
           MOUNT="$(mktemp -d /tmp/gravedecay-mount.XXXXXX)"
           hdiutil attach build/Gravedecay-macOS.dmg -mountpoint "$MOUNT" -nobrowse -readonly
           test -d "$MOUNT/Gravedecay.app"
+          codesign --verify --deep --strict "$MOUNT/Gravedecay.app"
           hdiutil detach "$MOUNT"
           rmdir "$MOUNT"
       - name: Confirm native macOS binary has no WebKit dependency

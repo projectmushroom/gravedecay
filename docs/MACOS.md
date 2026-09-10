@@ -124,7 +124,12 @@ download page or app: sign-in and Tailscale changes remain yours.
 It does not modify Tailscale Serve: the UI shows the exact manual command to
 publish `/grave` after the listener is healthy. A successfully started native
 host is restored once when the app launches; enable Launch at Login to restore
-that opted-in host after sign-in. If the legacy companion later owns the port,
+that opted-in host after sign-in. The login toggle is on only when macOS reports
+an enabled registration or one awaiting approval; a missing registration is off.
+To verify native startup, enable Launch at Login, quit and reopen the app, then
+check that the toggle remains on and `curl -f http://127.0.0.1:4712/healthz`
+succeeds. Check the login item in System Settings → General → Login Items
+before testing a full sign-out/sign-in. If the legacy companion later owns the port,
 the app retains the request but fails closed until the conflict is resolved.
 
 The System view uses only native, unprivileged macOS data: CPU activity from
