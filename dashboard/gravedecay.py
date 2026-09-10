@@ -2898,10 +2898,29 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send(200, out)
         elif p == "/api/admin/update-status":
-            if not MACOS: self._send(404, '{"error":"unavailable outside macOS companion"}'); return
+            if PORTABLE: self._send(404, '{"error":"unavailable in portable workspace"}'); return
             if self._forbidden(): return
-            rc, out, err = sh([MACOS_GRAVE, "update-status"], timeout=10)
-            self._send(200 if not rc else 502, out if not rc else json.dumps({"ok": False, "output": ANSI.sub("", out + err)}))
+            rc, out, err = sh([MACOS_GRAVE if MACOS else GRAVE, "update-status"], timeout=10)
+            if rc:
+                self._send(502, json.dumps({"ok": False, "output": ANSI.sub("", out + err)})); return
+            try:
+                result = json.loads(out)
+                if not isinstance(result, dict) or result.get("state") not in ("idle", "queued", "running", "ok", "failed"):
+                    raise ValueError("invalid update status")
+                with open(__file__, "rb") as source:
+                    result["dashboard_current"] = (hashlib.sha256(source.read()).hexdigest() == BUILD_ID
+                                                   and static_asset_sha("index.html") == SHELL_ID)
+                # Owner-only, fixed path, bounded output. Installer errors must
+                # remain visible even when the dashboard restarted mid-update.
+                path = os.path.join(GRAVE_ROOT, "logs", "updater.log" if MACOS else "upgrade.log")
+                result["log"] = ""
+                if os.path.isfile(path):
+                    with open(path, "rb") as log_file:
+                        log_file.seek(max(0, os.fstat(log_file.fileno()).st_size - 8192))
+                        result["log"] = ANSI.sub("", log_file.read(8192).decode("utf-8", errors="replace"))
+            except (OSError, ValueError, TypeError):
+                self._send(502, '{"error":"update status unavailable"}'); return
+            self._send(200, json.dumps(result))
         elif p == "/api/agent-log":
             # Session transcript viewer (#110). Owner-gated like the file
             # manager — transcripts show everything an agent saw or did. Both
@@ -3145,8 +3164,10 @@ class Handler(BaseHTTPRequestHandler):
                 rc, out, err = sh(cmd, timeout=15)
             else:
                 tag = str(data.get("tag", ""))
-                if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag): self._send(400, json.dumps({"ok":False,"output":"invalid release tag"})); return
-                unit = f"gravedecay-upgrade@{tag}.service"; rc, out, err = sh(["sudo", "-n", "systemctl", "--no-block", "start", unit])
+                if data == {"channel": "configured"}: unit = "gravedecay-upgrade.service"
+                elif set(data) == {"tag"} and re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag): unit = f"gravedecay-upgrade@{tag}.service"
+                else: self._send(400, json.dumps({"ok":False,"output":"invalid release tag"})); return
+                rc, out, err = sh(["sudo", "-n", "systemctl", "--no-block", "start", unit])
             self._send(200 if rc == 0 else 500, json.dumps({
                 "ok": rc == 0,
                 "output": "upgrade queued; the dashboard will reconnect" if rc == 0
@@ -3195,6 +3216,11 @@ if __name__ == "__main__":
                 sys.exit("headerless dashboard request unexpectedly authorized")
         with maintenance_request("/api/auth-check") as response:
             assert response.status == 200
+        if not PORTABLE:
+            with maintenance_request("/api/admin/update-status") as response:
+                update = json.load(response)
+                assert update["state"] in ("idle", "queued", "running", "ok", "failed"), "invalid updater status"
+                assert update["dashboard_current"], "dashboard has not loaded the installed update"
         with maintenance_request("/api/v1/summary") as response:
             summary_result = json.load(response)
             assert summary_result["health"]["t3"] in T3_SERVICE_STATES, "T3 service status is missing or invalid"

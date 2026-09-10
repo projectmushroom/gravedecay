@@ -66,7 +66,7 @@ class PortableDockerContractTests(unittest.TestCase):
         self.assertIn("body.portable #notify-head", shell)
         self.assertIn("t3connect-only", shell)
         self.assertIn("const appUrl=u=>portableCompanion?u:", shell)
-        self.assertIn("!macosCompanion&&!portableCompanion", shell)
+        self.assertIn("if(!updateBooted&&!portableCompanion)", shell)
         self.assertNotIn("paintTabs", shell)
         self.assertIn("?` <a class=\"resume\"", shell)
         self.assertIn("`:''}</td></tr>`", shell)

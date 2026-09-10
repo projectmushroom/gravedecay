@@ -87,7 +87,7 @@ test('work and system dashboards fit the installed-app viewport', async ({ page 
   await expectPanelsContainContent(page, 'work panels clip their rendered records');
   await page.locator('[data-tab="system"]').click();
   await expect(page.locator('[data-panel="stats"]')).toBeVisible();
-  await expect(page.locator('[data-act="update-grave"]')).toBeVisible();
+  await expect(page.locator('#update-open')).toBeVisible();
   await expectNoHorizontalOverflow(page, 'system tab');
   await expectPanelsContainContent(page, 'system panels clip their rendered records');
 });
@@ -220,53 +220,105 @@ test('a polling refresh preserves the document scroll position', async ({ page }
   expect(after).toBe(before);
 });
 
-test('an administrator can select an exact stable release', async ({ page }) => {
-  // WebKit's registered service worker owns requests before Playwright's
-  // route mock can see them. Stub fetch in-page for this UI-only interaction;
-  // Python contract tests exercise the real API and exact systemd command.
-  await page.evaluate(() => {
-    const realFetch = window.fetch.bind(window);
-    window.requestedReleaseTag = null;
-    window.fetch = (input, init = {}) => {
-      const url = typeof input === 'string' ? input : input.url;
-      if (url.endsWith('api/admin/releases')) return Promise.resolve(new Response(JSON.stringify({
-        current: 'v0.4.0', checkout: 'v0.4.0', releases: ['v0.5.0', 'v0.4.0'],
-      }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
-      if (url.endsWith('api/admin/upgrade')) {
-        window.requestedReleaseTag = JSON.parse(init.body).tag;
-        return Promise.resolve(new Response(JSON.stringify({ ok: true }), {
-          status: 200, headers: { 'Content-Type': 'application/json' },
-        }));
-      }
-      return realFetch(input, init);
-    };
+test.describe('update dialog API fixtures',()=>{
+test.use({serviceWorkers:'block'});
+test.afterEach(async({page})=>{await page.unrouteAll({behavior:'wait'});});
+async function mockUpdater(page, {mac=false}={}) {
+  const fixture={state:'ok',attempt:'previous',dashboard_current:true,log:'previous update',requests:[]};
+  await page.route('**/api/admin/releases', route=>route.fulfill({json:{current:'v0.4.0',checkout:'v0.4.0',channel:mac?'edge':'release',releases:['v0.5.0','v0.4.0']}}));
+  await page.route('**/api/admin/update-status', route=>route.fulfill({json:{state:fixture.state,attempt:fixture.attempt,dashboard_current:fixture.dashboard_current,log:fixture.log,message:fixture.message,target:fixture.target}}));
+  await page.route('**/api/admin/upgrade', route=>{
+    const body=route.request().postDataJSON();fixture.requests.push(body);
+    fixture.target=body.tag||(body.channel==='configured'?'release':body.channel);
+    return route.fulfill({json:{ok:true}});
   });
+  const s=await page.evaluate(async()=>await(await fetch('api/state')).json());s.mode='developer';if(mac)s.platform='macos';
+  await page.route('**/api/state',route=>route.fulfill({json:s}));await page.evaluate(s=>render(s),s);
   await page.locator('[data-tab="system"]').click();
-  await expect(page.locator('#grave-release')).toHaveValue('v0.4.0');
+  await page.locator('#update-open').click();
+  await expect(page.getByRole('dialog',{name:/Updates & restart/})).toBeVisible();
+  return fixture;
+}
+
+test('one update dialog queues exact releases and never mistakes an old success for completion',async({page})=>{
+  const x=await mockUpdater(page);
+  await expect(page.locator('#grave-release-current')).toContainText('v0.4.0');
+  await expect(page.locator('#grave-release')).toHaveValue('configured');
+  await expectNoHorizontalOverflow(page,'update dialog');
   await page.locator('#grave-release').selectOption('v0.5.0');
-  page.once('dialog', dialog => dialog.accept());
   await page.locator('#install-grave-release').click();
-  await expect(page.locator('#grave-release-state')).toContainText('v0.5.0 queued');
-  expect(await page.evaluate(() => window.requestedReleaseTag)).toBe('v0.5.0');
+  await expect(page.locator('#grave-release-state')).toContainText('queued');
+  expect(x.requests).toEqual([{tag:'v0.5.0'}]);
+  await page.evaluate(()=>updateStatus());
+  await expect(page.locator('#install-grave-release')).toBeDisabled();
+  await expect(page.locator('[data-act="reboot"]')).toBeDisabled();
+  x.state='running';x.attempt='new';x.log='Re-running the ritual';
+  await page.evaluate(()=>updateStatus());
+  await expect(page.locator('#grave-release-state')).toContainText('Updating');
+  await page.locator('#update-dialog summary').click();
+  await expect(page.locator('#update-log')).toContainText('Re-running the ritual');
+  x.state='failed';x.message='installer exited 7';
+  await page.evaluate(()=>updateStatus());
+  await expect(page.locator('#grave-release-state')).toContainText('installer exited 7');
+  await expect(page.locator('#install-grave-release')).toBeEnabled();
 });
 
-test('macOS updater uses its configured edge channel and exposes progress', async ({ page }) => {
-  await page.evaluate(async () => {
-    const s=await (await fetch('api/state')).json(); s.platform='macos'; s.mode='developer'; s.apps=[{name:'📡 Network',url:'/net/'}];
-    window.macRequests=[]; window.macUpdateFixtureState='queued'; const real=fetch.bind(window);
-    window.fetch=(u,i={})=>{u=typeof u==='string'?u:u.url;if(u.endsWith('api/admin/releases'))return Promise.resolve(new Response(JSON.stringify({current:'',checkout:'edge abc',channel:'edge',releases:['v0.10.0']})));if(u.endsWith('api/admin/update-status'))return Promise.resolve(new Response(JSON.stringify({state:window.macUpdateFixtureState})));if(u.endsWith('api/admin/upgrade')){window.macRequests.push(JSON.parse(i.body));window.macUpdateFixtureState='running';return Promise.resolve(new Response(JSON.stringify({ok:true})));}return real(u,i)}; render(s);
-  });
-  await page.locator('[data-tab="system"]').click();
-  await expect(page.locator('[data-panel="actions"]')).toBeVisible();
+test('successful updates reload the HTML once and recover the completion dialog',async({page})=>{
+  const x=await mockUpdater(page);
+  await page.locator('#install-grave-release').click();
+  await expect.poll(()=>x.requests).toEqual([{channel:'configured'}]);
+  x.attempt='new';x.state='ok';x.dashboard_current=false;
+  await page.evaluate(()=>updateStatus());
+  await expect(page.locator('#grave-release-state')).toContainText('older files');
+  x.dashboard_current=true;
+  await Promise.all([page.waitForEvent('framenavigated'),page.evaluate(()=>updateStatus()).catch(()=>{})]);
+  await expect(page.locator('#update-dialog')).toBeVisible();
+  await expect(page.locator('#grave-release-state')).toContainText('updated dashboard is loaded');
+  expect(await page.evaluate(()=>sessionStorage.getItem('grave-update-pending'))).toBeNull();
+  expect(x.requests).toHaveLength(1);
+});
+
+test('a competing release is never reported as the requested update',async({page})=>{
+  const x=await mockUpdater(page);
+  await page.locator('#grave-release').selectOption('v0.5.0');
+  await page.locator('#install-grave-release').click();
+  await expect.poll(()=>x.requests.length).toBe(1);
+  x.attempt='other';x.target='v0.4.0';x.state='ok';
+  await Promise.all([page.waitForEvent('framenavigated'),page.evaluate(()=>updateStatus()).catch(()=>{})]);
+  await expect(page.locator('#grave-release-state')).toContainText('Your selection (v0.5.0) was not confirmed');
+});
+
+test('an in-flight update survives reload and reports failure without resubmitting',async({page})=>{
+  const x=await mockUpdater(page);
+  await page.locator('#install-grave-release').click();
+  await expect.poll(()=>x.requests.length).toBe(1);
+  x.attempt='new';x.state='running';
+  await page.reload();
+  await page.evaluate(async()=>render(await(await fetch('api/state')).json()));
+  await expect(page.locator('#update-dialog')).toBeVisible();
+  await expect(page.locator('#grave-release-state')).toContainText('Updating');
+  x.state='failed';x.message='tracked local changes';
+  await page.evaluate(()=>updateStatus());
+  await expect(page.locator('#grave-release-state')).toContainText('tracked local changes');
+  expect(x.requests).toHaveLength(1);
+  await page.locator('#update-close').click();
+  await expect(page.locator('#update-open')).toBeFocused();
+});
+
+test('macOS uses the same updater dialog with its configured channel and no host reboot',async({page})=>{
+  const x=await mockUpdater(page,{mac:true});
   await expect(page.locator('[data-act="reboot"]')).toBeHidden();
-  await expect(page.locator('[data-panel="tmux"]')).toBeHidden();
-  await page.locator('#update-macos-channel').click();
-  expect(await page.evaluate(()=>window.macRequests[0])).toEqual({channel:'edge'});
-  await page.locator('#grave-release').selectOption('v0.10.0'); page.once('dialog',d=>d.accept()); await page.locator('#install-grave-release').click();
-  expect(await page.evaluate(()=>window.macRequests[1])).toEqual({tag:'v0.10.0'});
-  await expect(page.locator('#grave-release-state')).toContainText(/queued|running/);
-  await page.evaluate(()=>{window.macUpdateFixtureState='ok';return macUpdateStatus(false)}); await expect(page.locator('#grave-release-state')).toContainText('ok');
-  await page.evaluate(()=>{window.macUpdateFixtureState='failed';return macUpdateStatus(false)}); await expect(page.locator('#grave-release-state')).toContainText('failed');
+  await expect(page.locator('[data-act="update-t3"]')).toBeHidden();
+  await page.locator('#install-grave-release').click();
+  await expect.poll(()=>x.requests).toEqual([{channel:'edge'}]);
+  x.attempt='new';x.state='failed';x.message='prior payload restored';
+  await page.evaluate(()=>updateStatus());
+  await expect(page.locator('#grave-release-state')).toContainText('prior payload restored');
+  await page.locator('#grave-release').selectOption('v0.5.0');
+  await page.locator('#install-grave-release').click();
+  await expect.poll(()=>x.requests[1]).toEqual({tag:'v0.5.0'});
+});
+
 });
 
 test('PWA contract spans the appliance origin', async ({ request, baseURL }) => {

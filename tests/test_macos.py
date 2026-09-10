@@ -488,7 +488,7 @@ class MacosContractTests(unittest.TestCase):
         self.assertIn("MACOS_GRAVE", dash)
         self.assertIn('"/api/admin/update-status"', dash)
         self.assertIn("invalid release request", dash)
-        self.assertIn("update-macos-channel", (ROOT / "dashboard/static/index.html").read_text())
+        self.assertIn("update-dialog", (ROOT / "dashboard/static/index.html").read_text())
         self.assertIn("io.gravedecay.updater", (ROOT / "macos/uninstall.sh").read_text())
 
     def test_macos_update_helper_queues_once_and_updater_preserves_public_modes(self):

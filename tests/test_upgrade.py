@@ -91,6 +91,50 @@ class UpgradeTests(unittest.TestCase):
         ).strip()
         self.assertEqual(head, "v0.5.0")
 
+    def test_update_status_records_success_failure_and_interruption(self):
+        self.assertEqual(json.loads(self.grave("update-status").stdout)["state"], "idle")
+        self.grave("upgrade", "--tag", "v0.5.0")
+        first = json.loads(self.grave("update-status").stdout)
+        self.assertEqual(first["state"], "ok")
+        self.assertEqual(self.installer_marker.read_text(), "raised\n")
+        (self.checkout / "raise.sh").write_text("local change")
+        self.grave("upgrade", "--tag", "v0.5.0", check=False)
+        failed = json.loads(self.grave("update-status").stdout)
+        self.assertEqual(failed["state"], "failed")
+        self.assertNotEqual(first["attempt"], failed["attempt"])
+        self.assertIn("tracked local changes", (self.grave_root / "logs/upgrade.log").read_text())
+        failed["state"] = "running"
+        (self.grave_root / "config/update-status.json").write_text(json.dumps(failed))
+        self.assertIn("interrupted", json.loads(self.grave("update-status").stdout)["message"])
+
+    def test_failed_installer_is_not_reported_as_successful_checkout(self):
+        (self.source / "raise.sh").write_text('#!/bin/sh\necho "installer failed here"\nexit 7\n')
+        subprocess.run(["git", "-C", str(self.source), "commit", "-am", "failing installer"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(self.source), "tag", "v0.6.0"], check=True)
+        subprocess.run(["git", "-C", str(self.source), "push", "-q", "--tags", "origin", "master"], check=True)
+        result = self.grave("upgrade", "--tag", "v0.6.0", check=False)
+        self.assertEqual(result.returncode, 7)
+        self.assertEqual(json.loads(self.grave("releases", "--json").stdout)["current"], "v0.6.0")
+        status = json.loads(self.grave("update-status").stdout)
+        self.assertEqual(status["state"], "failed")
+        self.assertIn("exit 7", status["message"])
+        self.assertIn("installer failed here", (self.grave_root / "logs/upgrade.log").read_text())
+
+    def test_concurrent_update_does_not_overwrite_active_attempt(self):
+        import fcntl
+        config = self.grave_root / "config"
+        config.mkdir()
+        status = config / "update-status.json"
+        status.write_text('{"state":"running","attempt":"original"}')
+        with (config / "upgrade.lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            rejected = self.grave("upgrade", "--tag", "v0.5.0", check=False)
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("already running", rejected.stdout)
+            self.assertEqual(json.loads(self.grave("update-status").stdout)["state"], "running")
+        self.assertEqual(json.loads(status.read_text())["attempt"], "original")
+        self.assertFalse(self.installer_marker.exists())
+
     def test_upgrade_preserves_nonconflicting_untracked_files(self):
         notes = self.checkout / "field-notes.txt"
         notes.write_text("keep me\n")
@@ -170,7 +214,7 @@ class UpgradeTests(unittest.TestCase):
         (self.checkout / ".git/HEAD").unlink()
         result = self.grave("upgrade", "--tag", "v0.5.0", check=False)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("fatal:", result.stderr)
+        self.assertIn("fatal:", result.stdout + result.stderr)
         self.assertNotIn("Fetching updates", result.stdout)
         self.assertFalse(self.installer_marker.exists())
 
