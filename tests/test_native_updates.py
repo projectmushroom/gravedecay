@@ -45,6 +45,19 @@ class NativeUpdateMailboxTests(unittest.TestCase):
         self.assertEqual(updates.request({'tag': 'v0.29.0'})[0], 503)
         self.assertFalse(updates.status()['available'])
 
+    def test_request_is_hidden_until_its_json_is_complete(self):
+        def write_in_parts(payload, stream):
+            stream.write('{')
+            stream.flush()
+            self.assertFalse((self.directory / 'request.json').exists())
+            self.assertEqual(updates.status()['state'], 'idle')
+            stream.write(json.dumps(payload)[1:])
+
+        with patch.object(updates.json, 'dump', side_effect=write_in_parts):
+            self.assertEqual(updates.request({'tag': 'v0.29.0'})[0], 202)
+        self.assertEqual(updates.status()['state'], 'queued')
+        self.assertEqual(sorted(p.name for p in self.directory.iterdir()), ['request.json', 'status.json'])
+
     def test_explicit_check_has_no_install_target(self):
         self.assertEqual(updates.request({'tag': 'v0.29.0'}, check=True)[0], 400)
         self.assertEqual(updates.request({}, check=True)[0], 202)

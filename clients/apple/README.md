@@ -193,9 +193,11 @@ it. It does not touch the installed app or its data.
 `make package-dmg` creates a mountable Universal 2 DMG at
 `build/Gravedecay-macOS.dmg`; CI publishes that artifact, and tagged releases
 attach it as `Gravedecay-macOS.dmg` with its SHA-256 in the release notes.
-The packager preserves an existing app signature or adds an ad-hoc signature
-so Launch at Login can identify the app. Ad-hoc signing does not notarize the
-app or establish a verified publisher; macOS 15 Gatekeeper can block first launch:
+The packager preserves an existing app signature or, for unsigned builds,
+ad-hoc signs the embedded Sparkle framework and then the app so Launch at
+Login can identify it. Sparkle's nested helper signatures are preserved.
+Ad-hoc signing does not notarize the app or establish a verified publisher;
+macOS 15 Gatekeeper can block first launch:
 open the app once, dismiss the warning, then allow it under **System
 Settings → Privacy & Security → Open Anyway** (or clear the quarantine flag
 with `xattr -d com.apple.quarantine /Applications/Gravedecay.app`). Set

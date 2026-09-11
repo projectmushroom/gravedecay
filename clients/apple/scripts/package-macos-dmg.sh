@@ -18,6 +18,10 @@ cp -R "$APP" "$STAGE/Gravedecay.app"
 # Universal app. That is not a sealed app signature and must also be replaced.
 if ! signature=$(codesign -dv --verbose=4 "$STAGE/Gravedecay.app" 2>&1) ||
    printf '%s\n' "$signature" | grep -q 'linker-signed'; then
+  # Xcode removes Sparkle's Headers/Modules during embedding. With signing
+  # disabled, its original resource seal is stale; seal the embedded framework
+  # before the outer app. Preserve the signatures of Sparkle's nested helpers.
+  codesign --force --sign - --options runtime "$STAGE/Gravedecay.app/Contents/Frameworks/Sparkle.framework"
   codesign --force --sign - --options runtime \
     --entitlements "$ROOT/App/Generated/Gravedecay-macOS.entitlements" "$STAGE/Gravedecay.app"
 fi

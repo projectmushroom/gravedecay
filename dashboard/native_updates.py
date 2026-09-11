@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import tempfile
 import time
 import uuid
 
@@ -24,8 +25,11 @@ def status():
         if not isinstance(result, dict) or result.get('state') not in ('idle', 'queued', 'running', 'ok', 'failed'):
             raise ValueError('Invalid app updater status')
         request = directory() / 'request.json'
-        if request.exists():
+        try:
             pending = json.loads(request.read_text())
+        except FileNotFoundError:
+            pass  # The app may have consumed the request since the status read.
+        else:
             result.update(state='queued', attempt=pending['attempt'], target=pending['tag'],
                           message='Waiting for the Mac app updater')
         result['dashboard_current'] = result.get('target') == result.get('current') if result['state'] == 'ok' else True
@@ -59,9 +63,12 @@ def request(data, check=False):
                'requested_at': time.time(), 'action': 'check' if check else 'install'}
     path = directory() / 'request.json'
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, 'w') as stream:
+        # Publish a complete file without replacing another request. Both the
+        # HTTP threads and the app must never observe a partially written JSON.
+        with tempfile.NamedTemporaryFile(mode='w', dir=path.parent) as stream:
             json.dump(payload, stream)
+            stream.flush()
+            os.link(stream.name, path)
     except FileExistsError:
         return 409, {'output': 'An update is already queued'}
     except OSError:
