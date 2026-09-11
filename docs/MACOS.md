@@ -106,31 +106,66 @@ companion data). The unattended updater preserves the mode.
 Gaming/torpor, firewall management, Docker management, and multi-user workspaces remain
 permanent non-goals on macOS.
 
-## Native app publisher
+## Native app hosting
 
-The optional macOS 15+ native app is separate from this legacy source
-companion. Its first run offers remote-first **Connect to Graves** or **Share
-This Mac**; either can be enabled later. Settings → **Local host** → **Start
-Local Host** starts a read-only, in-process listener only on `127.0.0.1:4712`
-for `/healthz` and `/api/v1/summary`. It never installs a LaunchAgent, helper,
-Python runtime, or Tailscale configuration. It refuses to start when this
-legacy companion or another listener owns that port and reports `EXISTING
-COMPANION ACTIVE`.
+The macOS 15+ standalone app is an alternative way to host this Mac as a grave.
+It can also discover and access other graves. **Share This Mac** or Settings →
+**Start Local Host** starts the same Mac dashboard/PWA backend and network
+monitor as the classic installation, packaged with a pinned Python runtime for
+Intel and Apple Silicon. No companion installation, Homebrew, or Xcode is
+required on the serving Mac.
 
-When the native app cannot find Tailscale, Graveyard, Settings, and the menu
-bar offer **Get Tailscale** or **Open Tailscale**. They only open the official
-download page or app: sign-in and Tailscale changes remain yours.
+The app owns a child process that binds only `127.0.0.1:4712` and
+`127.0.0.1:4714`. It first checks the real dashboard, manifest, service worker,
+icons, summary, network health and identity boundary before showing ready.
+The web dashboard serves fresh Mac metrics, repository/GitHub/Linear work
+views, Graveyard discovery and benchmarks. Its private web settings live in
+`~/Library/Application Support/Gravedecay/NativeHost`; existing classic data
+and native UI Keychain preferences are not silently migrated. Configure web
+work integrations in the web dashboard's Settings.
 
-It does not modify Tailscale Serve: the UI shows the exact manual command to
-publish `/grave` after the listener is healthy. A successfully started native
-host is restored once when the app launches; enable Launch at Login to restore
-that opted-in host after sign-in. The login toggle is on only when macOS reports
-an enabled registration or one awaiting approval; a missing registration is off.
-To verify native startup, enable Launch at Login, quit and reopen the app, then
-check that the toggle remains on and `curl -f http://127.0.0.1:4712/healthz`
-succeeds. Check the login item in System Settings → General → Login Items
-before testing a full sign-out/sign-in. If the legacy companion later owns the port,
-the app retains the request but fails closed until the conflict is resolved.
+Sign into Tailscale, start the host, then run the commands provided by **Copy
+Publish Commands** once:
+
+```sh
+tailscale serve --bg --https=443 --set-path=/grave http://127.0.0.1:4712
+tailscale serve --bg --https=443 --set-path=/net http://127.0.0.1:4714
+```
+
+From a phone or tablet on the tailnet, open `https://<mac>.ts.net/grave/` and
+install the PWA. **Open Dashboard** in the Mac app opens that same address.
+The app never rewrites Serve automatically or removes routes when it quits.
+Its Tailscale owner identity is captured when hosting is enabled and retained
+across restarts. Other identities get public status only; settings and private
+work keep the shared backend's owner gate. Stop/re-enable hosting explicitly
+if you want to adopt a different signed-in Tailscale identity.
+
+Hosting continues with the window closed. The app prevents idle system sleep
+while hosting, and its child exits when the app stops or crashes. Enable
+**Launch at Login** to restore hosting after sign-in. This is a user-session
+app: it does not serve before login or after logout, and a MacBook lid close
+can still cause sleep. The login toggle is on only for enabled registrations
+or ones awaiting approval.
+
+The app refuses a running classic dashboard/network LaunchAgent or occupied
+port; it never kills the other server. To switch from classic hosting, inspect
+`gravedecay-mac uninstall --dry-run`, then use `gravedecay-mac uninstall`
+(without `--purge`) before starting the app host and publishing the paths above.
+This keeps classic data and Tailscale. To switch back, stop the app host before
+running the classic installer. Use one host implementation at a time.
+
+App updates replace the app bundle; the web dashboard does not invoke the
+classic companion updater. T3 and the web terminal are not installed or started
+by the standalone app; the classic `--agents` installation remains available
+when those local services are needed. Remote graves' existing T3 and Terminal
+links remain usable from the native app.
+
+For verification, `macos/status.sh` recognizes native hosting and uses the
+installed app's bundled doctor. It checks real PWA routes, summary links,
+owner access and the network listener, plus the app's sleep assertion.
+Settings → **Open Host Log** shows startup errors. Verify `/grave/` from another
+device and close/reopen the Mac window; a healthy `/healthz` alone is not the
+hosting contract.
 
 The System view uses only native, unprivileged macOS data: CPU activity from
 `top`, reclaimability from `memory_pressure` (labelled **Memory pressure**, not
@@ -146,8 +181,7 @@ have no battery card.
 
 The source companion supports `grave bench` and **System → Development
 benchmark** for local Git/Python speed, parallel scaling and sustained runs.
-See [BENCHMARK.md](BENCHMARK.md) for scoring and comparison limits. The
-read-only native publisher does not run benchmarks.
+See [BENCHMARK.md](BENCHMARK.md) for scoring and comparison limits. The native app host also exposes the shared web benchmark.
 
 Run `macos/status.sh` for doctor-lite. Like `grave doctor` on the appliance,
 it is the contract: it exits non-zero when an invariant fails. It checks

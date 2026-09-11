@@ -49,6 +49,9 @@ targets:
     type: application
     platform: macOS
     preBuildScripts:
+      - name: Bundle standalone web host
+        script: python3 "$SRCROOT/scripts/prepare-native-host.py"
+        basedOnDependencyAnalysis: false
       - name: Generate AppIcon renditions
         path: scripts/generate-app-icon.sh
         inputFiles:

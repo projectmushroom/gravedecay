@@ -343,6 +343,7 @@ body.macos.macagents .macagents-setting.setrow{display:flex!important}
 body.macos.macagents .macagents-setting.sethead{display:block!important}
 body:not(.macos) .mac-only-setting{display:none!important}
 body.macos [data-panel="actions"] .actions{display:none!important}
+body.macnative #update-open{display:none!important}
 /* Portable workspaces intentionally cannot observe or control their Docker host. */
 body.portable [data-panel="benchmark"],body.portable [data-panel="stats"],body.portable [data-panel="actions"],body.portable [data-panel="services"],
 body.portable [data-panel="docker"],body.portable [data-panel="journal"],body.portable #game-banner,
@@ -1119,6 +1120,7 @@ function render(s){
   macosCompanion=s.platform==='macos';
   portableCompanion=s.platform==='container';
   document.body.classList.toggle('macos',macosCompanion);
+  document.body.classList.toggle('macnative',!!s.macos_native);
   document.body.classList.toggle('macagents',macosCompanion&&!!s.macos_agents);
   document.body.classList.toggle('portable',portableCompanion);
   $('plot-context').textContent=`${plotIcon(s.platform||'linux')} Managing ${s.host} · ${location.hostname}`;
@@ -1130,7 +1132,7 @@ function render(s){
   openT3Setup();
   $('update-title').textContent=`Updates & restart · ${s.host} · ${location.hostname}`;
   $('update-title').style.color=plotAccent(location.hostname);
-  if(!updateBooted&&!portableCompanion){
+  if(!updateBooted&&!portableCompanion&&!s.macos_native){
     updateBooted=true;
     try{
       updatePending=JSON.parse(sessionStorage.getItem('grave-update-pending')||'null');

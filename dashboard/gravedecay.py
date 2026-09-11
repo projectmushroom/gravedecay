@@ -46,6 +46,7 @@ PORT = int(os.environ.get("GRAVEDECAY_PORT", os.environ.get("DASH_PORT", "4712")
 GRAVE_ROOT = os.environ.get("GRAVE_ROOT", "/srv/dev")
 PLATFORM = os.environ.get("GRAVEDECAY_PLATFORM", "linux").lower()
 MACOS = PLATFORM == "macos"
+MACOS_NATIVE = MACOS and os.environ.get("GRAVEDECAY_MACOS_NATIVE") == "1"
 # Opt-in macOS agents layer (macos/install.sh --agents): the Mac serves T3
 # and the web terminal, so exactly the identity-gated pairing/session subset
 # of the endpoint allowlist reopens. Set only by the installer's LaunchAgent.
@@ -65,6 +66,10 @@ MACOS_GETS = frozenset((
 MACOS_POSTS = frozenset(("/api/settings", "/api/admin/upgrade", "/api/admin/benchmark")
                         + (("/api/action", "/api/session-kill", "/api/session-capture")
                            if MACOS_AGENTS else ()))
+# Native app updates replace the app bundle; never invoke the classic updater.
+if MACOS_NATIVE:
+    MACOS_GETS -= {"/api/admin/releases", "/api/admin/update-status"}
+    MACOS_POSTS -= {"/api/admin/upgrade"}
 PORTABLE = PLATFORM in ("container", "portable")
 BIND_HOST = "0.0.0.0" if PORTABLE else "127.0.0.1"
 # tmux socket carrying the agent sessions. Single-user uses "agents"; a workspace
@@ -571,6 +576,8 @@ def launchagent_state(label):
 
 
 def collect_services():
+    if MACOS_NATIVE:
+        return [{"unit": "Gravedecay app", "active": "active", "sub": "dashboard + network"}]
     if MACOS:
         return [launchagent_state("io.gravedecay.dashboard"),
                 launchagent_state("io.gravedecay.network")]
@@ -2379,7 +2386,7 @@ def _state(headers):
                                      "truncated": inventory.get("truncated", False)}}
         return {"host": HOST, "now": time.strftime("%H:%M:%S"),
                 "viewer": viewer or "local", "platform": "macos",
-                "macos_agents": MACOS_AGENTS,
+                "macos_agents": MACOS_AGENTS, "macos_native": MACOS_NATIVE,
                 "mode": "developer", "boot_mode": None, "gamewatch": None,
                 "keepalive": None, "apps": list(APPS), "settings": settings,
                 "github": private["github"], "linear": private["linear"], "ci": private["ci"],
@@ -2860,6 +2867,7 @@ class Handler(BaseHTTPRequestHandler):
                 "build": BUILD_ID,
                 "shell": SHELL_ID,
                 "sw": SW_ID,
+                **({"hosting": "native-app"} if MACOS_NATIVE else {}),
             }))
         elif p == "/api/auth-check":
             if self._forbidden():
@@ -3239,7 +3247,7 @@ if __name__ == "__main__":
             with maintenance_request(f"/icon-{size}.png") as response:
                 png = response.read(24)
                 assert png[:8] == b"\x89PNG\r\n\x1a\n" and png[16:24] == size.to_bytes(4, "big") * 2, "invalid PWA icon dimensions"
-        if not PORTABLE:
+        if not PORTABLE and not MACOS_NATIVE:
             with maintenance_request("/api/admin/update-status") as response:
                 update = json.load(response)
                 assert update["state"] in ("idle", "queued", "running", "ok", "failed"), "invalid updater status"
