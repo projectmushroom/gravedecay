@@ -23,10 +23,9 @@ All measurements are numbers or `null`; timestamps are UTC RFC3339. The
 response intentionally contains no repository names, session/container names,
 logs, accounts, configured app URLs, or other private content. On Linux,
 `gaming` is intentional: stopped developer units and Docker do not contribute
-to `health`; only units in the `failed` state do. The legacy macOS companion
-reports only its `dashboard` and `network` paths. The optional native macOS
-publisher reports no browser, T3, or terminal links: it is a bounded local
-summary, not a full grave. `node.platform` is `linux`, `macos`,
+to `health`; only units in the `failed` state do. The default classic macOS companion and standalone Mac app host
+report `dashboard` and `network` paths. The classic agents layer additionally
+advertises its T3 and terminal services. `node.platform` is `linux`, `macos`,
 or `container`. Portable (`container`) summaries intentionally return `null`
 host resource and uptime values, retain `dashboard`, `t3`, and `terminal`
 links, and omit `network`.
@@ -46,7 +45,7 @@ agents layer. Clients append the fixed `#t3-setup` fragment to open those
 controls. It carries no credential, makes no remote action request, and does
 not establish that T3 is running or that the client is paired. Other paths,
 queries, and fragments are rejected for this capability. Older summaries and
-the native macOS summary publisher may omit it. Clients hide setup when a
+the standalone Mac app host omits it because it does not run a local T3 service. Clients hide setup when a
 plot is unreachable; a destination still enforces its own access checks.
 
 ## Owner-only Graveyard overview

@@ -43,7 +43,7 @@ struct GravedecayApp: App {
                     }
                 }
             }
-                .onAppear { macDashboard.setNativeHost(macHost); macHost.restoreIfRequested() }
+                .onAppear { macHost.restoreIfRequested() }
             #else
             ContentView()
                 .environmentObject(model)

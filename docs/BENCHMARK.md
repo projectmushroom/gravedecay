@@ -13,8 +13,8 @@ grave bench quick --json          # wait and print the complete result as JSON
 ```
 
 Linux appliances and the source-installed macOS companion support both the
-CLI and dashboard. The read-only native Mac publisher and portable dashboard
-do not expose this control. The multi-user gateway treats this as an admin
+CLI and dashboard. The standalone Mac app host includes the web benchmark;
+the portable dashboard does not expose this control. The multi-user gateway treats this as an admin
 operation on the owner dashboard; ordinary workspace users cannot start it.
 This measures that runtime, not another workspace's resource quota.
 

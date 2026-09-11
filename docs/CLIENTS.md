@@ -33,8 +33,9 @@ over the same origins and never require new listening ports on the box.
   Network, Terminal, and Settings surfaces. It opens Dashboard and T3 in the default
   browser. Tailscale discovery is read-only; Graveyard, Settings, and the menu
   bar can open Tailscale for you to sign in. **Start Local Host** is off by
-  default, binds only loopback while the app runs, and shows an explicit manual
-  Serve command. Both platforms use native SwiftTerm and can use an embedded
+  default and serves the full shared Mac dashboard/PWA and network monitor
+  through an app-owned bundled backend on loopback. It continues with the
+  window closed and shows explicit manual Serve commands. Both platforms use native SwiftTerm and can use an embedded
   Tailscale node. Build and distribution details live in
   `clients/apple/README.md`.
 

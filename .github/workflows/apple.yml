@@ -7,12 +7,16 @@ on:
     branches: [master]
     paths:
       - "clients/apple/**"
+      - "dashboard/**"
+      - "web/net/**"
       - "clients/macos-menubar/**"
       - "!clients/apple/**.md"
       - ".github/workflows/apple.yml"
   pull_request:
     paths:
       - "clients/apple/**"
+      - "dashboard/**"
+      - "web/net/**"
       - "clients/macos-menubar/**"
       - "!clients/apple/**.md"
       - ".github/workflows/apple.yml"
@@ -52,6 +56,10 @@ jobs:
             -configuration Release build -derivedDataPath build/DerivedData CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY='' ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO -skipPackagePluginValidation
           lipo -info build/DerivedData/Build/Products/Release/Gravedecay.app/Contents/MacOS/Gravedecay
           lipo build/DerivedData/Build/Products/Release/Gravedecay.app/Contents/MacOS/Gravedecay -verify_arch arm64 x86_64
+      - name: Install browser smoke prerequisites
+        run: |
+          npm ci
+          npx playwright install webkit
       - name: Package and inspect DMG
         working-directory: clients/apple
         run: |
@@ -60,6 +68,8 @@ jobs:
           hdiutil attach build/Gravedecay-macOS.dmg -mountpoint "$MOUNT" -nobrowse -readonly
           test -d "$MOUNT/Gravedecay.app"
           codesign --verify --deep --strict "$MOUNT/Gravedecay.app"
+          GRAVEDECAY_TEST_APP="$MOUNT/Gravedecay.app" python3 -m unittest discover -s ../../tests -p test_native_host.py
+          GRAVEDECAY_TEST_APP="$MOUNT/Gravedecay.app" node scripts/smoke-native-pwa.cjs
           hdiutil detach "$MOUNT"
           rmdir "$MOUNT"
       - name: Confirm native macOS binary has no WebKit dependency

@@ -70,13 +70,15 @@ agent sessions and frees RAM/GPU until you're done.
 ## Choose your install
 
 - **Linux appliance** — the complete always-on box above. Quickstart below.
-- **Native macOS client** — the *viewer*: a Universal 2 SwiftUI app (macOS
-  15+) that discovers graves over Tailscale, with native work state and
-  terminal. No services installed; quit it and it's gone. Download the DMG
-  from the [latest release](https://github.com/projectmushroom/gravedecay/releases/latest)
-  or build per [clients/apple/README.md](clients/apple/README.md) (covers
-  Gatekeeper, signing, notarization).
-- **macOS companion** — the *server* side: user-scoped LaunchAgents that make
+- **Standalone macOS app** — runs this Mac as a grave and accesses your other
+  graves. A Universal 2 SwiftUI app (macOS 15+) with opt-in dashboard/PWA and
+  network hosting for phones, tablets, and browsers at `/grave/` and `/net/`.
+  Its web backend and Python runtime are bundled; no separate companion,
+  Homebrew, or Xcode installation is needed. Close the window to keep hosting;
+  quit the app to stop. Download the DMG from the
+  [latest release](https://github.com/projectmushroom/gravedecay/releases/latest)
+  and follow [Mac hosting setup](docs/MACOS.md#native-app-hosting).
+- **Classic macOS companion** — an alternative installation: user-scoped LaunchAgents that make
   a Mac itself a grave (dashboard + network monitor; no sudo, no system
   services). Opt into T3 + web terminal with the second form:
 

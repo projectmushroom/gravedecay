@@ -67,7 +67,7 @@ final class GraveMenuModel: ObservableObject {
         state = graves.isEmpty ? .noAppliances : .ready
     }
 
-    nonisolated private static func tailscaleStatus() async -> (executableFound: Bool, data: Data?) {
+    nonisolated static func tailscaleStatus() async -> (executableFound: Bool, data: Data?) {
         let paths = ["/usr/local/bin/tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"]
         guard let executable = paths.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else { return (false, nil) }
         let process = Process(); process.executableURL = URL(fileURLWithPath: executable); process.arguments = ["status", "--json"]

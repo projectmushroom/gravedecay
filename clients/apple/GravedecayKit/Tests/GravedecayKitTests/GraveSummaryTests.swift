@@ -2,11 +2,15 @@ import XCTest
 @testable import GravedecayKit
 
 final class GraveSummaryTests: XCTestCase {
+    private func sampleSummary() -> Data {
+        Data(#"{"product":"gravedecay","api_version":1,"node":{"host":"Mac","platform":"macos","mode":"companion","uptime_s":null},"resources":{},"activity":{"sessions_live":0,"sessions_frozen":0},"health":{"services_failed":0,"containers_problem":0},"links":{}}"#.utf8)
+    }
+
     func testPlotIdentityAndConnectionAreIndependentOfT3State() throws {
         XCTAssertEqual(GravePresentation.accent("MAC.TAIL.TS.NET."), 0xc399ed)
         XCTAssertEqual(GravePresentation.accent("vm.tail.ts.net"), 0xf194b0)
         XCTAssertEqual(GravePresentation.machineIcon("container"), "shippingbox")
-        let data = MacPublisherSummary.data(host: "Mac", uptime: nil, cpu: nil, memory: nil, disk: nil)
+        let data = sampleSummary()
         let old = try XCTUnwrap(GraveSummary.decode(data))
         XCTAssertEqual(GravePresentation.connection(summary: old, reachable: true), "Dashboard reachable · T3 status unknown")
         var value = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -17,7 +21,7 @@ final class GraveSummaryTests: XCTestCase {
         XCTAssertEqual(GravePresentation.connection(summary: stopped, reachable: false), "Unreachable — check Tailscale or dashboard")
     }
     func testSavedPlotsSurviveRestartAndFailedDiscoveryWithoutLosingIdentity() throws {
-        let summary = try XCTUnwrap(GraveSummary.decode(MacPublisherSummary.data(host: "Mac", uptime: nil, cpu: nil, memory: nil, disk: nil)))
+        let summary = try XCTUnwrap(GraveSummary.decode(sampleSummary()))
         let mac = GravePlot(candidate: .init(id: "mac", dns: "mac.tail.ts.net", name: "Mac"), summary: summary)
         let vm = GravePlot(candidate: .init(id: "vm", dns: "vm.tail.ts.net", name: "VM"), summary: summary)
         let restored = GravePlot.restore(try JSONEncoder().encode([mac, vm]))
@@ -38,7 +42,7 @@ final class GraveSummaryTests: XCTestCase {
     func testSavedPlotsRejectCorruptAndUnsafeInventory() throws {
         XCTAssertTrue(GravePlot.restore(Data("bad json".utf8)).isEmpty)
         XCTAssertTrue(GravePlot.restore(Data(repeating: 65, count: 1_048_577)).isEmpty)
-        let summary = try XCTUnwrap(GraveSummary.decode(MacPublisherSummary.data(host: "Mac", uptime: nil, cpu: nil, memory: nil, disk: nil)))
+        let summary = try XCTUnwrap(GraveSummary.decode(sampleSummary()))
         let unsafe = GravePlot(candidate: .init(id: "bad", dns: "vm.ts.net@evil.example", name: "Bad"), summary: summary)
         XCTAssertTrue(GravePlot.restore(try JSONEncoder().encode([unsafe])).isEmpty)
         let good = GravePlot(candidate: .init(id: "mac", dns: "mac.tail.ts.net", name: "Mac"), summary: summary)
@@ -84,7 +88,7 @@ final class GraveSummaryTests: XCTestCase {
     }
 
     func testSetupCapabilityIsOptionalAndOnlyOpensDashboardControls() throws {
-        let data = MacPublisherSummary.data(host: "Mac", uptime: nil, cpu: nil, memory: nil, disk: nil)
+        let data = sampleSummary()
         var value = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertNil(GraveSummary.decode(data)?.links.t3_setup)
         value["links"] = ["t3_setup": "/grave/"]
@@ -105,21 +109,13 @@ final class GraveSummaryTests: XCTestCase {
         XCTAssertEqual(BoxConfig(host: "grave.tail.ts.net", terminalPath: "/term/")?.terminalWebSocketURL().path, "/term/ws")
     }
 
-    func testNativePublisherHTTPBoundaryAndSummary() throws {
-        let summary = MacPublisherSummary.data(host: "Mac", uptime: nil, cpu: nil, memory: nil, disk: nil)
-        let decoded = try XCTUnwrap(GraveSummary.decode(summary))
-        XCTAssertEqual(decoded.product, "gravedecay")
-        XCTAssertEqual(decoded.api_version, 1)
-        XCTAssertEqual(decoded.capabilities, GraveCapabilities(links: .init(dashboard: nil, t3: nil, terminal: nil, network: nil)))
-
-        func reply(_ request: String) -> String { String(decoding: MacPublisherHTTP.response(request: Data(request.utf8), summary: summary), as: UTF8.self) }
-        XCTAssertTrue(reply("GET /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n").hasPrefix("HTTP/1.1 200"))
-        let head = reply("HEAD /api/v1/summary HTTP/1.1\r\nHost: localhost\r\n\r\n")
-        XCTAssertTrue(head.hasPrefix("HTTP/1.1 200")); XCTAssertFalse(head.contains("\"product\""))
-        XCTAssertTrue(reply("GET /unknown HTTP/1.1\r\n\r\n").hasPrefix("HTTP/1.1 404"))
-        XCTAssertTrue(reply("POST /healthz HTTP/1.1\r\n\r\n").hasPrefix("HTTP/1.1 405"))
-        XCTAssertTrue(reply("GET /healthz HTTP/1.1\r\nContent-Length: 1\r\n\r\nx").hasPrefix("HTTP/1.1 400"))
-        XCTAssertTrue(String(decoding: MacPublisherHTTP.response(request: Data(repeating: 65, count: MacPublisherHTTP.maxRequestBytes + 1), summary: summary), as: UTF8.self).hasPrefix("HTTP/1.1 400"))
+    func testHostOwnerUsesSelfAndRejectsMissingOrInvalidIdentity() {
+        func owner(_ json: String) -> String? { MacHostIdentity.owner(Data(json.utf8)) }
+        XCTAssertEqual(owner(#"{"BackendState":"Running","Self":{"UserID":42},"User":{"1":{"LoginName":"wrong@example.test"},"42":{"LoginName":"owner@example.test"}}}"#), "owner@example.test")
+        XCTAssertNil(owner(#"{"BackendState":"Stopped","Self":{"UserID":42},"User":{"42":{"LoginName":"owner@example.test"}}}"#))
+        XCTAssertNil(owner(#"{"BackendState":"Running","Self":{"UserID":42},"User":{"1":{"LoginName":"wrong@example.test"}}}"#))
+        XCTAssertNil(owner(#"{"BackendState":"Running","Self":{"UserID":42},"User":{"42":{"LoginName":"owner@example.test,other@example.test"}}}"#))
+        XCTAssertNil(owner("{}"))
     }
 
     func testTerminalTokenResponseClassification() {

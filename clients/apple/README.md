@@ -3,8 +3,9 @@
 iOS is a compact client for the box's web surfaces and native SwiftTerm
 terminal. macOS is a standalone, Universal 2 native application: it lives in
 the Dock and menu bar, renders Graveyard, This Mac, Work, Network, Terminal,
-and Settings in SwiftUI, and uses no local Python service or webview. Dashboard
-and T3 links open in the default browser.
+and Settings in SwiftUI. It can host the shared Mac web dashboard/PWA and
+network monitor using its bundled Python backend; no separate companion or
+Python installation is needed. Dashboard and T3 links open in the default browser.
 
 ## Layout
 
@@ -68,11 +69,13 @@ paths supplied by that contract. Graveyard selects remote graves only. A native
 terminal is created only when the selected grave advertises `/term`.
 
 Settings → **Local host** → **Start Local Host** is off by default. It starts
-a native loopback-only (`127.0.0.1:4712`) GET/HEAD server for `/healthz` and
-`/api/v1/summary` while the app runs. It refuses an occupied port or the legacy
-`io.gravedecay.dashboard` companion, and does not alter Tailscale, Serve,
-login, or preferences. The UI shows a manual Serve command instead, because
-safely removing a shared path cannot be proven after a restart.
+the bundled web host on `127.0.0.1:4712` (dashboard/PWA) and `:4714` (network).
+The app owns its lifetime and holds an idle-sleep assertion while serving,
+including with its window closed. The host refuses classic companion jobs or
+occupied ports. The UI supplies manual Serve commands and opens `/grave/` on
+this Mac's tailnet address for the same experience phones and PWAs use.
+See [native hosting](../../docs/MACOS.md#native-app-hosting) for identity,
+startup, supported services and migration.
 
 When Tailscale is unavailable, Graveyard, Settings, and the menu bar offer
 **Get Tailscale** or **Open Tailscale**. They only open the official app or
@@ -80,9 +83,10 @@ download page; sign-in and Tailscale configuration remain yours.
 
 The direct-distribution macOS target deliberately is not App Sandbox enabled:
 running the user-installed Tailscale CLI requires local process access. It
-uses no credentials, daemon, analytics, or remote control; its local plot
-inventory contains only identities, observation times, and sanitized summaries. Its
-optional listener is loopback-only and explicit. Network requests remain HTTPS
+keeps its local plot inventory limited to identities, observation times and
+sanitized summaries. Its opt-in host reuses the classic backend authorization
+checks for private work and settings; it runs as the logged-in user and keeps
+its state separate from the classic installation. Network requests remain HTTPS
 tailnet requests. Hardened Runtime remains on
 for release builds.
 
@@ -124,6 +128,22 @@ xcodebuild -project Gravedecay.xcodeproj -scheme Gravedecay-macOS \
   -configuration Release build CODE_SIGNING_ALLOWED=NO ARCHS="arm64 x86_64"
 lipo -info ~/Library/Developer/Xcode/DerivedData/Gravedecay-*/Build/Products/Release/Gravedecay.app/Contents/MacOS/Gravedecay
 ```
+
+## Bundled host runtime
+
+The macOS build runs `scripts/prepare-native-host.py`: it copies the shared
+backend/PWA/network files and downloads checksum-pinned CPython 3.13.15
+`python-build-standalone` archives (20260901) for Intel and Apple Silicon.
+Downloads are cached under `build/python-cache`; the installed app needs no
+network download, Homebrew or developer tools to start its servers. The
+runtime retains upstream licenses, with dependency notices in
+`NativeHost/PYTHON-LICENSES.txt`. Runtime Mach-O files use the build signing
+identity, or ad-hoc signing for unsigned builds.
+
+CI starts the host from the mounted release DMG with a fresh temporary data
+root. Tests cover the PWA, access checks, current summaries, port collisions
+and parent-pipe cleanup using the bundled interpreter. Source-only tests use
+`python3 -m unittest discover -s tests -p test_native_host.py`.
 
 ## Distribution notes
 

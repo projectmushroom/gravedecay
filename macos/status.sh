@@ -15,6 +15,19 @@ while [ $# -gt 0 ]; do case "$1" in
   *) echo "usage: $0 [--root PATH] [--page]" >&2; exit 2;;
 esac; shift; done
 state="$ROOT/config/components"; rc=0
+# A native app owns both listeners without classic LaunchAgents. Use its
+# bundled interpreter and doctor, including real PWA routes and the auth gate.
+if curl -fsS --max-time 3 http://127.0.0.1:4712/healthz 2>/dev/null | grep -q '"hosting": "native-app"'; then
+  APP=/Applications/Gravedecay.app
+  [ -d "$APP" ] || APP="$HOME/Applications/Gravedecay.app"
+  case "$(uname -m)" in arm64) arch=aarch64;; *) arch=x86_64;; esac
+  BUNDLE="$APP/Contents/Resources/NativeHost"
+  "$BUNDLE/$arch/python/bin/python3" -I -B "$BUNDLE/host.py" --root "$ROOT/NativeHost" --check || exit 1
+  if pmset -g assertions 2>/dev/null | grep -q 'Serving Gravedecay to tailnet devices'; then
+    echo "native host sleep assertion: held"
+  else echo "native host sleep assertion: missing"; exit 1; fi
+  exit 0
+fi
 if [ ! -f "$ROOT/.gravedecay-macos" ] || [ ! -f "$state" ]; then echo "gravedecay macOS companion: not installed at $ROOT"; exit 0; fi
 dash=$(sed -n 's/^dashboard=//p' "$state"); net=$(sed -n 's/^network=//p' "$state"); serve=$(sed -n 's/^serve=//p' "$state"); keep=$(sed -n 's/^keepawake=//p' "$state"); agentsmode=$(sed -n 's/^agents=//p' "$state"); uid=$(id -u)
 case "$dash:$net:$serve" in 1:1:[01]|1:0:[01]|0:1:[01]) ;; *) echo "invalid component metadata" >&2; exit 2;; esac
