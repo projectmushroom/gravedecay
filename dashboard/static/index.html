@@ -343,7 +343,9 @@ body.macos.macagents .macagents-setting.setrow{display:flex!important}
 body.macos.macagents .macagents-setting.sethead{display:block!important}
 body:not(.macos) .mac-only-setting{display:none!important}
 body.macos [data-panel="actions"] .actions{display:none!important}
-body.macnative #update-open{display:none!important}
+#update-notice{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px;margin:10px 0;border:1px solid var(--amber)}
+#update-notice[hidden]{display:none}
+body.portable #settings-update-open{display:none!important}
 /* Portable workspaces intentionally cannot observe or control their Docker host. */
 body.portable [data-panel="benchmark"],body.portable [data-panel="stats"],body.portable [data-panel="actions"],body.portable [data-panel="services"],
 body.portable [data-panel="docker"],body.portable [data-panel="journal"],body.portable #game-banner,
@@ -382,6 +384,11 @@ body.portable #sec-notify{display:none!important}
   <div id="graveyard-plots"></div>
 </details>
 <div id="plot-context" class="dim" aria-label="Current appliance"></div>
+<div id="update-notice" hidden role="status">
+  <span id="update-notice-text"></span>
+  <button id="quick-update">⬆ Update now</button>
+  <button id="update-options" class="mini">Other releases…</button>
+</div>
 <div class="apps" id="apps"></div>
 <div id="game-banner">
   <h2>🎮 G A M E &nbsp; M O D E</h2>
@@ -397,6 +404,7 @@ body.portable #sec-notify{display:none!important}
   <button class="mini xbtn" id="settings-x" title="close (Esc)" aria-label="close"
     style="position:absolute;top:10px;right:10px;z-index:2">✕</button>
   <h2 id="settings-title" style="color:var(--ink);font-size:15px;margin-bottom:10px">⚙️ Settings</h2>
+  <button id="settings-update-open">⬆ Updates &amp; release selection…</button>
 
   <div class="sethead sec-toggle" data-sec="sec-apps">▸ Launcher tiles — 👁 show · ⚡ skip-perms · ▢ modal · ↗ new tab</div>
   <div id="sec-apps" style="display:none">
@@ -669,6 +677,7 @@ body.portable #sec-notify{display:none!important}
   <h2 id="update-title">Updates &amp; restart</h2>
   <p id="grave-release-current" class="dim">Checking installed release…</p>
   <p>Updates Gravedecay and reloads this dashboard. No reboot needed.</p>
+  <p id="native-release-help" hidden>Updates restart the Mac app and briefly disconnect this dashboard. <a href="https://github.com/projectmushroom/gravedecay/releases" target="_blank" rel="noopener">Older releases: download and install manually.</a></p>
   <div class="release-picker">
     <label for="grave-release">Gravedecay release</label>
     <select id="grave-release" aria-label="gravedecay release"><option value="">Loading releases…</option></select>
@@ -895,6 +904,31 @@ async function refreshDispatchPRs(){
 }
 let cfg=null,cfgSrv='',envApps=[],layoutKey='';
 let macUpdateChannel='release',updatePending=null,updateTimer,updateBooted=false,updatePolling=false;
+let nativeMacHost=false,latestGraveRelease='',releaseNoticeTimer;
+function showReleaseNotice(data){
+  const version=s=>/^v\d+\.\d+\.\d+$/.test(s||'')?s.slice(1).split('.').map(Number):null;
+  const current=version(data.current),newer=tag=>{
+    const next=version(tag);if(!current||!next)return false;
+    for(let i=0;i<3;i++){if(next[i]!==current[i])return next[i]>current[i];}return false;
+  };
+  latestGraveRelease=(data.releases||[]).filter(newer).sort((a,b)=>{
+    const x=version(a),y=version(b);return y[0]-x[0]||y[1]-x[1]||y[2]-x[2];
+  })[0]||'';
+  if(nativeMacHost)latestGraveRelease=data.available?data.latest||'':'';
+  $('update-notice').hidden=!latestGraveRelease;
+  $('update-notice-text').textContent=`${latestGraveRelease} is available for ${$('plot-context').textContent.replace(/^.*Managing /,'')}`;
+  $('quick-update').disabled=!!updatePending;
+}
+async function pollReleaseNotice(){
+  clearTimeout(releaseNoticeTimer);
+  if(portableCompanion)return;
+  try{
+    const response=await fetch('api/admin/releases',{cache:'no-store'});
+    if(!response.ok){$('update-notice').hidden=true;return;}
+    showReleaseNotice(await response.json());
+  }catch(_){$('update-notice').hidden=true;}
+  finally{releaseNoticeTimer=setTimeout(pollReleaseNotice,nativeMacHost?60000:600000);}
+}
 let pollFailures=0,lastConnected=0;
 let activeTab=localStorage.getItem('grave-tab')||'work';
 let scrollInput=0;
@@ -991,10 +1025,12 @@ async function loadGraveReleases(){
     const r=await fetch('api/admin/releases',{cache:'no-store'}),data=await r.json();
     if(!r.ok)throw new Error(data.output||`HTTP ${r.status}`);
     macUpdateChannel=data.channel==='edge'?'edge':'release';
-    select.innerHTML=`<option value="configured">Latest ${macUpdateChannel==='edge'?'edge build':'stable release'}</option>`+
+    showReleaseNotice(data);
+    select.innerHTML=`<option value="${nativeMacHost&&!(data.releases||[]).length?'':'configured'}">Latest ${macUpdateChannel==='edge'?'edge build':'stable release'}</option>`+
       (data.releases||[]).map(tag=>`<option value="${esc(tag)}">${esc(tag)}${tag===data.current?' (current checkout)':''}</option>`).join('');
     select.value='configured';
-    $('grave-release-current').textContent=`Current checkout: ${data.current||data.checkout||'development'} · Channel: ${macUpdateChannel}`;
+    $('grave-release-current').textContent=`${nativeMacHost?'Installed app':'Current checkout'}: ${data.current||data.checkout||'development'} · Channel: ${macUpdateChannel}`;
+    $('native-release-help').hidden=!nativeMacHost;
   }catch(e){
     select.innerHTML='<option value="">Release lookup failed</option>';
     $('grave-release-current').textContent=e.message;
@@ -1039,7 +1075,7 @@ async function updateStatus(){
       $('grave-release-state').textContent=(x.state==='queued'?'Queued':'Updating')+' — '+(x.message||'the dashboard may briefly disconnect');
       updateControls(true);
     }else if(!updatePending){
-      $('grave-release-state').textContent=x.state==='ok'?'Last update completed. Choose a release to apply.':'Choose a release to apply.';
+      $('grave-release-state').textContent=nativeMacHost?(x.message||'Choose a release to apply.'):(x.state==='ok'?'Last update completed. Choose a release to apply.':'Choose a release to apply.');
       updateControls(false);
     }
     if(updatePending||x.state==='running'||x.state==='queued')updateTimer=setTimeout(updateStatus,2000);
@@ -1061,13 +1097,32 @@ async function openUpdates(){
   await updateStatus();
 }
 $('update-open').onclick=openUpdates;
+$('settings-update-open').onclick=openUpdates;
+$('update-options').onclick=openUpdates;
+$('quick-update').onclick=()=>applyGraveUpdate(latestGraveRelease);
 $('update-close').onclick=()=>$('update-dialog').close();
 $('update-dialog').addEventListener('close',()=>{unlockBody();$('update-open').focus();});
-$('refresh-grave-releases').onclick=async()=>{await loadGraveReleases();await updateStatus();};
+$('refresh-grave-releases').onclick=async()=>{
+  if(nativeMacHost){
+    try{
+      const response=await fetch('api/admin/update-check',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      if(!response.ok)throw new Error((await response.json()).output||'Cannot check for updates');
+      $('grave-release-state').textContent='Checking for app releases…';
+      for(let i=0;i<30;i++){
+        await new Promise(resolve=>setTimeout(resolve,1000));
+        const state=await(await fetch('api/admin/update-status',{cache:'no-store'})).json();
+        if(!state.checking&&state.state!=='queued')break;
+      }
+    }catch(error){$('grave-release-state').textContent=error.message;return;}
+  }
+  await loadGraveReleases();await updateStatus();
+};
 $('reload-dashboard').onclick=()=>location.reload();
-$('install-grave-release').onclick=async()=>{
-  const selection=$('grave-release').value;
+$('install-grave-release').onclick=()=>applyGraveUpdate($('grave-release').value);
+async function applyGraveUpdate(selection){
   if(!selection||updatePending)return;
+  if(!confirm(`Update ${$('plot-context').textContent} to ${selection==='configured'?'the configured release':selection}? ${nativeMacHost?'The Mac app will restart. ':''}This dashboard will briefly disconnect and reload.`))return;
+  if(!$('update-dialog').open){$('update-dialog').showModal();lockBody();}
   updateControls(true);
   try{
     // Snapshot the previous attempt so an old success cannot complete a new
@@ -1088,7 +1143,7 @@ $('install-grave-release').onclick=async()=>{
     $('grave-release-state').textContent=e.message;
     if(updatePending)updateStatus();else updateControls(false);
   }
-};
+}
 
 function render(s){
   // Replacing live regions above the viewport can make iOS WebKit discard its
@@ -1121,6 +1176,7 @@ function render(s){
   portableCompanion=s.platform==='container';
   document.body.classList.toggle('macos',macosCompanion);
   document.body.classList.toggle('macnative',!!s.macos_native);
+  nativeMacHost=!!s.macos_native;
   document.body.classList.toggle('macagents',macosCompanion&&!!s.macos_agents);
   document.body.classList.toggle('portable',portableCompanion);
   $('plot-context').textContent=`${plotIcon(s.platform||'linux')} Managing ${s.host} · ${location.hostname}`;
@@ -1132,8 +1188,9 @@ function render(s){
   openT3Setup();
   $('update-title').textContent=`Updates & restart · ${s.host} · ${location.hostname}`;
   $('update-title').style.color=plotAccent(location.hostname);
-  if(!updateBooted&&!portableCompanion&&!s.macos_native){
+  if(!updateBooted&&!portableCompanion){
     updateBooted=true;
+    pollReleaseNotice();
     try{
       updatePending=JSON.parse(sessionStorage.getItem('grave-update-pending')||'null');
       const result=sessionStorage.getItem('grave-update-result');

@@ -147,12 +147,57 @@ and parent-pipe cleanup using the bundled interpreter. Source-only tests use
 
 ## Distribution notes
 
+### In-app updates
+
+The Mac app uses Sparkle 2.9.6 with a dedicated public update key in
+`project.yml`. Checks discover updates without downloading or installing.
+The sidebar offers the latest compatible version, and Settings offers release
+selection plus manual downloads of older versions. The hosted dashboard's
+owner-only quick action uses the same updater through a private mailbox under
+`NativeHost/updates`. It works from a phone without leaving a confirmation
+dialog waiting on the Mac. Both UIs confirm before downloading and restarting.
+The app stops its host immediately before relaunch and preserves the hosting
+preference. The new app confirms its bundle version in the persisted attempt;
+the dashboard reloads after reconnecting.
+
+Tags `vX.Y.Z` run `.github/workflows/mac-release.yml`: build Universal 2 with
+matching marketing/build versions, verify the packaged host, sign the appcast
+and archive, and create a draft GitHub release with the DMG and `appcast.xml`.
+Review the notes and publish the draft. The feed URL is the latest release's
+`appcast.xml`; every subsequent Mac release must include it. Existing users
+need one manual installation of the first updater-enabled app.
+
+Release signing uses the dedicated Keychain account
+`com.projectmushroom.gravedecay.sparkle`; its matching exported private key is
+the repository's `SPARKLE_PRIVATE_KEY` Actions secret. Never replace the key
+or commit/export it into the repository. `scripts/prepare-appcast.sh` accepts
+a private key file via `SPARKLE_KEY_FILE` and signs a feed with up to ten
+versions; archive signing and feed generation use Sparkle's own tools.
+The public feed and downloads stay on GitHub; no update server is required.
+
+Ad-hoc distribution remains supported. The Mac entitlement disables library
+validation so Sparkle's signed framework can load without our own Team ID;
+update authenticity uses Ed25519. This does not add Developer ID signing or
+notarization. To verify the actual update path with disposable apps and an
+ephemeral key:
+
+```sh
+export SPARKLE_DIST=$(clients/apple/scripts/prepare-sparkle.sh)
+python3 clients/apple/scripts/test-sparkle-update.py
+```
+
+The test rejects a corrupted archive, then installs a valid signed archive,
+relaunches, and confirms the requested version. Both Mac CI architectures run
+it. It does not touch the installed app or its data.
+
 `make package-dmg` creates a mountable Universal 2 DMG at
 `build/Gravedecay-macOS.dmg`; CI publishes that artifact, and tagged releases
 attach it as `Gravedecay-macOS.dmg` with its SHA-256 in the release notes.
-The packager preserves an existing app signature or adds an ad-hoc signature
-so Launch at Login can identify the app. Ad-hoc signing does not notarize the
-app or establish a verified publisher; macOS 15 Gatekeeper can block first launch:
+The packager preserves an existing app signature or, for unsigned builds,
+ad-hoc signs the embedded Sparkle framework and then the app so Launch at
+Login can identify it. Sparkle's nested helper signatures are preserved.
+Ad-hoc signing does not notarize the app or establish a verified publisher;
+macOS 15 Gatekeeper can block first launch:
 open the app once, dismiss the warning, then allow it under **System
 Settings → Privacy & Security → Open Anyway** (or clear the quarantine flag
 with `xattr -d com.apple.quarantine /Applications/Gravedecay.app`). Set

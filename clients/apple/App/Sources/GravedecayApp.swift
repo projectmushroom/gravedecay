@@ -43,7 +43,11 @@ struct GravedecayApp: App {
                     }
                 }
             }
-                .onAppear { macHost.restoreIfRequested() }
+                .onAppear {
+                    MacAppUpdates.shared.beforeRelaunch = { macHost.pauseForUpdate() }
+                    MacAppUpdates.shared.start()
+                    macHost.restoreIfRequested()
+                }
             #else
             ContentView()
                 .environmentObject(model)

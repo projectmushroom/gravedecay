@@ -100,7 +100,9 @@ that its installer completed or its dashboard is running.
 Linux and macOS. The configured-channel choice sends `{"channel":"configured"}`
 on Linux, or the recorded `release`/`edge` channel on macOS. The owner and
 same-origin gates apply. A successful response means **queued**, not installed.
-The existing detached systemd/launchd worker performs the install.
+The existing detached systemd/launchd worker performs classic installs. Native
+Mac hosting forwards an exact offered tag (or `{"channel":"release"}`) to the
+app's Sparkle updater; it never invokes the classic companion worker.
 
 `GET /grave/api/admin/update-status` is owner-only and uncached on both platforms.
 It returns `state` (`idle`, `queued`, `running`, `ok`, `failed`), an `attempt`
@@ -108,9 +110,19 @@ identity once the worker starts, optional `message`, the last 8 KiB of the
 fixed updater log, and `dashboard_current`. That last flag compares this
 process's loaded Python and HTML hashes with the installed files. Logs and
 update results never enter the public summary. Portable dashboards reject
-these endpoints.
+these endpoints. Native Mac status uses the same attempt/state contract and
+also exposes `current`, `latest`, `releases`, `available`, and `checking`.
+Its `dashboard_current` confirms the requested app version after relaunch.
+`POST /grave/api/admin/update-check` with `{}` requests a fresh native app feed
+check. It is owner-only and same-origin, and returns 404 on other installations.
+Native updater status is read from a private, bounded, heartbeat-checked file;
+the web backend can queue a release identifier but cannot supply an executable
+or download URL. Concurrent requests are rejected instead of overwriting one
+another. A stale or missing app updater fails closed.
 
-The web's **System → Updates & restart** dialog combines the configured-channel
+The dashboard shows a latest-release notice with a confirmed quick update
+action. **Settings → Updates & release selection** and **System → Updates &
+restart** retain the release picker. The dialog combines the configured-channel
 and exact-release flows. It remembers an in-flight attempt in session storage,
 ignores an earlier attempt's success, and reloads the page once the new attempt
 succeeds and the dashboard runs its installed files. Connection failures are

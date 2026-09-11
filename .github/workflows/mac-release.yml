@@ -1,0 +1,69 @@
+name: Mac release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+concurrency:
+  group: mac-release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate release version
+        id: version
+        run: |
+          python3 - <<'PY'
+          import os, re
+          tag = os.environ['GITHUB_REF_NAME']
+          assert re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', tag), 'Expected a stable vX.Y.Z tag'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('version=' + tag[1:] + '\n')
+          PY
+      - run: brew install xcodegen
+      - name: Verify updater
+        run: |
+          export SPARKLE_DIST=$(clients/apple/scripts/prepare-sparkle.sh)
+          python3 clients/apple/scripts/test-sparkle-update.py
+      - name: Build Universal 2 app
+        working-directory: clients/apple
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          xcodegen --spec project.yml
+          xcodebuild -project Gravedecay.xcodeproj -scheme Gravedecay-macOS \
+            -configuration Release -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY='' ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO \
+            MARKETING_VERSION="$RELEASE_VERSION" CURRENT_PROJECT_VERSION="$RELEASE_VERSION" \
+            -skipPackagePluginValidation build
+      - name: Package and verify DMG
+        working-directory: clients/apple
+        run: |
+          APP="$PWD/build/DerivedData/Build/Products/Release/Gravedecay.app" scripts/package-macos-dmg.sh
+          MOUNT=$(mktemp -d)
+          trap 'hdiutil detach "$MOUNT"; rmdir "$MOUNT"' EXIT
+          hdiutil attach build/Gravedecay-macOS.dmg -mountpoint "$MOUNT" -nobrowse -readonly
+          codesign --verify --deep --strict --all-architectures "$MOUNT/Gravedecay.app"
+          lipo "$MOUNT/Gravedecay.app/Contents/MacOS/Gravedecay" -verify_arch arm64 x86_64
+          GRAVEDECAY_TEST_APP="$MOUNT/Gravedecay.app" python3 -m unittest discover -s ../../tests -p test_native_host.py
+      - name: Prepare signed update feed and draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          export SPARKLE_DIST=$(clients/apple/scripts/prepare-sparkle.sh)
+          export SPARKLE_KEY_FILE="$RUNNER_TEMP/sparkle-release-key"
+          trap 'rm -f "$SPARKLE_KEY_FILE"' EXIT
+          python3 - <<'PY'
+          import os
+          key = os.environ['SPARKLE_PRIVATE_KEY']
+          assert key, 'Configure the SPARKLE_PRIVATE_KEY release secret first'
+          descriptor = os.open(os.environ['SPARKLE_KEY_FILE'], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+          with os.fdopen(descriptor, 'w') as output:
+              output.write(key)
+          PY
+          clients/apple/scripts/prepare-appcast.sh clients/apple/build/Gravedecay-macOS.dmg "$GITHUB_REF_NAME" "$RUNNER_TEMP/release"
+          gh release create "$GITHUB_REF_NAME" --verify-tag --draft --generate-notes \
+            "$RUNNER_TEMP/release/Gravedecay-macOS.dmg" "$RUNNER_TEMP/release/appcast.xml"

@@ -12,10 +12,13 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.10"
-    MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    MARKETING_VERSION: "0.28.0"
+    CURRENT_PROJECT_VERSION: "0.28.0"
 
 packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: "2.9.6"
   GravedecayKit:
     path: GravedecayKit
   SwiftTerm:
@@ -37,6 +40,8 @@ targets:
     info:
       path: App/Generated/Info-iOS.plist
       properties:
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleDisplayName: Gravedecay
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
@@ -69,6 +74,7 @@ targets:
         excludes: [WebPane.swift]
       - path: App/Assets.xcassets
     dependencies:
+      - package: Sparkle
       - package: GravedecayKit
       - package: SwiftTerm
     settings:
@@ -82,10 +88,21 @@ targets:
     info:
       path: App/Generated/Info-macOS.plist
       properties:
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleDisplayName: Gravedecay
+        SUFeedURL: https://github.com/projectmushroom/gravedecay/releases/latest/download/appcast.xml
+        SUPublicEDKey: 0+qJiidSZ5QqLfOBWc8S0sKSkrUDA4z4Z9JtS9AMjM4=
+        SUEnableAutomaticChecks: false
+        SUAllowsAutomaticUpdates: false
+        SUVerifyUpdateBeforeExtraction: true
+        SURequireSignedFeed: true
         # A normal Dock application that also has a menu-bar extra.
         LSUIElement: false
     entitlements:
       path: App/Generated/Gravedecay-macOS.entitlements
       properties:
+        # Ad-hoc distribution cannot satisfy Team ID library validation for
+        # Sparkle's signed framework. Update archives and feeds use Ed25519.
+        com.apple.security.cs.disable-library-validation: true
         com.apple.security.network.client: true

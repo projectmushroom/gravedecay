@@ -140,6 +140,9 @@ final class MacNativeHost: ObservableObject {
         state = .off; detail = "OFF // THIS MAC IS NOT SHARED"
     }
 
+    // Keep the opted-in host preference so the replacement app restores it.
+    func pauseForUpdate() { stopProcess() }
+
     func openDashboard() {
         guard state == .hosted else { return }
         Task {

@@ -17,12 +17,21 @@ esac; shift; done
 state="$ROOT/config/components"; rc=0
 # A native app owns both listeners without classic LaunchAgents. Use its
 # bundled interpreter and doctor, including real PWA routes and the auth gate.
-if curl -fsS --max-time 3 http://127.0.0.1:4712/healthz 2>/dev/null | grep -q '"hosting": "native-app"'; then
+if [ "$ROOT" = "$HOME/Library/Application Support/Gravedecay" ] &&
+   curl -fsS --max-time 3 http://127.0.0.1:4712/healthz 2>/dev/null | grep -q '"hosting": "native-app"'; then
   APP=/Applications/Gravedecay.app
   [ -d "$APP" ] || APP="$HOME/Applications/Gravedecay.app"
   case "$(uname -m)" in arm64) arch=aarch64;; *) arch=x86_64;; esac
   BUNDLE="$APP/Contents/Resources/NativeHost"
   "$BUNDLE/$arch/python/bin/python3" -I -B "$BUNDLE/host.py" --root "$ROOT/NativeHost" --check || exit 1
+  "$BUNDLE/$arch/python/bin/python3" -I -B - "$ROOT/NativeHost/updates/status.json" <<'PY' || exit 1
+import json, pathlib, sys, time
+path = pathlib.Path(sys.argv[1])
+assert time.time() - path.stat().st_mtime < 30, 'native app updater is not responding'
+status = json.loads(path.read_text())
+assert status.get('current'), 'native app version missing'
+print('native app updater: responding (' + status['current'] + ')')
+PY
   if pmset -g assertions 2>/dev/null | grep -q 'Serving Gravedecay to tailnet devices'; then
     echo "native host sleep assertion: held"
   else echo "native host sleep assertion: missing"; exit 1; fi

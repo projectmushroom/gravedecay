@@ -45,7 +45,7 @@ const assert = require('node:assert/strict');
     assert.equal(response.status(), 200);
     await page.locator('body.macnative').waitFor({ timeout: 30000 });
     assert(await page.locator('#plot-context').innerText(), 'Missing host identity');
-    assert.equal(await page.locator('#update-open').isVisible(), false);
+    assert.equal(await page.locator('#update-notice').isVisible(), false);
     assert.deepEqual(pageErrors, []);
     await page.locator('#apps a').filter({ hasText: 'Network' }).waitFor();
     const networkURL = await page.locator('#apps a').filter({ hasText: 'Network' }).getAttribute('href');
