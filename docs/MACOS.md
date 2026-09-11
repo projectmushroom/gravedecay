@@ -154,8 +154,22 @@ port; it never kills the other server. To switch from classic hosting, inspect
 This keeps classic data and Tailscale. To switch back, stop the app host before
 running the classic installer. Use one host implementation at a time.
 
-App updates replace the app bundle; the web dashboard does not invoke the
-classic companion updater. T3 and the web terminal are not installed or started
+App updates use Sparkle to verify and replace the complete app bundle. The
+native sidebar and web dashboard show an **Update now** action when a newer
+compatible release is available. Settings retains release selection. After
+confirmation, the update downloads, restarts the app, and restores hosting;
+phones briefly disconnect and then reload the new dashboard. A phone-triggered
+update does not wait for another confirmation on the host Mac. Only the owner
+can check or request updates through the web dashboard. Automatic checks do
+not download or install anything.
+
+The app's updater offers newer releases from its signed feed. Older releases
+remain explicit downloads in Settings; Sparkle prevents automatic downgrades.
+The first updater-enabled app needs one manual installation. Future releases
+publish a signed `appcast.xml` beside the DMG. The Mac doctor checks that the
+app updater is responding and reports the installed bundle version.
+
+T3 and the web terminal are not installed or started
 by the standalone app; the classic `--agents` installation remains available
 when those local services are needed. Remote graves' existing T3 and Terminal
 links remain usable from the native app.

@@ -9,6 +9,7 @@ import GravedecayKit
 /// The Mac product deliberately renders its own surfaces.  The only web
 /// destinations are explicit browser hand-offs to T3 and legacy dashboards.
 struct MacNativeContentView: View {
+    @ObservedObject private var updates = MacAppUpdates.shared
     @ObservedObject var graves: GraveMenuModel
     @ObservedObject var model: MacDashboardModel
     @ObservedObject var host: MacNativeHost
@@ -26,6 +27,10 @@ struct MacNativeContentView: View {
                     Button { selection = item.0 } label: { HStack { Text(selection == item.0 ? "[" : " "); Image(systemName: item.2); Text(item.1).tracking(1); Spacer(); Text(selection == item.0 ? "]" : " ") }.frame(height: 30) }.buttonStyle(.plain).foregroundStyle(selection == item.0 ? GraveTheme.amber : GraveTheme.muted)
                 }
                 Spacer()
+                if updates.available {
+                    Button("⬆ UPDATE \(updates.latest)") { updates.confirmInstall(updates.latest) }.buttonStyle(GraveButton())
+                }
+                if updates.busy { Text(updates.message).font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.amber) }
             }.padding(18).padding(.top, 22).frame(width: 210).background(GraveTheme.inset).overlay(alignment: .trailing) { Rectangle().fill(GraveTheme.ring).frame(width: 1) }
             VStack(spacing: 0) {
                 HStack { Text(title).font(.system(size: 14, weight: .bold, design: .monospaced)).tracking(1.4).foregroundStyle(GraveTheme.ink); Spacer(); if selection == .terminal || selection == .graveyard { GraveTargetPicker(graves: graves) }; if selection == .thisMac { Text(model.snapshot?.model ?? "SCANNING").font(.system(size: 10, design: .monospaced)).foregroundStyle(GraveTheme.muted) }; Button("↻ REFRESH") { model.refresh(); graves.refresh() }.buttonStyle(GraveButton()) }.padding(.horizontal, 22).frame(height: 54).background(GraveTheme.surface).overlay(alignment: .bottom) { Rectangle().fill(GraveTheme.ring).frame(height: 1) }
@@ -341,6 +346,7 @@ struct MacSettingsView: View {
                     Text("HOSTING CONTINUES WITH THE WINDOW CLOSED. QUITTING STOPS IT; LAUNCH AT LOGIN RESTORES IT AFTER SIGN-IN. LID CLOSE CAN STILL PUT THIS MAC TO SLEEP.").foregroundStyle(GraveTheme.muted)
                 }
             }
+            MacUpdatePanel()
             GravePanel("startup") { Toggle("LAUNCH AT LOGIN", isOn: Binding(get: { model.launchAtLogin }, set: { model.setLaunchAtLogin($0) })).toggleStyle(.switch).tint(GraveTheme.good); if let error = model.launchAtLoginError { Text(error).foregroundStyle(GraveTheme.crit) } }
             GravePanel("about") { Text("NATIVE REMOTE DASHBOARDS // T3 OPENS IN YOUR BROWSER").foregroundStyle(GraveTheme.muted) }
         }.font(.system(size: 10, design: .monospaced)).frame(maxWidth: 760).padding(24) }.background(GraveTheme.page).onAppear { root = model.workRoot }
@@ -561,5 +567,29 @@ private enum Keychain {
     static func value(account: String) -> String? { let query: [CFString: Any] = [kSecClass: kSecClassGenericPassword, kSecAttrService: "com.projectmushroom.gravedecay", kSecAttrAccount: account, kSecReturnData: true]; var item: CFTypeRef?; guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }; return String(data: data, encoding: .utf8) }
     static func set(_ value: String, account: String) -> Bool { let base: [CFString: Any] = [kSecClass: kSecClassGenericPassword, kSecAttrService: "com.projectmushroom.gravedecay", kSecAttrAccount: account]; let update = [kSecValueData: Data(value.utf8)] as CFDictionary; let status = SecItemUpdate(base as CFDictionary, update); if status == errSecSuccess { return true }; guard status == errSecItemNotFound else { return false }; var query = base; query[kSecValueData] = Data(value.utf8); return SecItemAdd(query as CFDictionary, nil) == errSecSuccess }
     static func remove(account: String) -> Bool { let query: [CFString: Any] = [kSecClass: kSecClassGenericPassword, kSecAttrService: "com.projectmushroom.gravedecay", kSecAttrAccount: account]; let status = SecItemDelete(query as CFDictionary); return status == errSecSuccess || status == errSecItemNotFound }
+}
+
+struct MacUpdatePanel: View {
+    @ObservedObject private var updates = MacAppUpdates.shared
+    @State private var selection = ""
+    var body: some View {
+        GravePanel("app updates") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("INSTALLED: \(updates.current)")
+                Text(updates.message).foregroundStyle(updates.state == "failed" ? GraveTheme.crit : GraveTheme.muted)
+                if !updates.releases.isEmpty {
+                    Picker("Release", selection: $selection) {
+                        Text("Latest release (\(updates.latest))").tag("")
+                        ForEach(updates.releases, id: \.self) { Text($0).tag($0) }
+                    }
+                    Button("UPDATE & RESTART") { updates.confirmInstall(selection.isEmpty ? updates.latest : selection) }
+                        .disabled(updates.busy).buttonStyle(GraveButton())
+                }
+                Button("CHECK FOR UPDATES") { updates.check() }.disabled(updates.busy).buttonStyle(GraveButton())
+                Link("DOWNLOAD OTHER RELEASES…", destination: URL(string: "https://github.com/projectmushroom/gravedecay/releases")!)
+                Text("OLDER RELEASES REQUIRE A MANUAL INSTALL. UPDATES BRIEFLY DISCONNECT DEVICES USING THIS MAC.").foregroundStyle(GraveTheme.muted)
+            }
+        }
+    }
 }
 #endif

@@ -2,6 +2,7 @@
 import json
 import os
 import platform
+import plistlib
 from pathlib import Path
 import select
 import shutil
@@ -24,7 +25,7 @@ class NativeHostTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         bundle = self.root / 'bundle'
         bundle.mkdir()
-        for name in ('gravedecay.py', 'gravenet.py', 'benchmark.py'):
+        for name in ('gravedecay.py', 'gravenet.py', 'benchmark.py', 'native_updates.py'):
             shutil.copy(ROOT / 'dashboard' / name, bundle / name)
         shutil.copy(ROOT / 'clients/apple/host/host.py', bundle / 'host.py')
         shutil.copytree(ROOT / 'dashboard/static', bundle / 'static')
@@ -33,6 +34,15 @@ class NativeHostTests(unittest.TestCase):
                         '--root', str(self.root / 'data')]
         app = os.environ.get('GRAVEDECAY_TEST_APP')
         if app:
+            info = plistlib.loads((Path(app) / 'Contents/Info.plist').read_bytes())
+            self.assertRegex(info['CFBundleVersion'], r'^[0-9]+\.[0-9]+\.[0-9]+$')
+            self.assertEqual(info['CFBundleVersion'], info['CFBundleShortVersionString'])
+            self.assertTrue(info['SUVerifyUpdateBeforeExtraction'])
+            self.assertTrue(info['SURequireSignedFeed'])
+            signature = subprocess.run(['codesign', '-dv', '--verbose=4', app], capture_output=True, text=True, check=True)
+            self.assertIn('runtime', signature.stderr)
+            entitlements = subprocess.run(['codesign', '-d', '--entitlements', ':-', app], capture_output=True, check=True)
+            self.assertTrue(plistlib.loads(entitlements.stdout)['com.apple.security.cs.disable-library-validation'])
             bundle = Path(app) / 'Contents/Resources/NativeHost'
             for architecture in ('aarch64', 'x86_64'):
                 self.assertTrue((bundle / architecture / 'python/bin/python3').is_file())
@@ -94,7 +104,24 @@ class NativeHostTests(unittest.TestCase):
             self.assertEqual(response.status, 200)
         with self.assertRaises(urllib.error.HTTPError) as raised:
             self.request(port, '/api/admin/upgrade', owner, b'{"channel":"release"}')
-        self.assertEqual(raised.exception.code, 404)
+        self.assertEqual(raised.exception.code, 503)
+        for path in ('/api/admin/releases', '/api/admin/update-status'):
+            with self.assertRaises(urllib.error.HTTPError) as raised:
+                self.request(port, path, {'Tailscale-User-Login': 'other@example.test'})
+            self.assertEqual(raised.exception.code, 403)
+        mailbox = self.root / 'data/updates'
+        mailbox.mkdir()
+        (mailbox / 'status.json').write_text(json.dumps({'state': 'idle', 'current': 'v0.28.0',
+            'releases': ['v0.29.0'], 'latest': 'v0.29.0', 'available': True}))
+        with self.request(port, '/api/admin/releases', owner) as response:
+            self.assertEqual(json.load(response)['latest'], 'v0.29.0')
+        with self.request(port, '/api/admin/upgrade', owner, b'{"tag":"v0.29.0"}') as response:
+            self.assertEqual(response.status, 202)
+        with self.request(port, '/api/admin/update-status', owner) as response:
+            self.assertEqual(json.load(response)['state'], 'queued')
+        with self.assertRaises(urllib.error.HTTPError) as raised:
+            self.request(port, '/api/admin/upgrade', owner, b'{"tag":"v0.29.0"}')
+        self.assertEqual(raised.exception.code, 409)
         self.assertEqual((self.root / 'data/config/secrets/dashboard-local-token').stat().st_mode & 0o777, 0o600)
         # No desktop refresh is involved: HTTP collection must advance on its own.
         time.sleep(5.1)

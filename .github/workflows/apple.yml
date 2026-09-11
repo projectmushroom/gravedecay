@@ -12,6 +12,7 @@ on:
       - "clients/macos-menubar/**"
       - "!clients/apple/**.md"
       - ".github/workflows/apple.yml"
+      - ".github/workflows/mac-release.yml"
   pull_request:
     paths:
       - "clients/apple/**"
@@ -20,6 +21,7 @@ on:
       - "clients/macos-menubar/**"
       - "!clients/apple/**.md"
       - ".github/workflows/apple.yml"
+      - ".github/workflows/mac-release.yml"
 
 jobs:
   # The protocol core is platform-independent — cheap Linux run first.
@@ -49,6 +51,10 @@ jobs:
       - name: Generate project
         working-directory: clients/apple
         run: xcodegen --spec project.yml
+      - name: Verify signed app update and relaunch
+        run: |
+          export SPARKLE_DIST=$(clients/apple/scripts/prepare-sparkle.sh)
+          python3 clients/apple/scripts/test-sparkle-update.py
       - name: Verify Universal 2 Release app
         working-directory: clients/apple
         run: |

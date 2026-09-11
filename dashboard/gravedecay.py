@@ -63,13 +63,10 @@ MACOS_GETS = frozenset((
     "/offline.html", "/apple-touch-icon.png", "/icon-180.png",
     "/icon-192.png", "/icon-512.png", "/icon-16.png", "/icon-32.png", "/favicon.ico",
 ) + (("/api/action-stream",) if MACOS_AGENTS else ()))
-MACOS_POSTS = frozenset(("/api/settings", "/api/admin/upgrade", "/api/admin/benchmark")
+MACOS_POSTS = frozenset(("/api/settings", "/api/admin/upgrade", "/api/admin/update-check", "/api/admin/benchmark")
                         + (("/api/action", "/api/session-kill", "/api/session-capture")
                            if MACOS_AGENTS else ()))
-# Native app updates replace the app bundle; never invoke the classic updater.
-if MACOS_NATIVE:
-    MACOS_GETS -= {"/api/admin/releases", "/api/admin/update-status"}
-    MACOS_POSTS -= {"/api/admin/upgrade"}
+# Native app update endpoints forward to Sparkle through a private mailbox.
 PORTABLE = PLATFORM in ("container", "portable")
 BIND_HOST = "0.0.0.0" if PORTABLE else "127.0.0.1"
 # tmux socket carrying the agent sessions. Single-user uses "agents"; a workspace
@@ -2910,6 +2907,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if self._forbidden():
                 return
+            if MACOS_NATIVE:
+                import native_updates
+                self._send(200, json.dumps(native_updates.status()))
+                return
             rc, out, err = sh([MACOS_GRAVE if MACOS else GRAVE, "releases", "--json"], timeout=30)
             if rc:
                 self._send(502, json.dumps({"ok": False, "output": ANSI.sub("", out + err)}))
@@ -2918,6 +2919,10 @@ class Handler(BaseHTTPRequestHandler):
         elif p == "/api/admin/update-status":
             if PORTABLE: self._send(404, '{"error":"unavailable in portable workspace"}'); return
             if self._forbidden(): return
+            if MACOS_NATIVE:
+                import native_updates
+                self._send(200, json.dumps(native_updates.status()))
+                return
             rc, out, err = sh([MACOS_GRAVE if MACOS else GRAVE, "update-status"], timeout=10)
             if rc:
                 self._send(502, json.dumps({"ok": False, "output": ANSI.sub("", out + err)})); return
@@ -3180,9 +3185,20 @@ class Handler(BaseHTTPRequestHandler):
                                "-t", "=" + name, "-S", "-2000"])
             self._send(200, json.dumps(
                 {"ok": rc == 0, "output": out if rc == 0 else out + err}))
+        elif p == "/api/admin/update-check":
+            if not MACOS_NATIVE:
+                self._send(404, '{"error":"unavailable"}'); return
+            import native_updates
+            code, result = native_updates.request(data, check=True)
+            self._send(code, json.dumps(result))
         elif p == "/api/admin/upgrade":
             if PORTABLE:
                 self._send(404, '{"error":"unavailable in portable workspace"}')
+                return
+            if MACOS_NATIVE:
+                import native_updates
+                code, result = native_updates.request(data)
+                self._send(code, json.dumps(result))
                 return
             if MACOS:
                 if set(data) == {"tag"} and isinstance(data["tag"], str) and re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", data["tag"]): cmd = [MACOS_GRAVE, "upgrade", "--tag", data["tag"]]

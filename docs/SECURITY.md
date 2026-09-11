@@ -58,9 +58,19 @@ people—not mutually hostile or public tenants.
    silently change the stored owner. The app refuses classic LaunchAgents
    and port collisions. It never changes Serve automatically. Runtime and
    web assets are bundled, with checksum-pinned Python downloads at build
-   time; installed apps download no runtime or code. App-private data is
+   time; starting the host requires no runtime download. App-private data is
    separate from classic companion data. Stdin lifetime ownership stops the
    child when its app exits; no LaunchAgent is installed.
+8. **Native Mac app updates** require an explicit action in the app or an
+   owner-authenticated, same-origin dashboard request. Sparkle 2 verifies the
+   signed feed and Ed25519 archive signature before extraction. Only releases
+   offered by the app can cross the private update mailbox; requests cannot
+   provide URLs or commands. The release private key stays in the maintainer's
+   Keychain and the `SPARKLE_PRIVATE_KEY` release secret. Current distribution
+   remains ad-hoc signed: library validation is disabled to load Sparkle's
+   framework without a Developer ID Team ID. This is separate from Sparkle
+   update signing and does not provide Apple notarization. The integration
+   test proves corrupt archives are rejected before an app can be replaced.
 
 ## T3 Connect (the one sanctioned exception to tailnet-only)
 

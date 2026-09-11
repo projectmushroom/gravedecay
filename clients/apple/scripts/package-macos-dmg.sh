@@ -18,7 +18,8 @@ cp -R "$APP" "$STAGE/Gravedecay.app"
 # Universal app. That is not a sealed app signature and must also be replaced.
 if ! signature=$(codesign -dv --verbose=4 "$STAGE/Gravedecay.app" 2>&1) ||
    printf '%s\n' "$signature" | grep -q 'linker-signed'; then
-  codesign --force --sign - "$STAGE/Gravedecay.app"
+  codesign --force --sign - --options runtime \
+    --entitlements "$ROOT/App/Generated/Gravedecay-macOS.entitlements" "$STAGE/Gravedecay.app"
 fi
 codesign --verify --deep --strict "$STAGE/Gravedecay.app"
 ln -s /Applications "$STAGE/Applications"

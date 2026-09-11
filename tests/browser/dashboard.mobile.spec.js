@@ -223,22 +223,54 @@ test('a polling refresh preserves the document scroll position', async ({ page }
 test.describe('update dialog API fixtures',()=>{
 test.use({serviceWorkers:'block'});
 test.afterEach(async({page})=>{await page.unrouteAll({behavior:'wait'});});
-async function mockUpdater(page, {mac=false}={}) {
+async function mockUpdater(page, {mac=false,native=false}={}) {
+  page.on('dialog', dialog=>dialog.accept());
   const fixture={state:'ok',attempt:'previous',dashboard_current:true,log:'previous update',requests:[]};
-  await page.route('**/api/admin/releases', route=>route.fulfill({json:{current:'v0.4.0',checkout:'v0.4.0',channel:mac?'edge':'release',releases:['v0.5.0','v0.4.0']}}));
+  await page.route('**/api/admin/releases', route=>route.fulfill({json:{current:'v0.4.0',checkout:'v0.4.0',channel:mac&&!native?'edge':'release',releases:['v0.5.0','v0.4.0'],available:true,latest:'v0.5.0'}}));
   await page.route('**/api/admin/update-status', route=>route.fulfill({json:{state:fixture.state,attempt:fixture.attempt,dashboard_current:fixture.dashboard_current,log:fixture.log,message:fixture.message,target:fixture.target}}));
   await page.route('**/api/admin/upgrade', route=>{
     const body=route.request().postDataJSON();fixture.requests.push(body);
     fixture.target=body.tag||(body.channel==='configured'?'release':body.channel);
     return route.fulfill({json:{ok:true}});
   });
-  const s=await page.evaluate(async()=>await(await fetch('api/state')).json());s.mode='developer';if(mac)s.platform='macos';
+  const s=await page.evaluate(async()=>await(await fetch('api/state')).json());s.mode='developer';if(mac)s.platform='macos';s.macos_native=native;
   await page.route('**/api/state',route=>route.fulfill({json:s}));await page.evaluate(s=>render(s),s);
   await page.locator('[data-tab="system"]').click();
   await page.locator('#update-open').click();
   await expect(page.getByRole('dialog',{name:/Updates & restart/})).toBeVisible();
   return fixture;
 }
+
+test('main dashboard offers the latest release and Settings keeps release selection',async({page})=>{
+  const fixture=await mockUpdater(page);
+  await page.locator('#update-close').click();
+  await expect(page.locator('#update-notice')).toContainText('v0.5.0');
+  await page.locator('#quick-update').click();
+  await expect.poll(()=>fixture.requests).toEqual([{tag:'v0.5.0'}]);
+});
+
+test('native Mac dashboard can update remotely and exposes other releases from Settings',async({page})=>{
+  const fixture=await mockUpdater(page,{mac:true,native:true});
+  await expect(page.locator('#native-release-help')).toContainText('Mac app');
+  await page.locator('#update-close').click();
+  await page.locator('#gear').click();
+  await page.locator('#settings-update-open').click();
+  await expect(page.locator('#grave-release')).toBeVisible();
+  await page.locator('#update-close').click();
+  await page.locator('#settings-x').click();
+  await page.locator('#quick-update').click();
+  await expect.poll(()=>fixture.requests).toEqual([{tag:'v0.5.0'}]);
+});
+
+test('cancelling the quick update sends no update request',async({page})=>{
+  const fixture=await mockUpdater(page);
+  await page.locator('#update-close').click();
+  page.removeAllListeners('dialog');
+  page.on('dialog',dialog=>dialog.dismiss());
+  await page.locator('#quick-update').click();
+  expect(fixture.requests).toEqual([]);
+  await expect(page.locator('#update-dialog')).not.toBeVisible();
+});
 
 test('one update dialog queues exact releases and never mistakes an old success for completion',async({page})=>{
   const x=await mockUpdater(page);
