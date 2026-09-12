@@ -88,6 +88,8 @@ echo "=== phase 3: headless re-raise — the gravedecay-upgrade.service path (#8
 # Same-version re-raises skip CLI installation and cannot catch a missing
 # privilege for real upgrades. Change both source CLIs with sudo restricted.
 as_mole bash -c 'printf "\n# e2e changed CLI\n" >> /repo/bin/grave; printf "\n# e2e changed CLI\n" >> /repo/bin/grave-workspaces'
+as_mole git -c user.name=appliance-test -c user.email=appliance@example.test \
+  -c commit.gpgsign=false commit -qm 'e2e next CLI release' -- bin/grave bin/grave-workspaces
 # traced: when this phase fails, the xtrace names the exact command that
 # asked for a password — no journal archaeology
 if ! as_mole bash -c 'bash -x ./raise.sh --profile generic </dev/null 2>/tmp/raise-phase3.trace'; then
