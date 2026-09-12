@@ -118,9 +118,11 @@ exec "$@"
         sudo.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$SUDO_TEST_LOG"\nexit 1\n')
         sudo.chmod(0o755)
         funcs = RAISE[RAISE.index('same_file() {'):RAISE.index('provision_agent_hooks() {')]
+        funcs = funcs.replace('/usr/local/bin/', str(self.bin) + '/')
+        self.grave.write_text('#!/usr/bin/env bash\n# old CLI without the installer helper\nexit 1\n')
         env = dict(self.env, PATH=str(tools) + ':' + os.environ['PATH'], IMMUTABLE='0',
                    GRAVE_BIN=str(self.grave), RUN_USER='test', REPO_DIR=str(self.root), SUDO_TEST_LOG=str(log))
-        result = subprocess.run(['bash', '-c', 'set -euo pipefail\n' + funcs + '\ninstall_cli "$1" /usr/local/bin/grave',
+        result = subprocess.run(['bash', '-c', 'set -euo pipefail\n' + funcs + '\ninstall_cli "$1" "$GRAVE_BIN"',
                                  'test', str(ROOT / 'bin/grave')], stdin=subprocess.DEVNULL,
                                 env=env, capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
