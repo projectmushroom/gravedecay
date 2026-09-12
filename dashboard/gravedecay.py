@@ -3259,6 +3259,12 @@ if __name__ == "__main__":
                 sys.exit("headerless dashboard request unexpectedly authorized")
         with maintenance_request("/api/auth-check") as response:
             assert response.status == 200
+        # Keep local app navigation inside one installed PWA. Another plot's
+        # origin necessarily uses the browser's external-navigation UI.
+        with maintenance_request("/manifest.webmanifest") as response:
+            manifest = json.load(response)
+            assert manifest["scope"] == "/" and manifest["display"] == "standalone", "PWA must own the local app origin"
+            assert manifest["start_url"] == "./" and manifest["id"] == f"{BASE or '/grave'}/", "PWA must launch at this dashboard"
         for size in (180, 192, 512):
             with maintenance_request(f"/icon-{size}.png") as response:
                 png = response.read(24)

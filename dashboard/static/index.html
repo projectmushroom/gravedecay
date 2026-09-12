@@ -353,16 +353,47 @@ body.portable #mode,body.portable .tabs,body.portable #keepalive-head,body.porta
 body.portable #boot-mode-head,body.portable #boot-mode-row,body.portable #throttle-head,
 body.portable #throttle-row,body.portable .t3connect-only,body.portable #notify-head,
 body.portable #sec-notify{display:none!important}
-.graveyard-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0}
-#plot-context{margin:10px 0;overflow-wrap:anywhere}
-#graveyard summary{cursor:pointer;font-weight:700;color:var(--ink)}
-#graveyard-plots{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:10px}
-.plot-card{padding:12px;border:1px solid var(--ring);border-left-width:4px;min-width:0;overflow-wrap:anywhere}
-.plot-card h3{font-size:14px;margin:0 0 8px}.plot-card p{margin:6px 0}
-.plot-links{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
-.plot-links a{padding:8px;border:1px solid var(--ring);text-decoration:none}
-#plot-picker{max-width:100%;min-height:44px;flex:1;min-width:0;padding:8px;
-  background:var(--surface);color:var(--ink);border:1px solid var(--ring);font:inherit}
+#graveyard-toggle{display:flex;align-items:center;gap:12px;width:100%;min-width:0;
+  text-align:left;padding:8px 12px;margin-bottom:14px;background:var(--surface)}
+#graveyard-toggle:hover{background:var(--inset);border-color:var(--ink-2);color:var(--ink)}
+.graveyard-current{flex:1;min-width:0}
+.graveyard-label{display:block;font-size:11px;color:var(--ink-2);font-weight:400}
+#plot-context{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:22px}
+.graveyard-switch{flex:none;color:var(--accent)}
+#graveyard-dialog{padding:0;width:calc(100% - 16px);max-width:620px;max-height:85vh;
+  max-height:min(85dvh,760px);overflow:hidden}
+#graveyard-dialog[open]{display:flex;flex-direction:column}
+.graveyard-heading{display:flex;align-items:center;gap:10px;padding:12px 14px 0;flex:none}
+.graveyard-heading h2{flex:1;font-size:16px;color:var(--ink)}
+#graveyard-close{padding:8px 12px}
+.graveyard-head{display:flex;align-items:center;gap:8px;padding:10px 14px;flex:none}
+#graveyard-search{width:100%;min-height:44px;flex:1;min-width:0;padding:8px;
+  background:var(--inset);color:var(--ink);border:1px solid var(--ring);font:inherit;font-size:16px}
+#graveyard-refresh{padding:8px 12px}
+.graveyard-body{overflow:auto;overscroll-behavior:contain;padding:0 14px 14px;min-height:0}
+#graveyard-status,#graveyard-pwa-note,#graveyard-empty{font-size:12px;margin-bottom:10px}
+#graveyard-plots{display:grid;gap:8px}
+.plot-card{padding:10px;border:1px solid var(--ring);border-left-width:4px;min-width:0;overflow-wrap:anywhere}
+.plot-card[hidden]{display:none}
+.plot-heading{display:flex;align-items:center;gap:8px;min-width:0}
+.plot-card h3{font-size:14px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.plot-here{font-size:11px;flex:none;color:var(--ink-2)}
+.plot-status{font-size:12px;margin:3px 0 8px;color:var(--ink-2)}
+.plot-status.warn{color:var(--warn)}
+.plot-actions,.plot-links{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.plot-actions>button{margin-left:auto}
+.plot-links a{display:inline-flex;align-items:center;gap:5px;min-height:44px;padding:8px 10px;
+  border:1px solid var(--ring);text-decoration:none;font-size:13px}
+.plot-links a.plot-primary{border-color:var(--accent)}
+.plot-actions button{padding:8px;font-size:12px;font-weight:400}
+.plot-detail{border-top:1px dashed var(--ring);margin-top:8px;padding-top:8px;font-size:12px}
+.plot-detail p{margin-bottom:6px}.plot-detail .plot-links{margin-top:8px}
+#graveyard-toggle:focus-visible,#graveyard-dialog :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media(max-width:360px){
+  .plot-actions,.plot-actions .plot-links{gap:4px}
+  .plot-actions .plot-links a{padding:8px 6px;font-size:12px}
+  .plot-actions button{padding:8px 6px}
+}
 </style></head><body>
 <div id="topcover"></div>
 <div class="topbar">
@@ -374,16 +405,27 @@ body.portable #sec-notify{display:none!important}
 </div>
 <div id="connection" role="status" aria-live="polite"><span id="connection-text"></span>
   <button id="connection-retry">↻ retry</button></div>
-<details class="panel" id="graveyard" open>
-  <summary>🪦 Graveyard — your plots</summary>
-  <div class="graveyard-head">
-    <select id="plot-picker" aria-label="Plot"><option value="">All plots</option></select>
-    <button id="graveyard-refresh" aria-label="Refresh plots">↻ Refresh</button>
+<button id="graveyard-toggle" aria-haspopup="dialog" aria-controls="graveyard-dialog" aria-expanded="false">
+  <span class="graveyard-current"><span class="graveyard-label">🪦 Graveyard<span id="graveyard-count"></span></span>
+    <span id="plot-context" aria-label="Current appliance">@HOST@</span></span>
+  <span class="graveyard-switch">Switch ▾</span>
+</button>
+<dialog class="dlg" id="graveyard-dialog" aria-labelledby="graveyard-title">
+  <div class="graveyard-heading">
+    <h2 id="graveyard-title">🪦 Graveyard</h2>
+    <button id="graveyard-close" aria-label="Close Graveyard" autofocus>✕</button>
   </div>
-  <p id="graveyard-status" class="dim" role="status">Discovering plots…</p>
-  <div id="graveyard-plots"></div>
-</details>
-<div id="plot-context" class="dim" aria-label="Current appliance"></div>
+  <div class="graveyard-head">
+    <input id="graveyard-search" type="search" placeholder="Find a grave…" aria-label="Find a grave" autocomplete="off">
+    <button id="graveyard-refresh" aria-label="Refresh plots" title="Refresh plots">↻</button>
+  </div>
+  <div class="graveyard-body">
+    <p id="graveyard-status" class="dim" role="status">Discovering graves…</p>
+    <p id="graveyard-pwa-note" class="dim" hidden>↗ Other graves open in a browser view. Close that view to return here.</p>
+    <p id="graveyard-empty" role="status" hidden>No graves match your search.</p>
+    <div id="graveyard-plots"></div>
+  </div>
+</dialog>
 <div id="update-notice" hidden role="status">
   <span id="update-notice-text"></span>
   <button id="quick-update">⬆ Update now</button>
@@ -717,7 +759,7 @@ $('epitaph').textContent=[
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 // Only sanitized summaries are remembered in this browser, per dashboard
 // origin. Reachability is never persisted or inferred from a saved summary.
-let savedPlots=[],selectedPlot='',graveyardBusy=false,graveyardAuthorized=false,graveyardTimer,graveyardChecking=false;
+let savedPlots=[],graveyardBusy=false,graveyardAuthorized=false,graveyardTimer,graveyardChecking=false;
 function validPlot(plot){
   return plot&&typeof plot.id==='string'&&plot.id.length>0&&plot.id.length<=256&&
     typeof plot.dns==='string'&&plot.dns.length<=253&&/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(plot.dns)&&
@@ -728,10 +770,9 @@ function validPlot(plot){
 try{
   const saved=JSON.parse(localStorage.getItem('graveyard-plots-v1')||'{}');
   savedPlots=(Array.isArray(saved.plots)?saved.plots:[]).filter(validPlot).slice(0,128).map(p=>({...p,reachable:false}));
-  selectedPlot=typeof saved.selected==='string'?saved.selected:'';
 }catch(_){}
 function rememberPlots(){
-  try{localStorage.setItem('graveyard-plots-v1',JSON.stringify({selected:selectedPlot,plots:savedPlots.map(({reachable,...p})=>p)}));}catch(_){$('graveyard-status').textContent='Browser storage unavailable — plots are remembered until this page closes.';}
+  try{localStorage.setItem('graveyard-plots-v1',JSON.stringify({plots:savedPlots.map(({reachable,...p})=>p)}));}catch(_){$('graveyard-status').textContent='Browser storage unavailable — plots are remembered until this page closes.';}
 }
 function plotLink(plot,key){
   const path=plot.summary.links[key];
@@ -754,31 +795,84 @@ function plotConnection(p,checking=false){
 function renderGraveyard(message,checking=graveyardChecking){
   graveyardChecking=checking;
   $('graveyard-status').textContent=message;
-  $('plot-picker').innerHTML='<option value="">All plots</option>'+savedPlots.map(p=>`<option value="${esc(p.id)}">${plotIcon(p.summary.node.platform)} ${esc(p.name)}${p.reachable?'':' · unreachable'}</option>`).join('');
-  $('plot-picker').value=selectedPlot;
-  $('plot-picker').style.borderColor=selectedPlot?plotAccent(savedPlots.find(p=>p.id===selectedPlot)?.dns||''):'';
-  const plots=selectedPlot?savedPlots.filter(p=>p.id===selectedPlot):savedPlots;
-  $('graveyard-plots').innerHTML=plots.map(p=>{
+  $('graveyard-count').textContent=savedPlots.length?` · ${savedPlots.length}`:'';
+  const expanded=new Set([...document.querySelectorAll('[data-plot-details][aria-expanded="true"]')].map(b=>b.closest('[data-plot]').dataset.plot));
+  const focused=document.activeElement,focusPlot=focused?.closest('[data-plot]')?.dataset.plot,focusAction=focused?.dataset.plotAction;
+  const plots=[...savedPlots].sort((a,b)=>Number(b.dns===location.hostname)-Number(a.dns===location.hostname)||a.name.localeCompare(b.name)||a.dns.localeCompare(b.dns));
+  $('graveyard-plots').innerHTML=plots.map((p,index)=>{
     const s=p.summary,problems=(s.health.services_failed||0)+(s.health.containers_problem||0);
     const age=Math.max(0,Math.floor((Date.now()/1000-p.lastSeen)/60));
-    const links=['dashboard','t3','t3_setup','terminal','network'].map(key=>{
-      const url=plotLink(p,key);return !checking&&p.reachable&&url?`<a href="${esc(url)}" rel="noreferrer">${{dashboard:'Dashboard',t3:'T3',t3_setup:'Set up T3',terminal:'Terminal',network:'Network'}[key]}</a>`:'';
-    }).join('');
+    const here=p.dns===location.hostname,open=expanded.has(p.id),detailsId=`plot-detail-${index}`;
+    const link=key=>{
+      const url=plotLink(p,key);if(checking||!p.reachable||!url)return '';
+      // Plain top-level navigation: local apps stay in scope; another origin
+      // uses the installed browser's handoff (iOS Safari View Controller).
+      // Never iframe a remote dashboard or copy credentials between plots.
+      const remote=new URL(url).origin!==location.origin;
+      return `<a href="${esc(url)}" target="_self" rel="noreferrer" data-plot-action="${key}"${key==='dashboard'?' class="plot-primary"':''}>${{dashboard:here?'Dashboard':'Open grave',t3:'T3',t3_setup:'Set up T3',terminal:'Terminal',network:'Network'}[key]}${remote?'<span aria-label="another grave">↗</span>':''}</a>`;
+    };
     const percent=n=>typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=100?`${Math.round(n)}%`:'—';
-    return `<article class="plot-card" data-plot="${esc(p.id)}" style="border-left-color:${plotAccent(p.dns)}"><h3 style="color:${plotAccent(p.dns)}">${plotIcon(s.node.platform)} ${esc(p.name)}</h3>
-      <p class="dim">${esc(p.dns)}</p>
-      <p>${esc(plotConnection(p,checking))}</p>
-      <p>${esc(s.node.platform)}${problems?' · Needs attention':''}</p>
-      ${p.reachable?`<p class="dim">CPU ${percent(s.resources.cpu_pct)} · Memory ${percent(s.resources.memory_pct)} · Disk ${percent(s.resources.disk_pct)}</p>`:''}
-      <p class="dim">${p.reachable?`${esc(s.activity.sessions_live??'—')} live sessions · ${esc(problems)} problems`:`Last seen ${age<1?'just now':age<60?age+'m ago':Math.floor(age/60)+'h ago'}`}</p>
-      <div class="plot-links">${links}${!p.reachable?`<button data-forget-plot="${esc(p.id)}">Forget plot</button>`:''}</div></article>`;
+    const status=checking?'Checking connection…':!p.reachable?'Unreachable':`Reachable${problems?` · ${problems} problem${problems===1?'':'s'}`:''}${['failed','stopped','starting'].includes(s.health.t3)?` · T3 ${s.health.t3}`:''}`;
+    return `<article class="plot-card" data-plot="${esc(p.id)}" style="border-left-color:${plotAccent(p.dns)}">
+      <div class="plot-heading"><h3 title="${esc(p.name)}" style="color:${plotAccent(p.dns)}">${plotIcon(s.node.platform)} ${esc(p.name)}</h3>${here?'<span class="plot-here">This grave</span>':''}</div>
+      <p class="plot-status${!checking&&(!p.reachable||problems||s.health.t3==='failed')?' warn':''}">${esc(status)}</p>
+      <div class="plot-actions"><div class="plot-links">${link('dashboard')}${link('t3')}</div>
+        <button data-plot-details data-plot-action="details" aria-expanded="${open}" aria-controls="${detailsId}">Details ${open?'▴':'▾'}</button></div>
+      <div class="plot-detail" id="${detailsId}"${open?'':' hidden'}>
+        <p>${esc(p.name)}</p><p class="dim">${esc(p.dns)} · ${esc(s.node.platform)}</p>
+        <p>${esc(plotConnection(p,checking))}</p>
+        ${!checking&&p.reachable?`<p class="dim">CPU ${percent(s.resources.cpu_pct)} · Memory ${percent(s.resources.memory_pct)} · Disk ${percent(s.resources.disk_pct)}</p>`:''}
+        <p class="dim">${!checking&&p.reachable?`${esc(s.activity.sessions_live??'—')} live sessions · ${esc(problems)} problems`:`Last seen ${age<1?'just now':age<60?age+'m ago':Math.floor(age/60)+'h ago'}`}</p>
+        <div class="plot-links">${link('terminal')}${link('network')}${link('t3_setup')}${!checking&&!p.reachable?`<button data-forget-plot="${esc(p.id)}" data-plot-action="forget">Forget plot</button>`:''}</div>
+      </div></article>`;
   }).join('');
+  filterGraveyard();
+  if(focusPlot){
+    const card=[...document.querySelectorAll('[data-plot]')].find(c=>c.dataset.plot===focusPlot);
+    const target=[...(card?.querySelectorAll('[data-plot-action]')||[])].find(a=>a.dataset.plotAction===focusAction);
+    (target||card?.querySelector('[data-plot-details]')||$('graveyard-refresh')).focus({preventScroll:true});
+  }
 }
-$('plot-picker').onchange=()=>{selectedPlot=$('plot-picker').value;rememberPlots();renderGraveyard($('graveyard-status').textContent);};
+function filterGraveyard(){
+  const query=$('graveyard-search').value.trim().toLowerCase();
+  let matches=0;
+  document.querySelectorAll('[data-plot]').forEach(card=>{
+    const p=savedPlots.find(p=>p.id===card.dataset.plot);
+    card.hidden=!`${p.name} ${p.dns}`.toLowerCase().includes(query);
+    if(!card.hidden)matches++;
+  });
+  $('graveyard-empty').hidden=!graveyardAuthorized||!query||matches>0;
+}
+$('graveyard-search').oninput=filterGraveyard;
+$('graveyard-toggle').onclick=()=>{
+  $('graveyard-pwa-note').hidden=!(navigator.standalone||matchMedia('(display-mode: standalone)').matches);
+  $('graveyard-dialog').showModal();lockBody();
+  $('graveyard-toggle').setAttribute('aria-expanded','true');
+};
+$('graveyard-close').onclick=()=>$('graveyard-dialog').close();
+$('graveyard-dialog').addEventListener('close',()=>{
+  $('graveyard-toggle').setAttribute('aria-expanded','false');unlockBody();$('graveyard-toggle').focus({preventScroll:true});
+});
+$('graveyard-dialog').addEventListener('click',e=>{
+  if(e.target!==e.currentTarget)return;
+  const r=e.currentTarget.getBoundingClientRect();
+  if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)e.currentTarget.close();
+});
 $('graveyard-plots').onclick=e=>{
+  const anchor=e.target.closest('a');
+  if(anchor&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey&&!e.altKey&&e.button===0&&new URL(anchor.href).origin===location.origin){
+    // In-page setup opens the settings overlay, which must not remain behind
+    // this top-layer dialog. Remote handoffs keep the switcher ready on return.
+    $('graveyard-dialog').close();return;
+  }
+  const details=e.target.closest('[data-plot-details]');
+  if(details){
+    const open=details.getAttribute('aria-expanded')!=='true';
+    details.setAttribute('aria-expanded',String(open));details.textContent=`Details ${open?'▴':'▾'}`;
+    $(details.getAttribute('aria-controls')).hidden=!open;return;
+  }
   const button=e.target.closest('[data-forget-plot]');if(!button)return;
   savedPlots=savedPlots.filter(p=>p.id!==button.dataset.forgetPlot);
-  if(selectedPlot===button.dataset.forgetPlot)selectedPlot='';
   rememberPlots();renderGraveyard($('graveyard-status').textContent);
 };
 async function refreshGraveyard(){
@@ -790,7 +884,7 @@ async function refreshGraveyard(){
     if(response.status===401||response.status===403){
       graveyardAuthorized=false;
       savedPlots=savedPlots.map(p=>({...p,reachable:false}));
-      $('graveyard-plots').replaceChildren();$('plot-picker').replaceChildren();
+      $('graveyard-plots').replaceChildren();$('graveyard-count').textContent='';$('graveyard-empty').hidden=true;
       $('graveyard-status').textContent='Sign in as the appliance owner to view plots.';return;
     }
     if(!response.ok)throw new Error('unavailable');
@@ -805,7 +899,7 @@ async function refreshGraveyard(){
       rememberPlots();
     }else delay=2000;
     const messages={scanning:'Checking plots…',unsupported:'Discovery needs a single-owner Linux or macOS appliance.',unavailable:'Tailscale discovery unavailable.', 'tailscale-unavailable':'Connect this appliance to Tailscale to discover plots.'};
-    renderGraveyard(messages[data.state]||(data.limited?'Showing the first 64 tailnet devices.':savedPlots.length?'Choose a plot to open its apps.':'No plots found on this tailnet yet.'),data.state==='scanning');
+    renderGraveyard(messages[data.state]||(data.limited?'Showing the first 64 tailnet devices.':savedPlots.length?'Open a grave or jump straight to T3.':'No graves found on this tailnet yet.'),data.state==='scanning');
   }catch(_){savedPlots=savedPlots.map(p=>({...p,reachable:false}));if(graveyardAuthorized)renderGraveyard('Connection unavailable — showing saved plots.',false);else $('graveyard-status').textContent='Connect to this appliance to view plots.';}
   finally{graveyardBusy=false;graveyardTimer=setTimeout(refreshGraveyard,delay);}
 }
@@ -916,7 +1010,7 @@ function showReleaseNotice(data){
   })[0]||'';
   if(nativeMacHost)latestGraveRelease=data.available?data.latest||'':'';
   $('update-notice').hidden=!latestGraveRelease;
-  $('update-notice-text').textContent=`${latestGraveRelease} is available for ${$('plot-context').textContent.replace(/^.*Managing /,'')}`;
+  $('update-notice-text').textContent=`${latestGraveRelease} is available for ${$('plot-context').title.replace(/^Managing /,'')}`;
   $('quick-update').disabled=!!updatePending;
 }
 async function pollReleaseNotice(){
@@ -1121,7 +1215,7 @@ $('reload-dashboard').onclick=()=>location.reload();
 $('install-grave-release').onclick=()=>applyGraveUpdate($('grave-release').value);
 async function applyGraveUpdate(selection){
   if(!selection||updatePending)return;
-  if(!confirm(`Update ${$('plot-context').textContent} to ${selection==='configured'?'the configured release':selection}? ${nativeMacHost?'The Mac app will restart. ':''}This dashboard will briefly disconnect and reload.`))return;
+  if(!confirm(`Update ${$('plot-context').title.replace(/^Managing /,'')} to ${selection==='configured'?'the configured release':selection}? ${nativeMacHost?'The Mac app will restart. ':''}This dashboard will briefly disconnect and reload.`))return;
   if(!$('update-dialog').open){$('update-dialog').showModal();lockBody();}
   updateControls(true);
   try{
@@ -1179,7 +1273,8 @@ function render(s){
   nativeMacHost=!!s.macos_native;
   document.body.classList.toggle('macagents',macosCompanion&&!!s.macos_agents);
   document.body.classList.toggle('portable',portableCompanion);
-  $('plot-context').textContent=`${plotIcon(s.platform||'linux')} Managing ${s.host} · ${location.hostname}`;
+  $('plot-context').textContent=`${plotIcon(s.platform||'linux')} ${s.host}`;
+  $('plot-context').title=`Managing ${s.host} · ${location.hostname}`;
   $('plot-context').style.color=plotAccent(location.hostname);
   $('t3-setup').textContent=`Set up T3 · ${s.host}`;
   $('t3-setup').style.color=plotAccent(location.hostname);

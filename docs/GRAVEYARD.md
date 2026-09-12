@@ -6,10 +6,17 @@ credentials, and services remain on their original plot.
 
 ## Using it
 
-- Web dashboard: open **Graveyard — your plots**, above the launcher. **All
-  plots** shows the overview; the plot picker narrows it to one appliance.
-  Dashboard, T3, Terminal, and Network links open that plot's advertised apps.
-  CPU, memory, and disk percentages show the latest reachable summary.
+- Web dashboard: the compact **Graveyard / Switch** row above the launcher
+  identifies the machine currently being managed and counts remembered graves.
+  Tap it to open a scrollable switcher; it starts closed on every page load.
+  Search by name or DNS address. **Open grave** opens that dashboard; **T3**
+  jumps directly to its advertised T3 app. The current machine appears first
+  with **This grave** when its discovered DNS matches the dashboard hostname.
+  Connection state and reported problems stay visible. **Details** reveals the
+  full name/address, T3 service state, CPU/memory/disk, sessions, Terminal,
+  Network, and pairing setup. Refresh preserves the search and expanded details.
+  Close, Escape, or tapping outside returns to the launcher. Merely searching
+  or inspecting a grave never changes the machine being managed.
 - **Set up T3** opens the selected plot's dashboard at its pairing controls
   in web, macOS, and Omarchy. Create a fresh link there and add it as an
   environment in the official T3 app. Opening setup never creates a token;
@@ -21,11 +28,15 @@ credentials, and services remain on their original plot.
   still describe the local Mac.
 - Omarchy: open the Graveyard widget for the plot list, picker, and links.
 
+Mobile previews with fixture data: [collapsed switcher](../assets/graveyard-closed.png)
+and [open Graveyard](../assets/graveyard-switcher.png).
+
 Plots keep their discovered name, platform icon, and an accent derived from
 their normalized DNS address across refreshes and client restarts. The same
 address gets the same accent in web, macOS, and Omarchy. The palette is finite:
-colours can repeat, so the name and DNS address remain visible. Renaming the
-DNS address may change its colour; saved selection still uses the node ID.
+colours can repeat, so the web switcher's Details always includes the full
+name and DNS address (native clients show these in their overview). Renaming the
+DNS address may change its colour; native clients' saved selection still uses the node ID.
 The destination web dashboard labels the machine being managed and uses its
 own hostname/address for pairing controls, never an identity supplied by a
 link from another plot.
@@ -42,15 +53,33 @@ machine. Old summaries and unsupported supervisors explicitly show unknown.
 Only appliances returning a validated v1 summary are remembered. Unreachable
 plots remain listed after a refresh or client restart, with the last successful
 observation time. Saved metrics are historical, never evidence that a plot is
-online. An unavailable selected plot stays selected; it does not redirect to a
-different machine. **Forget plot** removes an unreachable entry from this
-client; discovery can add it again when it returns.
+online. An unavailable plot stays listed; it does not redirect to a
+different machine. **Forget plot**, under web Details, removes an unreachable
+entry from this client; discovery can add it again when it returns.
 
 Discovery refreshes roughly every 45 seconds, probing at most 64 online
 Tailscale nodes with up to eight requests at once. Requests have bounded
 timeouts and a 64 KiB summary limit. Each inventory holds at most 128 plots.
 Client devices must be able to reach a destination themselves to open its apps;
 the web overview reports reachability from its hosting appliance.
+
+## Installed PWA navigation
+
+Install from `/grave/`. Its manifest covers `/` on that **one origin**, so
+local Dashboard, T3, Terminal, and Network links use the current app view.
+Graveyard uses ordinary `target="_self"` links, with no popup or iframe.
+Links to another origin carry **↗**; the installed switcher also explains how
+to return. On iPhone/iPad, another grave's hostname is outside the installed
+app's scope, so iOS opens a Safari browser sheet. Close that sheet to return
+to the original Graveyard. Other browsers may use a tab or another external
+navigation surface. This is browser behavior, not a second installed PWA.
+See [Apple's web app navigation guidance](https://developer.apple.com/videos/play/wwdc2023/10120/)
+and the [manifest scope reference](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Manifest/Reference/scope).
+
+One installation remains a launcher for all reachable graves, but cannot
+make different hostnames share its standalone scope on iOS. Each destination
+keeps its own authentication and pairing. We do not proxy private apps or
+embed remote dashboards to disguise that boundary.
 
 ## Storage and access
 
@@ -78,10 +107,10 @@ contract, subject to each destination's access checks.
 Graveyard endpoint denies headerless inventory reads and that authenticated
 responses have the expected shape, `no-store`, and no CORS header. Offline
 peers do not fail doctor. It also checks that the local summary advertises T3
-setup on the dashboard only when it advertises T3. Re-raise Linux or rerun the
-macOS installer to apply
-the updated dashboard; rebuild the native app or update the Omarchy plugin for
-their saved inventories.
+setup on the dashboard only when it advertises T3, and verifies the installed
+PWA's root scope, standalone display, dashboard identity and launch URL.
+Re-raise Linux or rerun the macOS installer to apply the updated dashboard;
+rebuild the native app or update the Omarchy plugin for their saved inventories.
 
 ## Current scope
 
