@@ -99,11 +99,10 @@ wait_http() {
 }
 # A steady-state re-raise IS the upgrade path: gravedecay-upgrade.service runs
 # this script headless, where any sudo outside the scoped NOPASSWD set dies at
-# a password prompt it can't answer (#89). Every privileged write therefore
-# goes through a compare-first guard — when nothing changed, no sudo happens,
-# and the only privileges an upgrade needs are the already-granted systemctl /
-# docker / tee-into-/etc/systemd/system set. First raise (fresh box) still
-# prompts interactively; that is the one run a human is present for.
+# a password prompt it can't answer (#89). Compare-first guards avoid writes
+# when nothing changed. Changed CLIs use the installed grave root helper;
+# services use the existing systemctl / tee grants. Fresh installs and older
+# CLIs without the helper need an interactive bootstrap once.
 same_file() { # both readable and byte-identical. sha256sum is coreutils —
   # guaranteed — while cmp is diffutils, which Arch's `base` meta-package
   # does NOT include: a swallowed `cmp: command not found` read as "differs"
@@ -120,11 +119,21 @@ install_unit() { # install_unit <path under /etc/systemd/system>  (rendered file
   sudo tee "$dest" <"$tmp" >/dev/null
   rm -f "$tmp"
 }
-install_cli() { # install_cli <src> <dest> — sudo only when content differs
+install_cli() { # install_cli <src> <dest> — changed CLIs must work headless too
   same_file "$1" "$2" && return 0
   if [[ "$IMMUTABLE" == 1 ]]; then
     install -m 755 "$1" "$2"      # ~/.local/bin — user-owned, no sudo
+  elif sudo -n "$GRAVE_BIN" __install-cli --check >/dev/null 2>&1; then
+    [[ "$2" == /usr/local/bin/grave || "$2" == /usr/local/bin/grave-workspaces ]] || {
+      echo "unsupported privileged CLI destination: $2"; return 1;
+    }
+    sudo -n "$GRAVE_BIN" __install-cli "${2##*/}" <"$1"
   else
+    if [[ ! -t 0 ]] && ! sudo -n true >/dev/null 2>&1; then
+      echo "Headless CLI updates need a one-time interactive repair."
+      echo "In a terminal as $RUN_USER, run: sudo -v && bash $REPO_DIR/raise.sh"
+      return 1
+    fi
     sudo install -m 755 "$1" "$2"
   fi
 }

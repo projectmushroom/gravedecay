@@ -172,6 +172,16 @@ root-equivalent for *your* user (systemctl alone gets you there); the point is
 convenience for a single-human box, not privilege separation. If your box has
 other human users, tighten it.
 
+On mutable Linux hosts, the root-owned `grave __install-cli` helper uses that
+existing grant to replace only `/usr/local/bin/grave` and
+`/usr/local/bin/grave-workspaces`. The owner streams the new script on stdin;
+the helper accepts no source path or arbitrary destination. It limits input
+to 4 MiB, validates script type and syntax without executing it, then renames
+a temporary executable in the destination directory over the old file. Failed
+validation preserves the installed executable. This remains an administrator
+capability: syntax validation does not make owner-supplied code trusted for
+unprivileged collaborators. No general `sudo install` permission is added.
+
 ## The web terminal
 
 The following shared-terminal behavior applies only to default single-user

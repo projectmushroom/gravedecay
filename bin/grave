@@ -1307,6 +1307,34 @@ cmd_releases() { # grave releases [--json] — list selectable stable releases
   fi
 }
 
+cmd_install_cli_root() (
+  # The appliance owner already has scoped sudo for this root-owned CLI.
+  # Accept bytes on stdin, never an arbitrary root-readable source path or
+  # destination. Keep the old executable intact until validation succeeds.
+  [[ $EUID == 0 ]] || { bad "internal CLI installer requires root"; exit 1; }
+  [[ $# == 1 ]] || { bad "expected one CLI name"; exit 1; }
+  case "$1" in
+    --check) exit 0 ;;
+    grave|grave-workspaces) ;;
+    *) bad "CLI installation is limited to grave and grave-workspaces"; exit 1 ;;
+  esac
+  local dest="/usr/local/bin/$1" tmp size
+  tmp=$(mktemp /usr/local/bin/.gravedecay-install.XXXXXX)
+  trap 'rm -f -- "$tmp"' EXIT
+  head -c 4194305 >"$tmp"
+  size=$(stat -c %s "$tmp")
+  (( size > 0 && size <= 4194304 )) || { bad "invalid CLI size (maximum 4 MiB)"; exit 1; }
+  if [[ "$1" == grave ]]; then
+    [[ $(head -n 1 "$tmp") == '#!/usr/bin/env bash' ]] || { bad "expected Bash CLI"; exit 1; }
+    bash -n "$tmp"
+  else
+    [[ $(head -n 1 "$tmp") == '#!/usr/bin/env python3' ]] || { bad "expected Python CLI"; exit 1; }
+    python3 -c 'import ast, pathlib, sys; ast.parse(pathlib.Path(sys.argv[1]).read_text())' "$tmp"
+  fi
+  chmod 755 "$tmp"
+  mv -fT -- "$tmp" "$dest"
+)
+
 cmd_update_status() (
   local status="$GRAVE_ROOT/config/update-status.json"
   if [[ ! -f "$status" ]]; then printf '{"state":"idle"}\n'; return; fi
@@ -1572,6 +1600,8 @@ cmd_doctor() { # grave doctor [--no-page]
       bad "config drift after OS update — re-run raise.sh (see $GRAVE_ROOT/logs/selfheal.log)"
       FAILURES=$((FAILURES+1))
     fi
+  else
+    check "headless CLI installation available" sudo -n "$0" __install-cli --check
   fi
   # --- reboot-readiness: "active" isn't "enabled". A unit that's running now
   # but not enabled won't come back after a reboot, so surviving a reboot is
@@ -2696,6 +2726,7 @@ EOF
 
 # ------------------------------------------------------------------ main ----
 case "${1:-help}" in
+  __install-cli) shift; cmd_install_cli_root "$@" ;;
   __dashboard-health) cmd_dashboard_health ;;
   __dashboard-probe) shift; cmd_dashboard_probe "${1:-}" ;;
   __boundary-apply) cmd_boundary_apply ;;

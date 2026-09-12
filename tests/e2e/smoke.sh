@@ -85,6 +85,11 @@ if as_mole sudo -n mkdir /e2e-should-not-exist 2>/dev/null; then
 fi
 
 echo "=== phase 3: headless re-raise — the gravedecay-upgrade.service path (#89) ==="
+# Same-version re-raises skip CLI installation and cannot catch a missing
+# privilege for real upgrades. Change both source CLIs with sudo restricted.
+as_mole bash -c 'printf "\n# e2e changed CLI\n" >> /repo/bin/grave; printf "\n# e2e changed CLI\n" >> /repo/bin/grave-workspaces'
+as_mole git -c user.name=appliance-test -c user.email=appliance@example.test \
+  -c commit.gpgsign=false commit -qm 'e2e next CLI release' -- bin/grave bin/grave-workspaces
 # traced: when this phase fails, the xtrace names the exact command that
 # asked for a password — no journal archaeology
 if ! as_mole bash -c 'bash -x ./raise.sh --profile generic </dev/null 2>/tmp/raise-phase3.trace'; then
@@ -92,6 +97,10 @@ if ! as_mole bash -c 'bash -x ./raise.sh --profile generic </dev/null 2>/tmp/rai
   docker exec "$CTR" tail -60 /tmp/raise-phase3.trace
   exit 1
 fi
+docker exec "$CTR" bash -c 'test "$(sha256sum < /repo/bin/grave)" = "$(sha256sum < /usr/local/bin/grave)"'
+docker exec "$CTR" bash -c 'test "$(sha256sum < /repo/bin/grave-workspaces)" = "$(sha256sum < /usr/local/bin/grave-workspaces)"'
+docker exec "$CTR" bash -c 'test "$(stat -c "%U %a" /usr/local/bin/grave)" = "root 755"'
+docker exec "$CTR" bash -c 'test "$(stat -c "%U %a" /usr/local/bin/grave-workspaces)" = "root 755"'
 
 echo "=== phase 4: stampless headless re-raise — the pre-stamp sudoers fallback (#96) ==="
 as_mole rm /srv/dev/config/.sudoers.stamp

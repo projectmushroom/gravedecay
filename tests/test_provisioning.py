@@ -32,11 +32,13 @@ class ProvisioningSafetyTests(unittest.TestCase):
     def test_headless_reraise_needs_no_out_of_scope_sudo(self):
         # Regression #89: gravedecay-upgrade.service runs raise.sh with no TTY,
         # where any sudo outside the scoped NOPASSWD set dies at a password
-        # prompt. Steady state must therefore skip every privileged write:
+        # prompt. Unchanged files must therefore skip privileged writes:
         # unit installs compare-then-tee (tee IS in the scope), the layout
-        # claim checks existence+ownership, the CLI install cmp-skips, the
+        # claim checks existence+ownership, the CLI install hash-skips, the
         # sudoers rewrite is stamp-guarded with a headless fallback, and the
-        # tailscale operator/socket ops probe current state first.
+        # tailscale operator/socket ops probe current state first. Changed
+        # CLIs are exercised by test_cli_install.py and the appliance smoke;
+        # skipping identical files alone does not prove upgrades work.
         self.assertIn("install_unit() {", RAISE)
         self.assertGreaterEqual(RAISE.count("| install_unit "), 9)
         self.assertIn("install_cli() {", RAISE)

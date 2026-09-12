@@ -58,6 +58,31 @@ continues to use its logged-in Mac user.
 
 ## Existing installations
 
+### Repairing headless CLI updates on older installations
+
+Older installers can fetch a new release but stop at **grave CLI** with
+`sudo: a terminal is required` when the installed executable changes. The
+checkout version alone does not mean the running appliance was updated.
+
+Once the checkout contains the CLI installation helper, bootstrap it from a
+normal terminal as the recorded appliance owner:
+
+```sh
+cd /srv/dev/repos/gravedecay
+sudo -v && ./raise.sh
+```
+
+Use the path to the updated checkout if it differs. The installer restarts
+appliance services, so use a desktop terminal or SSH rather than the dashboard
+terminal. Existing owner and configuration are retained. The first repair
+needs the owner's sudo password; subsequent changed-CLI installs use the
+existing scoped `grave` sudo grant. `grave doctor --no-page` checks that this
+helper is available. This fixes replacement of `grave` and `grave-workspaces`;
+changes requiring new package or security-policy privileges can still need
+interactive maintenance.
+
+### Preserving the appliance owner
+
 The choice is recorded in `$GRAVE_ROOT/config/owner`. Re-raises and upgrades
 use it without prompting. For older installations without the record, setup
 adopts the existing dashboard service user and checks the appliance directory
