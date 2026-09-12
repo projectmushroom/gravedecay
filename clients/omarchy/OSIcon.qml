@@ -1,26 +1,24 @@
-pragma ComponentBehavior: Bound
 import QtQuick
-import QtQuick.Effects
+import Quickshell.Io
 
+// Tint the bundled vector before Qt rasterizes it. This also works with
+// software rendering, where shader-based color overlays are unavailable.
 Item {
   id: root
-  property url source
+  property string iconName: "tux"
   property color color: "white"
+  property string artwork: ""
   implicitWidth: 16
   implicitHeight: 16
   Image {
-    id: mask
     anchors.fill: parent
-    source: root.source
     sourceSize: Qt.size(root.width, root.height)
     fillMode: Image.PreserveAspectFit
-    visible: false
-    layer.enabled: true
+    source: root.artwork ? "data:image/svg+xml," + encodeURIComponent(root.artwork.replace("<svg ", '<svg fill="' + root.color + '" ')) : ""
   }
-  Rectangle {
-    anchors.fill: parent
-    color: root.color
-    layer.enabled: true
-    layer.effect: MultiEffect { maskEnabled: true; maskSource: mask }
+  FileView {
+    path: decodeURIComponent(Qt.resolvedUrl("os-logos/" + root.iconName + ".svg").toString().replace(/^file:\/\//, ""))
+    onLoaded: root.artwork = text()
+    onLoadFailed: root.artwork = ""
   }
 }

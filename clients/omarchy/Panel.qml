@@ -128,10 +128,10 @@ Panel {
         }
         ColumnLayout { visible: !!root.current; Layout.fillWidth: true; spacing: Style.space(4)
           RowLayout { Layout.fillWidth: true
-            OSIcon { source: root.current ? Model.icon(root.current.summary.node) : ""; color: root.current ? Model.accent(root.current.dns) : root.foreground }
+            OSIcon { iconName: root.current ? Model.osIcon(root.current.summary.node) : "tux"; color: root.current ? Model.accent(root.current.dns) : root.foreground }
             Text { text: root.current ? root.current.name + " · " + root.current.dns : ""; color: root.current ? Model.accent(root.current.dns) : root.foreground; font.bold: true; wrapMode: Text.Wrap; Layout.fillWidth: true }
           }
-          Text { text: root.current ? root.current.summary.node.os_name || root.current.summary.node.platform : ""; color: root.dim; Layout.fillWidth: true; wrapMode: Text.Wrap }
+          Text { textFormat: Text.PlainText; text: root.current ? root.current.summary.node.os_name || root.current.summary.node.platform : ""; color: root.dim; Layout.fillWidth: true; wrapMode: Text.Wrap }
           Text { text: Model.connection(root.current, root.refreshing); color: root.dim; wrapMode: Text.Wrap; Layout.fillWidth: true }
           Text { visible: root.current && !root.current.reachable; text: root.current ? "Unreachable · last seen " + new Date(root.current.lastSeen).toLocaleString() : ""; color: root.dim; wrapMode: Text.Wrap; Layout.fillWidth: true }
           Text { visible: root.current && root.current.reachable; text: root.current ? "CPU " + root.fmt(root.current.summary.resources.cpu_pct, "%") + "  RAM " + root.fmt(root.current.summary.resources.memory_pct, "%") + "  Disk " + root.fmt(root.current.summary.resources.disk_pct, "%") : ""; color: root.dim }
