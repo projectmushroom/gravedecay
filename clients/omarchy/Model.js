@@ -43,6 +43,8 @@ function summary(raw) {
         var clean = {product: "gravedecay", api_version: 1,
             node: {host: String(value.node.host || "").slice(0, 256), platform: value.node.platform, mode: String(value.node.mode || "").slice(0, 64)},
             resources: {}, activity: {}, health: {}, links: {}}
+        clean.node.os_icon = osIcon(value.node)
+        if (typeof value.node.os_name === "string") clean.node.os_name = value.node.os_name.slice(0, 256)
         var sections = {resources: ["cpu_pct", "memory_pct", "disk_pct"], activity: ["sessions_live", "sessions_frozen"], health: ["services_failed", "containers_problem"]}
         for (var section in sections) sections[section].forEach(function(key) {
             var n = value[section][key]
@@ -84,7 +86,13 @@ function accent(dns) {
     return colors[sum]
 }
 
-function icon(platform) { return {macos: "🍎", linux: "🖥", container: "📦"}[platform] || "🪦" }
+function osIcon(node) {
+    var icons = ["alpine", "apple", "archlinux", "debian", "docker", "fedora", "linuxmint", "nixos", "opensuse", "redhat", "tux", "ubuntu"]
+    if (icons.indexOf(node.os_icon) >= 0) return node.os_icon
+    return node.platform === "macos" ? "apple" : node.platform === "container" ? "docker" : "tux"
+}
+
+function icon(node) { return "os-logos/" + osIcon(node) + ".svg" }
 
 function connection(node, checking) {
     if (checking) return "Checking connection…"

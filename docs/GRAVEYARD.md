@@ -162,3 +162,28 @@ separate compatibility check for GD-managed services. Machine version and
 T3 HTTP/pairing diagnostics are a subsequent slice, not inferred from a T3
 link or the new supervisor-state field. Doctor validates that field's enum
 alongside the local setup capability.
+
+### Operating-system identity
+
+Grave names in the dashboard switcher, grave cards, settings/update headings,
+Omarchy grave list and native Apple grave pickers use bundled OS logos. The
+logo describes the running OS: an Omarchy MacBook shows Arch; macOS shows Apple.
+The product skull and tool icons (for example Terminal) retain their own meaning.
+
+The optional v1 summary fields `node.os_icon` and `node.os_name` carry the
+server's identity; `/api/state` includes the same fields at the top level.
+Linux reads `ID` and `ID_LIKE` from `/etc/os-release`, falling back to
+`/usr/lib/os-release`. The distro ID wins, then its first recognized family;
+Omarchy, CachyOS and SteamOS use Arch. Missing/unknown Linux metadata uses Tux.
+macOS and portable workspaces report Apple and Docker respectively without
+using the container image's distro to imply a host OS. Saved graves retain their
+last known identity while unreachable. Older summaries still work using their
+platform's generic logo.
+
+Clients allow only bundled icon keys, never peer-supplied image URLs or SVG.
+The artwork is a pinned subset of Font Logos; sources, license and regeneration
+instructions are in `assets/os-logos/README.md`. The web sprite is embedded in
+the delivered page, so an open dashboard needs no extra requests to display it.
+`grave doctor` verifies the local summary's OS identity and the installed sprite
+as part of the dashboard auth/summary check. Native clients bundle the same
+vector artwork; they require a client update to display it.

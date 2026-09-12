@@ -102,7 +102,12 @@ public enum GraveDiscovery {
 }
 
 public struct GraveSummary: Codable, Equatable, Sendable {
-    public struct Node: Codable, Equatable, Sendable { public let host, platform, mode: String; public let uptime_s: Double? }
+    public struct Node: Codable, Equatable, Sendable {
+        public let host, platform, mode: String
+        public let uptime_s: Double?
+        public var os_icon: String? = nil
+        public var os_name: String? = nil
+    }
     public struct Resources: Codable, Equatable, Sendable { public let cpu_pct, memory_pct, disk_pct, cpu_temp_c, gpu_temp_c: Double? }
     public struct Activity: Codable, Equatable, Sendable { public let sessions_live, sessions_frozen: Int }
     public struct Health: Codable, Equatable, Sendable {
@@ -153,6 +158,12 @@ public struct GraveCapabilities: Equatable, Sendable {
 }
 
 public enum GravePresentation {
+    public static func osIcon(_ node: GraveSummary.Node?) -> String {
+        let icons = ["alpine", "apple", "archlinux", "debian", "docker", "fedora", "linuxmint", "nixos", "opensuse", "redhat", "tux", "ubuntu"]
+        if let icon = node?.os_icon, icons.contains(icon) { return icon }
+        switch node?.platform { case "macos": return "apple"; case "container": return "docker"; default: return "tux" }
+    }
+
     public static func accent(_ dns: String) -> UInt32 {
         let colors: [UInt32] = [0xe8b44c, 0x78b7ef, 0xc399ed, 0x64c9b0, 0xf194b0, 0xb3c875, 0xe89b6b]
         let name = dns.lowercased().hasSuffix(".") ? String(dns.lowercased().dropLast()) : dns.lowercased()

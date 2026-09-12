@@ -114,7 +114,7 @@ Panel {
       id: keyCatcher; anchors.fill: parent; onCloseRequested: root.close(); onMoveRequested: function(dx, dy) { if (dy && root.nodes.length) { var index = root.nodes.indexOf(root.current); root.selectedId = root.nodes[(index + dy + root.nodes.length) % root.nodes.length].id } }; onTabRequested: function(direction) { root.switchPanel(direction) }; onTextKey: function(text) { if (text === "r" || text === "R") root.refresh() }
       ColumnLayout { id: content; anchors.fill: parent; spacing: Style.space(8)
         RowLayout { Layout.fillWidth: true; Text { text: "Graveyard"; color: root.foreground; font.bold: true; font.pixelSize: Style.font.title }; Item { Layout.fillWidth: true }; PanelActionButton { iconText: "󰑐"; onClicked: root.refresh() } }
-        Dropdown { id: nodePicker; visible: root.nodes.length > 1; width: parent.width; showLabel: false; options: root.nodes.map(function(n) { return { value: n.id, label: Model.icon(n.summary.node.platform) + " " + n.name + (n.reachable ? "" : " · unreachable") } }); onChanged: function(value) { root.selectedId = value }; Connections { target: root; function onSelectedIdChanged() { nodePicker.value = root.selectedId } } }
+        Dropdown { id: nodePicker; visible: root.nodes.length > 1; width: parent.width; showLabel: false; options: root.nodes.map(function(n) { return { value: n.id, label: n.name + (n.reachable ? "" : " · unreachable") } }); onChanged: function(value) { root.selectedId = value }; Connections { target: root; function onSelectedIdChanged() { nodePicker.value = root.selectedId } } }
         Text { visible: !root.nodes.length && !root.refreshing; text: "No plots found yet"; color: root.dim }
         Text { visible: root.refreshing; text: "Checking plots…"; color: root.dim }
         Text { visible: !!root.discoveryMessage || !!root.storageMessage; text: root.storageMessage || root.discoveryMessage; color: root.dim; wrapMode: Text.Wrap; Layout.fillWidth: true }
@@ -122,12 +122,16 @@ Panel {
           visible: root.nodes.length > 1; Layout.fillWidth: true; Layout.preferredHeight: Math.min(root.nodes.length * Style.space(38), Style.space(140)); clip: true
           ColumnLayout { width: parent.width
             Repeater { model: root.nodes
-              Button { required property var modelData; Layout.fillWidth: true; text: Model.icon(modelData.summary.node.platform) + " " + modelData.name + " · " + (root.refreshing ? "checking" : modelData.reachable ? "reachable" : "unreachable"); palette.buttonText: Model.accent(modelData.dns); onClicked: root.selectedId = modelData.id }
+              Button { required property var modelData; Layout.fillWidth: true; icon.source: Model.icon(modelData.summary.node); icon.color: Model.accent(modelData.dns); text: modelData.name + " · " + (root.refreshing ? "checking" : modelData.reachable ? "reachable" : "unreachable"); palette.buttonText: Model.accent(modelData.dns); onClicked: root.selectedId = modelData.id }
             }
           }
         }
         ColumnLayout { visible: !!root.current; Layout.fillWidth: true; spacing: Style.space(4)
-          Text { text: root.current ? Model.icon(root.current.summary.node.platform) + " " + root.current.name + " · " + root.current.dns : ""; color: root.current ? Model.accent(root.current.dns) : root.foreground; font.bold: true; wrapMode: Text.Wrap; Layout.fillWidth: true }
+          RowLayout { Layout.fillWidth: true
+            OSIcon { iconName: root.current ? Model.osIcon(root.current.summary.node) : "tux"; color: root.current ? Model.accent(root.current.dns) : root.foreground }
+            Text { text: root.current ? root.current.name + " · " + root.current.dns : ""; color: root.current ? Model.accent(root.current.dns) : root.foreground; font.bold: true; wrapMode: Text.Wrap; Layout.fillWidth: true }
+          }
+          Text { textFormat: Text.PlainText; text: root.current ? root.current.summary.node.os_name || root.current.summary.node.platform : ""; color: root.dim; Layout.fillWidth: true; wrapMode: Text.Wrap }
           Text { text: Model.connection(root.current, root.refreshing); color: root.dim; wrapMode: Text.Wrap; Layout.fillWidth: true }
           Text { visible: root.current && !root.current.reachable; text: root.current ? "Unreachable · last seen " + new Date(root.current.lastSeen).toLocaleString() : ""; color: root.dim; wrapMode: Text.Wrap; Layout.fillWidth: true }
           Text { visible: root.current && root.current.reachable; text: root.current ? "CPU " + root.fmt(root.current.summary.resources.cpu_pct, "%") + "  RAM " + root.fmt(root.current.summary.resources.memory_pct, "%") + "  Disk " + root.fmt(root.current.summary.resources.disk_pct, "%") : ""; color: root.dim }

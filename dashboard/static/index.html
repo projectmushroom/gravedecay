@@ -394,7 +394,9 @@ body.portable #sec-notify{display:none!important}
   .plot-actions .plot-links a{padding:8px 6px;font-size:12px}
   .plot-actions button{padding:8px 6px}
 }
+.os-logo{width:1.15em;height:1.15em;display:inline-block;vertical-align:-.18em;fill:currentColor;flex-shrink:0}
 </style></head><body>
+@OS_LOGOS@
 <div id="topcover"></div>
 <div class="topbar">
   <img id="toplogo" src="icon-180.png?v=@ICON@" alt="">
@@ -784,7 +786,12 @@ function plotAccent(dns){
   let sum=0;for(const c of dns.toLowerCase().replace(/\.$/,'').split(''))sum=(sum*31+c.charCodeAt(0))%PLOT_COLORS.length;
   return PLOT_COLORS[sum];
 }
-function plotIcon(platform){return platform==='macos'?'🍎':platform==='linux'?'🖥':platform==='container'?'📦':'🪦';}
+const OS_LOGOS={alpine:'Alpine Linux',apple:'macOS',archlinux:'Arch Linux',debian:'Debian',docker:'Container',fedora:'Fedora',linuxmint:'Linux Mint',nixos:'NixOS',opensuse:'openSUSE',redhat:'Red Hat Linux',tux:'Linux',ubuntu:'Ubuntu'};
+function plotIcon(node){
+  const key=Object.hasOwn(OS_LOGOS,node.os_icon)?node.os_icon:node.platform==='macos'?'apple':node.platform==='container'?'docker':'tux';
+  const name=typeof node.os_name==='string'?node.os_name.slice(0,256):OS_LOGOS[key];
+  return `<svg class="os-logo" role="img" aria-label="${esc(name)}"><title>${esc(name)}</title><use href="#os-${key}"></use></svg>`;
+}
 function plotConnection(p,checking=false){
   if(checking)return 'Checking connection…';
   if(!p.reachable)return 'Unreachable — check Tailscale or dashboard';
@@ -814,12 +821,12 @@ function renderGraveyard(message,checking=graveyardChecking){
     const percent=n=>typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=100?`${Math.round(n)}%`:'—';
     const status=checking?'Checking connection…':!p.reachable?'Unreachable':`Reachable${problems?` · ${problems} problem${problems===1?'':'s'}`:''}${['failed','stopped','starting'].includes(s.health.t3)?` · T3 ${s.health.t3}`:''}`;
     return `<article class="plot-card" data-plot="${esc(p.id)}" style="border-left-color:${plotAccent(p.dns)}">
-      <div class="plot-heading"><h3 title="${esc(p.name)}" style="color:${plotAccent(p.dns)}">${plotIcon(s.node.platform)} ${esc(p.name)}</h3>${here?'<span class="plot-here">This grave</span>':''}</div>
+      <div class="plot-heading"><h3 title="${esc(p.name)}" style="color:${plotAccent(p.dns)}">${plotIcon(s.node)} ${esc(p.name)}</h3>${here?'<span class="plot-here">This grave</span>':''}</div>
       <p class="plot-status${!checking&&(!p.reachable||problems||s.health.t3==='failed')?' warn':''}">${esc(status)}</p>
       <div class="plot-actions"><div class="plot-links">${link('dashboard')}${link('t3')}</div>
         <button data-plot-details data-plot-action="details" aria-expanded="${open}" aria-controls="${detailsId}">Details ${open?'▴':'▾'}</button></div>
       <div class="plot-detail" id="${detailsId}"${open?'':' hidden'}>
-        <p>${esc(p.name)}</p><p class="dim">${esc(p.dns)} · ${esc(s.node.platform)}</p>
+        <p>${esc(p.name)}</p><p class="dim">${esc(p.dns)} · ${esc(s.node.os_name||s.node.platform)}</p>
         <p>${esc(plotConnection(p,checking))}</p>
         ${!checking&&p.reachable?`<p class="dim">CPU ${percent(s.resources.cpu_pct)} · Memory ${percent(s.resources.memory_pct)} · Disk ${percent(s.resources.disk_pct)}</p>`:''}
         <p class="dim">${!checking&&p.reachable?`${esc(s.activity.sessions_live??'—')} live sessions · ${esc(problems)} problems`:`Last seen ${age<1?'just now':age<60?age+'m ago':Math.floor(age/60)+'h ago'}`}</p>
@@ -1273,15 +1280,15 @@ function render(s){
   nativeMacHost=!!s.macos_native;
   document.body.classList.toggle('macagents',macosCompanion&&!!s.macos_agents);
   document.body.classList.toggle('portable',portableCompanion);
-  $('plot-context').textContent=`${plotIcon(s.platform||'linux')} ${s.host}`;
+  $('plot-context').innerHTML=`${plotIcon(s)} ${esc(s.host)}`;
   $('plot-context').title=`Managing ${s.host} · ${location.hostname}`;
   $('plot-context').style.color=plotAccent(location.hostname);
   $('t3-setup').textContent=`Set up T3 · ${s.host}`;
   $('t3-setup').style.color=plotAccent(location.hostname);
-  $('settings-title').textContent=`⚙️ Settings · ${s.host}`;
+  $('settings-title').innerHTML=`Settings · ${plotIcon(s)} ${esc(s.host)}`;
   $('settings-title').style.color=plotAccent(location.hostname);
   openT3Setup();
-  $('update-title').textContent=`Updates & restart · ${s.host} · ${location.hostname}`;
+  $('update-title').innerHTML=`Updates & restart · ${plotIcon(s)} ${esc(s.host)} · ${esc(location.hostname)}`;
   $('update-title').style.color=plotAccent(location.hostname);
   if(!updateBooted&&!portableCompanion){
     updateBooted=true;
