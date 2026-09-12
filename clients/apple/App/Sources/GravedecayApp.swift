@@ -88,7 +88,7 @@ private struct GraveMenuView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack { GraveMark(color: GraveTheme.ink).accessibilityHidden(true); Text("GRAVEDECAY").tracking(1.2).foregroundStyle(GraveTheme.amber); Spacer(); Button("↻ REFRESH") { model.refresh() }.buttonStyle(GraveButton()).accessibilityLabel("Refresh graves") }.font(.system(size: 11, weight: .bold, design: .monospaced))
-            Picker("PLOT", selection: $model.selectedID) { ForEach(model.graves) { Label($0.candidate.name.uppercased(), systemImage: GravePresentation.machineIcon($0.summary?.node.platform)).tag(Optional($0.id)) } }.pickerStyle(.menu).tint(GraveTheme.plotAccent(model.selected?.candidate.dns ?? "")).font(.system(size: 10, design: .monospaced))
+            Picker("PLOT", selection: $model.selectedID) { ForEach(model.graves) { GraveOSLabel($0.candidate.name.uppercased(), node: $0.summary?.node).tag(Optional($0.id)) } }.pickerStyle(.menu).tint(GraveTheme.plotAccent(model.selected?.candidate.dns ?? "")).font(.system(size: 10, design: .monospaced))
             if model.graves.isEmpty {
                 TailscaleOnboardingView(model: model)
             } else if let grave = model.selected, let summary = grave.summary {

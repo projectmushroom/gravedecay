@@ -35,7 +35,7 @@ private struct FleetMenu: View {
             } else {
                 ForEach(fleet.boxes) { box in
                     VStack(alignment: .leading, spacing: 4) {
-                        HStack { Text(box.summary.node.host).fontWeight(.semibold); Spacer(); Text(box.summary.node.mode).foregroundStyle(.secondary) }
+                        HStack { GraveOSIcon(box.summary.node); Text(box.summary.node.host).fontWeight(.semibold); Spacer(); Text(box.summary.node.mode).foregroundStyle(.secondary) }
                         Text("CPU \(GravePresentation.percent(box.summary.resources.cpu_pct)) · Memory \(GravePresentation.percent(box.summary.resources.memory_pct)) · Disk \(GravePresentation.percent(box.summary.resources.disk_pct))")
                         if box.summary.resources.cpu_temp_c != nil || box.summary.resources.gpu_temp_c != nil {
                             Text("CPU temp \(GravePresentation.temperature(box.summary.resources.cpu_temp_c)) · GPU temp \(GravePresentation.temperature(box.summary.resources.gpu_temp_c))")

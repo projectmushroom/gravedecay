@@ -164,7 +164,7 @@ test('plot identity persists while connection and T3 states change independently
   await details(page, 'mac');
   await details(page, 'vm');
   await expect(page.locator('[data-plot="mac"]')).toContainText('Dashboard reachable · T3 service running');
-  await expect(page.locator('[data-plot="mac"] h3')).toContainText('🍎 My Mac');
+  await expect(page.locator('[data-plot="mac"] h3')).toContainText('My Mac');
   await expect(page.locator('[data-plot="vm"]')).toContainText('Dashboard reachable · T3 stopped');
   await expect(page.locator('[data-plot="mac"]')).toHaveCSS('border-left-color', 'rgb(195, 153, 237)');
   await page.reload();
@@ -199,4 +199,32 @@ test('revoked overview access hides remembered inventory', async ({ page }) => {
   await page.getByRole('button', { name: 'Refresh plots' }).click();
   await expect(page.locator('#graveyard-status')).toContainText('Sign in');
   await expect(page.locator('.plot-card')).toHaveCount(0);
+});
+
+test('OS logos identify current and saved graves without remote assets', async ({ page }) => {
+  const arch = plot('arch'), mac = plot('mac', 'macos'), unknown = plot('old');
+  arch.summary.node.os_icon = 'archlinux'; arch.summary.node.os_name = 'Omarchy';
+  const malicious = plot('bad'); malicious.summary.node.os_icon = 'https://evil.test/logo.svg';
+  malicious.summary.node.os_name = '<img src=x onerror=alert(1)>';
+  await page.route('**/api/graveyard', route => route.fulfill({ json: { state: 'ready', plots: [arch, mac, unknown, malicious] } }));
+  await page.route('**/api/state', route => route.abort());
+  await page.goto('./');
+  await page.evaluate(() => render({ ...BOOT, os_icon: 'archlinux', os_name: 'Omarchy', host: 'My Arch grave' }));
+  await expect(page.locator('#plot-context use')).toHaveAttribute('href', '#os-archlinux');
+  await expect(page.locator('#plot-context')).toContainText('My Arch grave');
+  await expect(page.locator('#settings-title use')).toHaveAttribute('href', '#os-archlinux');
+  await expect(page.locator('#update-title use')).toHaveAttribute('href', '#os-archlinux');
+  await openGraveyard(page);
+  for (const [id, icon] of [['arch','archlinux'],['mac','apple'],['old','tux'],['bad','tux']]) {
+    await expect(page.locator(`[data-plot="${id}"] use`)).toHaveAttribute('href', `#os-${icon}`);
+    expect(await page.locator(`[data-plot="${id}"] use`).evaluate(el => el.getBBox().width)).toBeGreaterThan(0);
+  }
+  await expect(page.locator('[data-plot="arch"] svg')).toHaveAccessibleName('Omarchy');
+  await expect(page.locator('[data-plot="bad"] img')).toHaveCount(0);
+  // The last known OS remains recognizable after discovery loses contact.
+  await page.route('**/api/graveyard', route => route.fulfill({ json: { state: 'ready', plots: [] } }));
+  await page.reload();
+  await openGraveyard(page);
+  await expect(page.locator('[data-plot="arch"] use')).toHaveAttribute('href', '#os-archlinux');
+  await expect(page.locator('[data-plot="arch"]')).toContainText('Unreachable');
 });

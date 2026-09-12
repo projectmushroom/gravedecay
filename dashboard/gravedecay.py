@@ -30,6 +30,7 @@ import json
 import os
 import re
 import shutil
+import shlex
 import socket
 import stat
 import subprocess
@@ -526,10 +527,45 @@ MISSING_SHELL = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 ICON_VERSION = (static_asset_sha("icon-512.png") or "legacy")[:12]
 MANIFEST = MANIFEST.replace("@ICON@", ICON_VERSION)
 
+# Fixed local assets only; peer-supplied paths/markup are never rendered.
+OS_ICONS = frozenset("alpine apple archlinux debian docker fedora linuxmint nixos opensuse redhat tux ubuntu".split())
+
+
+def os_identity():
+    if PORTABLE:
+        return {"os_icon": "docker", "os_name": "Container"}
+    if MACOS:
+        return {"os_icon": "apple", "os_name": "macOS"}
+    release = {}
+    for path in ("/etc/os-release", "/usr/lib/os-release"):
+        try:
+            with open(path, encoding="utf-8") as source:
+                for line in source.read(16384).splitlines():
+                    key, sep, value = line.partition("=")
+                    if sep and key in ("ID", "ID_LIKE", "NAME", "PRETTY_NAME"):
+                        try:
+                            release[key] = " ".join(shlex.split(value, comments=True))[:256]
+                        except ValueError:
+                            pass
+            break
+        except (OSError, UnicodeError):
+            continue
+    aliases = {"arch": "archlinux", "omarchy": "archlinux", "steamos": "archlinux",
+               "cachyos": "archlinux", "opensuse-leap": "opensuse", "opensuse-tumbleweed": "opensuse",
+               "suse": "opensuse", "sles": "opensuse", "rhel": "redhat", "centos": "redhat"}
+    candidates = [release.get("ID", "")] + release.get("ID_LIKE", "").split()
+    icon = next((aliases.get(key, key) for key in candidates
+                 if aliases.get(key, key) in OS_ICONS - {"apple", "docker"}), "tux")
+    return {"os_icon": icon, "os_name": release.get("PRETTY_NAME") or release.get("NAME") or "Linux"}
+
+
+OS_IDENTITY = os_identity()
+
 
 def load_page():
     return static_asset("index.html", MISSING_SHELL).replace(
-        "@HOST@", HOST).replace("@BASE@", BASE or "/grave").replace("@ICON@", ICON_VERSION)
+        "@HOST@", HOST).replace("@BASE@", BASE or "/grave").replace("@ICON@", ICON_VERSION).replace(
+        "@OS_LOGOS@", static_asset("os-logos.svg", ""))
 
 
 PAGE = load_page()
@@ -1231,7 +1267,11 @@ def _summary():
 
 
 def summary():
-    return cached("summary", 5, _summary)
+    def collect():
+        result = _summary()
+        result["node"].update(OS_IDENTITY)
+        return result
+    return cached("summary", 5, collect)
 
 
 # The browser cannot read other plots' origins. This owner-only collector
@@ -1279,6 +1319,12 @@ def graveyard_summary(raw):
                   "links": {key: path for key, path in value["links"].items()
                             if key in ("dashboard", "t3", "terminal", "network") and
                             isinstance(path, str) and path in ("/", "/grave", "/grave/", "/term", "/term/", "/net", "/net/")}}
+        icon = value["node"].get("os_icon")
+        if isinstance(icon, str) and icon in OS_ICONS:
+            result["node"]["os_icon"] = icon
+        name = value["node"].get("os_name")
+        if isinstance(name, str):
+            result["node"]["os_name"] = name[:256]
         for section, keys in (("resources", ("cpu_pct", "memory_pct", "disk_pct")),
                               ("activity", ("sessions_live", "sessions_frozen")),
                               ("health", ("services_failed", "containers_problem"))):
@@ -2345,6 +2391,7 @@ def collect_scheduled_runs():
 
 def state(headers):
     result = _state(headers)
+    result.update(OS_IDENTITY)
     if owner_request(headers):
         result["dispatch"] = dispatch_capabilities()
         result["scheduled"] = collect_scheduled_runs()
@@ -3276,6 +3323,10 @@ if __name__ == "__main__":
                 assert update["dashboard_current"], "dashboard has not loaded the installed update"
         with maintenance_request("/api/v1/summary") as response:
             summary_result = json.load(response)
+            assert summary_result["node"]["os_icon"] == OS_IDENTITY["os_icon"], "dashboard OS identity is stale"
+            assert summary_result["node"]["os_name"], "dashboard OS name is missing"
+            sprite = static_asset("os-logos.svg", "")
+            assert all(f'id="os-{icon}"' in sprite for icon in OS_ICONS), "bundled OS logos are missing; re-raise"
             assert summary_result["health"]["t3"] in T3_SERVICE_STATES, "T3 service status is missing or invalid"
             links = summary_result["links"]
             assert links.get("t3_setup") == (links["dashboard"] if "t3" in links else None), "T3 setup capability does not match this plot"

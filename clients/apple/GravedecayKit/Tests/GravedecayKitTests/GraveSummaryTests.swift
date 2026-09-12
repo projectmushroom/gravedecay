@@ -6,6 +6,18 @@ final class GraveSummaryTests: XCTestCase {
         Data(#"{"product":"gravedecay","api_version":1,"node":{"host":"Mac","platform":"macos","mode":"companion","uptime_s":null},"resources":{},"activity":{"sessions_live":0,"sessions_frozen":0},"health":{"services_failed":0,"containers_problem":0},"links":{}}"#.utf8)
     }
 
+    func testOSLogoUsesValidatedKeyAndSupportsOldSummaries() {
+        let raw = #"{"product":"gravedecay","api_version":1,"node":{"host":"grave","platform":"linux","mode":"developer","os_icon":"archlinux","os_name":"Omarchy"},"resources":{},"activity":{"sessions_live":0,"sessions_frozen":0},"health":{"services_failed":0,"containers_problem":0},"links":{}}"#
+        let summary = GraveSummary.decode(Data(raw.utf8))!
+        XCTAssertEqual(GravePresentation.osIcon(summary.node), "archlinux")
+        XCTAssertEqual(summary.node.os_name, "Omarchy")
+        let malicious = GraveSummary.decode(Data(raw.replacingOccurrences(of: "archlinux", with: "../../secret").utf8))!
+        XCTAssertEqual(GravePresentation.osIcon(malicious.node), "tux")
+        let legacy = GraveSummary.decode(Data(raw.replacingOccurrences(of: #","os_icon":"archlinux","os_name":"Omarchy""#, with: "").utf8))!
+        XCTAssertNil(legacy.node.os_icon)
+        XCTAssertEqual(GravePresentation.osIcon(legacy.node), "tux")
+    }
+
     func testPlotIdentityAndConnectionAreIndependentOfT3State() throws {
         XCTAssertEqual(GravePresentation.accent("MAC.TAIL.TS.NET."), 0xc399ed)
         XCTAssertEqual(GravePresentation.accent("vm.tail.ts.net"), 0xf194b0)
