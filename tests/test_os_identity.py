@@ -36,13 +36,16 @@ class OSIdentityTests(unittest.TestCase):
                 self.assertEqual(self.dash.os_identity()["os_icon"], icon)
                 read.assert_not_called()
 
-    def test_identity_survives_summary_and_state_for_every_viewer(self):
+    def test_identity_survives_summary_but_public_state_has_a_closed_schema(self):
         identity = {"os_icon": "archlinux", "os_name": "Omarchy"}
         with patch.object(self.dash, "OS_IDENTITY", identity), patch.object(self.dash, "_summary", return_value=json.loads(json.dumps(SUMMARY))):
             self.assertEqual(self.dash.summary()["node"]["os_icon"], "archlinux")
             self.assertEqual(self.dash.graveyard_summary(json.dumps(self.dash.summary()))["node"]["os_name"], "Omarchy")
-        with patch.object(self.dash, "OS_IDENTITY", identity), patch.object(self.dash, "_state", return_value={}), patch.object(self.dash, "owner_request", return_value=False):
-            self.assertEqual(self.dash.state({}), identity)
+        with patch.object(self.dash, "OS_IDENTITY", identity), patch.object(self.dash, "_state", side_effect=AssertionError("owner state read")), patch.object(self.dash, "owner_request", return_value=False):
+            state = self.dash.state({})
+            self.dash.validate_public_state(state)
+            self.assertNotIn("os_icon", state)
+            self.assertNotIn("os_name", state)
 
     def test_peers_cannot_supply_asset_paths_or_unbounded_names(self):
         for value in (None, [], {}, "../../secret", "<svg onload=alert(1)>", "https://elsewhere/logo.svg"):

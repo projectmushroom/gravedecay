@@ -41,6 +41,8 @@ def check(port, network_port):
         assert png[16:24] == (192).to_bytes(4, 'big') * 2
     with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/v1/summary', timeout=15) as response:
         assert json.load(response)['links']['dashboard'] == '/grave/'
+    with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/state', timeout=15) as response:
+        dashboard.validate_public_state(json.load(response))
     try:
         urllib.request.urlopen(f'http://127.0.0.1:{port}/api/auth-check', timeout=5)
     except urllib.error.HTTPError as error:

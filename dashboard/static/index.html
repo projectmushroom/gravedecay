@@ -395,6 +395,13 @@ body.portable #sec-notify{display:none!important}
   .plot-actions button{padding:8px 6px}
 }
 .os-logo{width:1.15em;height:1.15em;display:inline-block;vertical-align:-.18em;fill:currentColor;flex-shrink:0}
+body.public-view > :not(.topbar):not(#connection):not(#public-status):not(script){display:none!important}
+body.public-view #gear,body.public-view #mode{display:none!important}
+#public-status{max-width:640px;margin:24px auto;padding:20px;border:1px solid var(--ring);border-radius:12px}
+#public-status h2{margin-bottom:12px}
+#public-resources{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:20px 0}
+#public-resources dt{color:var(--dim)}
+#public-resources dd{margin:4px 0 0}
 </style></head><body>
 @OS_LOGOS@
 <div id="topcover"></div>
@@ -433,6 +440,12 @@ body.portable #sec-notify{display:none!important}
   <button id="quick-update">⬆ Update now</button>
   <button id="update-options" class="mini">Other releases…</button>
 </div>
+<section id="public-status" hidden aria-labelledby="public-title">
+  <h2 id="public-title">Read-only status</h2>
+  <p id="public-host"></p>
+  <dl id="public-resources"></dl>
+  <p class="dim">Owner access is required for apps, projects, settings, and controls.</p>
+</section>
 <div class="apps" id="apps"></div>
 <div id="game-banner">
   <h2>🎮 G A M E &nbsp; M O D E</h2>
@@ -1246,7 +1259,31 @@ async function applyGraveUpdate(selection){
   }
 }
 
+function renderPublicState(s){
+  if(!document.body.classList.contains('public-view')){
+    document.querySelectorAll('dialog[open]').forEach(dialog=>dialog.close());
+    document.querySelectorAll('.overlay').forEach(overlay=>overlay.style.display='none');
+    $('appframe-if').src='about:blank';
+    document.body.style.overflow='';
+  }
+  document.body.classList.add('public-view');
+  $('public-status').hidden=false;
+  pollFailures=0;lastConnected=Date.now();paintConnection();
+  lastMode=s.mode;cfg=null;cfgSrv='';envApps=[];lastTmux=[];
+  dispatchCaps={};dispatchRepos=[];dispatchIssues=[];
+  $('public-host').textContent=`${s.host} · ${s.platform} · ${s.mode}`;
+  const r=s.resources;
+  const value=(n,suffix)=>Number.isFinite(n)?`${n}${suffix}`:'Unavailable';
+  $('meta').textContent=Number.isFinite(r.uptime_s)?`up ${fmtUp(r.uptime_s)}`:'Read-only';
+  $('public-resources').innerHTML=[['CPU',value(r.cpu_pct,'%')],['Memory',value(r.memory_pct,'%')],
+    ['Disk',value(r.disk_pct,'%')],['CPU temperature',value(r.cpu_temp_c,'°C')],
+    ['GPU temperature',value(r.gpu_temp_c,'°C')]].map(([label,v])=>`<div><dt>${label}</dt><dd>${esc(v)}</dd></div>`).join('');
+  schedule();
+}
 function render(s){
+  if(s.access==='read-only'){renderPublicState(s);return;}
+  document.body.classList.remove('public-view');
+  $('public-status').hidden=true;
   // Replacing live regions above the viewport can make iOS WebKit discard its
   // document scroll anchor and jump to the top. Preserve the window position
   // explicitly across every poll-driven render. WebKit can adjust its anchor
@@ -1520,7 +1557,7 @@ async function poll(){
     const r=await fetch('api/state');
     if(!r.ok)throw new Error(`HTTP ${r.status}`);
     render(await r.json());
-    pollT3Activity(); // deliberately detached: a remote T3 must not hold up vitals
+    if(!document.body.classList.contains('public-view'))pollT3Activity(); // deliberately detached: a remote T3 must not hold up vitals
   }catch(e){pollFailures++;paintConnection();}
 }
 function renderT3Activity(a){

@@ -1,5 +1,16 @@
 # Security model
 
+## Read-only dashboard telemetry
+
+Unlisted and headerless viewers receive a closed public state schema before
+any owner state branch runs. Only host, generic platform, current mode/time,
+the requester's identity, and numeric vitals are public. Settings, configured
+app URLs, inventory, sessions, and integration details are not collected for
+these requests. This applies to the JSON state API and initial page state on
+Linux developer/gaming, portable workspaces, and macOS. The dashboard shows a
+read-only status panel; hidden controls are not used as an authorization gate.
+See [the public state contract](API.md#denied-viewer-dashboard-state).
+
 ## Terminal browser access
 
 All shipped web terminal launchers require ttyd Origin validation, including

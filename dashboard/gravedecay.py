@@ -27,6 +27,7 @@ import hmac
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -2389,14 +2390,54 @@ def collect_scheduled_runs():
     return cached("scheduled-runs", 3, fetch)
 
 
+PUBLIC_STATE_KEYS = frozenset({"access", "host", "platform", "mode", "now", "viewer", "resources"})
+PUBLIC_RESOURCE_KEYS = frozenset({"uptime_s", "cpu_pct", "memory_pct", "disk_pct", "cpu_temp_c", "gpu_temp_c"})
+
+
+def public_state(headers):
+    """Explicit public telemetry; never collect owner configuration/inventory."""
+    system = {} if PORTABLE else collect_system()
+    disks = system.get("disks") or []
+    temps = system.get("temps") or {}
+    resources = {
+        "uptime_s": system.get("uptime_s"),
+        "cpu_pct": (system.get("cpu") or {}).get("pct"),
+        "memory_pct": (system.get("mem") or {}).get("pct"),
+        "disk_pct": disks[0].get("pct") if disks else None,
+        "cpu_temp_c": temps.get("cpu"), "gpu_temp_c": temps.get("gpu"),
+    }
+    # Collector additions, names, paths, error strings and non-finite values
+    # cannot become public by accident, even inside an otherwise public field.
+    resources = {key: value if type(value) in (int, float) and math.isfinite(value) else None
+                 for key, value in resources.items()}
+    mode = "developer"
+    if not (MACOS or PORTABLE):
+        mode = "developer" if unit_state("t3code").get("active") == "active" else "gaming"
+    return {"access": "read-only", "host": HOST,
+            "platform": "container" if PORTABLE else "macos" if MACOS else "linux",
+            "mode": mode, "now": time.strftime("%H:%M:%S"),
+            "viewer": headers.get("Tailscale-User-Login") or "local",
+            "resources": resources}
+
+
+def validate_public_state(result):
+    """Doctor checks the live response against the same closed contract."""
+    assert set(result) == PUBLIC_STATE_KEYS, "public state contains unexpected fields"
+    assert result["access"] == "read-only", "public state is not restricted"
+    assert set(result["resources"]) == PUBLIC_RESOURCE_KEYS, "public resources contain unexpected fields"
+    assert all(value is None or (type(value) in (int, float) and math.isfinite(value))
+               for value in result["resources"].values()), "public resources contain private/non-numeric detail"
+
+
 def state(headers):
+    if not owner_request(headers):
+        return public_state(headers)
     result = _state(headers)
     result.update(OS_IDENTITY)
-    if owner_request(headers):
-        result["dispatch"] = dispatch_capabilities()
-        result["scheduled"] = collect_scheduled_runs()
-        for row in result.get("tmux", []) + result.get("agent_history", []):
-            row.update(agent_worktree_metadata(row["name"]))
+    result["dispatch"] = dispatch_capabilities()
+    result["scheduled"] = collect_scheduled_runs()
+    for row in result.get("tmux", []) + result.get("agent_history", []):
+        row.update(agent_worktree_metadata(row["name"]))
     return result
 
 
@@ -2408,26 +2449,14 @@ def _state(headers):
         # data are owner-private. A Serve viewer must
         # exactly match the installer-configured local Tailscale login.
         viewer = headers.get("Tailscale-User-Login")
-        owner = owner_request(headers)
         settings = load_settings()
-        if not owner:
-            # A configured path is part of the local project topology too.
-            # Do not hand it to a tailnet observer merely because preferences
-            # are otherwise harmless to render.
-            settings = dict(settings)
-            settings["repo_root"] = ""
-        private = {"github": {"login": None, "prs": [], "issues": [], "error": "restricted"},
-                   "linear": {"configured": False, "issues": [], "error": "restricted"},
-                   "ci": {"rows": [], "error": "restricted"}, "repos": [],
-                   "repo_scan": {"root": None, "error": "restricted"}}
-        if owner:
-            inventory = collect_macos_repo_inventory()
-            work = collect_macos_work(inventory)
-            private = {"github": work["github"], "linear": collect_linear(), "ci": work["ci"],
-                       "repos": inventory["repos"],
-                       "repo_scan": {"root": inventory["root"], "error": inventory.get("error"),
-                                     "warning": inventory.get("warning"),
-                                     "truncated": inventory.get("truncated", False)}}
+        inventory = collect_macos_repo_inventory()
+        work = collect_macos_work(inventory)
+        private = {"github": work["github"], "linear": collect_linear(), "ci": work["ci"],
+                   "repos": inventory["repos"],
+                   "repo_scan": {"root": inventory["root"], "error": inventory.get("error"),
+                                 "warning": inventory.get("warning"),
+                                 "truncated": inventory.get("truncated", False)}}
         return {"host": HOST, "now": time.strftime("%H:%M:%S"),
                 "viewer": viewer or "local", "platform": "macos",
                 "macos_agents": MACOS_AGENTS, "macos_native": MACOS_NATIVE,
@@ -2438,23 +2467,17 @@ def _state(headers):
                 "docker": collect_docker(),
                 # Session names are owner-private like the rest of the work
                 # plane; killing them is POST-gated separately.
-                "tmux": collect_tmux() if MACOS_AGENTS and owner else [],
+                "tmux": collect_tmux() if MACOS_AGENTS else [],
                 "torpor": 0, "repos": private["repos"], "repo_scan": private["repo_scan"], "journal": [], "system": collect_system(),
                 "backups": {"count": 0, "latest": None}, "inbox": [], "agent_history": []}
     if PORTABLE:
         # Deliberately work-plane only: do not read systemd, the host Docker
         # daemon, journald, cgroups, or host hardware from a container.
         viewer = headers.get("Tailscale-User-Login")
-        restricted = not owner_request(headers)
-        private = {"github": {"login": None, "prs": [], "error": "restricted"},
-                   "linear": {"configured": False, "issues": [], "error": "restricted"},
-                   "ci": {"rows": [], "error": "restricted"}, "usage": None,
-                   "repos": [], "inbox": [], "agent_history": []}
-        if not restricted:
-            gh = collect_github()
-            private = {"github": gh, "linear": collect_linear(), "ci": collect_ci(),
-                       "usage": collect_agent_usage(), "repos": collect_repos(),
-                       "inbox": collect_inbox(), "agent_history": collect_agent_history()}
+        gh = collect_github()
+        private = {"github": gh, "linear": collect_linear(), "ci": collect_ci(),
+                   "usage": collect_agent_usage(), "repos": collect_repos(),
+                   "inbox": collect_inbox(), "agent_history": collect_agent_history()}
         return {"host": HOST, "now": time.strftime("%H:%M:%S"),
                 "viewer": viewer or "local", "platform": "container", "mode": "developer",
                 "boot_mode": None, "gamewatch": None, "keepalive": None,
@@ -2462,7 +2485,7 @@ def _state(headers):
                 "github": private["github"], "linear": private["linear"], "ci": private["ci"],
                 "usage": private["usage"], "services": [],
                 "docker": {"error": "not managed by portable workspace", "containers": []},
-                "tmux": [] if restricted else collect_tmux(), "torpor": 0, "repos": private["repos"], "journal": [],
+                "tmux": collect_tmux(), "torpor": 0, "repos": private["repos"], "journal": [],
                 "system": {"uptime_s": 0, "temps": {"cpu": None, "gpu": None,
                            "gpu_mhz": None, "gpu_state": None, "fans": []},
                            "cpu": {"pct": None, "cores": []}, "load": [0, 0, 0], "ncpu": 0,
@@ -2478,28 +2501,6 @@ def _state(headers):
     except OSError:
         frozen = False
     viewer = headers.get("Tailscale-User-Login")
-    if not owner_request(headers):
-        # Read-only tailnet viewer (not in ALLOWED_USERS): serve operational
-        # vitals but withhold owner-private data — open PR titles, the Linear
-        # backlog, agent spend, repo names/commit subjects, CI detail, and journal
-        # error lines are not "status". The file manager and actions are already
-        # gated by _forbidden; this closes the same gap on /api/state (and / boot).
-        return {
-            "host": HOST, "now": time.strftime("%H:%M:%S"), "viewer": viewer,
-            "mode": mode, "boot_mode": boot_mode(), "gamewatch": gamewatch_state(),
-            "keepalive": keepalive_state(),
-            "apps": list(APPS), "settings": load_settings(),
-            "github": {"login": None, "prs": [], "error": "restricted"},
-            "linear": {"configured": False, "issues": [], "error": None},
-            "ci": {"rows": []}, "usage": None,
-            "services": collect_services(), "docker": collect_docker(),
-            "tmux": [], "torpor": len(tmux) if frozen else 0,
-            "repos": [], "journal": [], "system": collect_system(),
-            "backups": {"count": 0, "latest": None},
-            # Delivered pages and session transcripts are owner-private, same
-            # reasoning as the journal/repos withholding above.
-            "inbox": [], "agent_history": [],
-        }
     if mode == "gaming":
         # Minimal footprint while gaming: no remote API calls, no git walks —
         # just vitals. The client also slows its poll to 30 s.
@@ -3312,6 +3313,8 @@ if __name__ == "__main__":
                     raise
             else:
                 sys.exit("headerless dashboard request unexpectedly authorized")
+        with maintenance_request("/api/state", authenticated=False) as response:
+            validate_public_state(json.load(response))
         with maintenance_request("/api/auth-check") as response:
             assert response.status == 200
         # Keep local app navigation inside one installed PWA. Another plot's

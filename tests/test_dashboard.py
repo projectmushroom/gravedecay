@@ -512,11 +512,9 @@ class DashboardContractTests(unittest.TestCase):
                 setattr(DASHBOARD, name, fn)
         self.assertEqual(owner["github"]["prs"], [{"title": "secret"}])
         self.assertEqual(owner["repos"], [{"name": "secret-repo"}])
-        self.assertEqual(viewer["github"]["error"], "restricted")
-        self.assertEqual(viewer["repos"], [])
-        self.assertEqual(viewer["journal"], [])
-        self.assertEqual(viewer["linear"]["issues"], [])
-        self.assertIsNone(viewer["usage"])
+        DASHBOARD.validate_public_state(viewer)
+        for key in ("settings", "apps", "repos", "journal", "linear", "usage"):
+            self.assertNotIn(key, viewer)
 
     def test_t3_activity_normalizes_shell_states_without_detail_reads(self):
         saved = {name: getattr(DASHBOARD, name) for name in

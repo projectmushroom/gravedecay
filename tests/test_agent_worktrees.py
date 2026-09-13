@@ -236,8 +236,8 @@ class AgentWorktreeTests(unittest.TestCase):
             owner = dash.state({"Tailscale-User-Login": "owner@example.com"})
             guest = dash.state({"Tailscale-User-Login": "guest@example.com"})
         self.assertEqual(owner["tmux"][0]["worktree"]["branch"], "agent/one")
-        self.assertNotIn("worktree", guest["tmux"][0])
-        self.assertNotIn("worktree", guest["agent_history"][0])
+        self.assertNotIn("tmux", guest)
+        self.assertNotIn("agent_history", guest)
 
 
 if __name__ == "__main__":

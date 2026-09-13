@@ -105,7 +105,7 @@ print("FAKE_AGENT_RAN", flush=True)
         self.dash.ALLOWED_USERS = {"owner@example.test"}
         self.dash._state = lambda headers: {"tmux": [{"name": name}], "agent_history": []}
         self.assertIn("dispatch", self.dash.state({"Tailscale-User-Login": "owner@example.test"})["tmux"][0])
-        self.assertNotIn("dispatch", self.dash.state({"Tailscale-User-Login": "viewer@example.test"})["tmux"][0])
+        self.assertNotIn("tmux", self.dash.state({"Tailscale-User-Login": "viewer@example.test"}))
         task = self.root / "agents" / name / "task.json"
         self.assertEqual(task.stat().st_mode & 0o777, 0o600)
         self.assertEqual(json.loads(task.read_text())["issue"]["description"], self.issue["description"])

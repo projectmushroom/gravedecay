@@ -158,3 +158,45 @@ After changing `assets/gravedecay-skull.svg`, run
 `sh assets/generate-web-icons.sh` on macOS and commit the exports. This also
 refreshes the legacy installed PNG and the optional T3 branding assets; the
 existing `assets/apply-t3-icon.sh` remains their reapply mechanism.
+
+
+## Denied-viewer dashboard state
+
+`GET /grave/api/state` and the initial `/grave/` page use one access decision
+before any platform or mode-specific owner collectors run. An unlisted tailnet
+login, a headerless request, or an invalid local maintenance token receives
+only these fields:
+
+```json
+{
+  "access": "read-only",
+  "host": "my-box",
+  "platform": "linux",
+  "mode": "developer",
+  "now": "12:34:56",
+  "viewer": "viewer@example.com",
+  "resources": {
+    "uptime_s": 3600,
+    "cpu_pct": 12,
+    "memory_pct": 34,
+    "disk_pct": 56,
+    "cpu_temp_c": 60,
+    "gpu_temp_c": null
+  }
+}
+```
+
+The field set is closed. Resource values are finite numbers or `null`; portable
+workspaces return `null` for every resource instead of reading host metrics.
+There are no owner settings, configured app URLs, detailed OS metadata,
+service/container inventory, session names, integration data, logs, or backup
+metadata. Clients must check `access` before assuming the owner state schema.
+The dashboard renders a read-only vitals panel for this response, including
+when an already-open owner page loses access.
+
+Authorized owner and local maintenance responses keep their existing schema.
+The stable `/api/v1/summary` contract is unchanged. Private reads, mutations,
+files, CSRF checks, and multi-user backend capabilities retain their separate
+gates. Linux/macOS companion `--check-auth` and the native Mac host doctor
+validate the live denied-viewer schema. Apply the update through the normal
+appliance re-raise, portable image recreation, or Mac application/companion update.
