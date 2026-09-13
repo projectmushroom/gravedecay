@@ -109,6 +109,8 @@ grep -q "not refreshable without a terminal" /tmp/grave-e2e-phase4.log
 
 echo "=== phase 5: doctor is the contract ==="
 as_mole grave doctor
+as_mole npm ci --ignore-scripts
+as_mole node tests/e2e/playwright-connect.cjs
 docker exec "$CTR" curl -sf http://127.0.0.1:4712/healthz >/dev/null
 docker exec "$CTR" curl -sf -o /dev/null http://127.0.0.1:4711/
 docker exec "$CTR" curl -sf -o /dev/null http://127.0.0.1:4713/

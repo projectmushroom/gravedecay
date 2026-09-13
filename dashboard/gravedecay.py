@@ -2633,6 +2633,14 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # journald gets enough from systemd
         pass
 
+    def end_headers(self):
+        # Apply to every response path, including redirects, downloads, streams
+        # and BaseHTTPRequestHandler errors. This controls who can embed us;
+        # it does not prevent the dashboard from embedding its own app tiles.
+        self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
+        self.send_header("X-Frame-Options", "DENY")
+        super().end_headers()
+
     def _send(self, code, body, ctype="application/json", cache="no-store", headers=None):
         data = body.encode() if isinstance(body, str) else body
         self.send_response(code)
