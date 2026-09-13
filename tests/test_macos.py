@@ -737,6 +737,9 @@ class MacosContractTests(unittest.TestCase):
             self.assertEqual(good.returncode, 0, good.stderr)
             self.assertIn("io.gravedecay.t3.plist", good.stdout)
             self.assertIn("io.gravedecay.term.plist", good.stdout)
+            # Keep installer bootstrap available when PATH deliberately hides
+            # host tools, so the failure actually exercises tmux/ttyd detection.
+            (fake_bin / "dirname").symlink_to(shutil.which("dirname"))
             for tool in ("tmux", "ttyd"):
                 (fake_bin / tool).unlink()
                 missing = subprocess.run(["/bin/sh", str(ROOT / "macos/install.sh"), "--agents", "--no-serve", "--dry-run"],
