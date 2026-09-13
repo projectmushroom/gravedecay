@@ -31,9 +31,17 @@ final class TtydWebSocketTests: XCTestCase {
         connection.onOpen = {
             connection.sendFrame(Data("{\"AuthToken\":\"\",\"columns\":80,\"rows\":24}".utf8))
         }
+        var sawOutput = false
+        connection.onClose = { error in
+            if !sawOutput {
+                XCTFail("ttyd transport closed before output: \(String(describing: error))")
+                received.fulfill()
+            }
+        }
         connection.onFrame = { data in
             if data.first == UInt8(ascii: "0"),
                String(decoding: data.dropFirst(), as: UTF8.self).contains("grave-origin-ready") {
+                sawOutput = true
                 received.fulfill()
             }
         }
