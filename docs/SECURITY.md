@@ -19,6 +19,14 @@ Appliance CI connects to the actual compose service and launches Chromium;
 doctor detects a container whose image differs from the installed compose
 configuration. The existing host listener stays on `127.0.0.1:3050`.
 
+Existing appliances keep their installed compose files when `raise.sh` reruns.
+To apply this browser update, compare `$GRAVE_ROOT/docker/browsers/compose.yaml`
+with `docker/browsers/compose.yaml` in the updated checkout, then carry over both
+the image tag and matching `playwright@` version while preserving local settings.
+Run `grave docker up browsers` to recreate the service, then `grave doctor`.
+The image check compares the container with the installed configuration; it
+does not detect an installed configuration that still pins an older release.
+
 ## Threat model
 
 A personal box on a home LAN, reachable only over a personal tailnet. The
