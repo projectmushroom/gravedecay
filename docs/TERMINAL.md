@@ -30,6 +30,9 @@ arguments, so editing a plist without reloading it does not satisfy the check.
 Appliance CI tests real same-origin, hostile, wrong-port, null, and missing
 Origin handshakes, including the workspace gateway; Apple CI connects its real
 URLSession transport to an origin-checking ttyd and reads fixture output.
+The Apple session sends an explicit resume after hello: ttyd's initial resume
+can arrive before a ping-gated client creates its PTY, otherwise leaving output
+paused even though the WebSocket connected successfully.
 
 ## Why a custom frontend
 

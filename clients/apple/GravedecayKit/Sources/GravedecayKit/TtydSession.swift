@@ -54,6 +54,10 @@ public final class TtydSession {
     /// Send the hello frame. Call once, right after the websocket opens.
     public func start(token: String, columns: Int, rows: Int) {
         connection?.sendFrame(TtydProtocol.hello(token: token, columns: columns, rows: rows))
+        // ttyd may finish its initial preferences before our ping-gated hello
+        // creates the PTY. Resume explicitly after creation so output starts
+        // even when its earlier automatic resume had no process to wake.
+        connection?.sendFrame(TtydProtocol.resumeFrame)
     }
 
     public func send(text: String) {

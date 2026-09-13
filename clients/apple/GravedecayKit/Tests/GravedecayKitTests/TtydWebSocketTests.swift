@@ -28,8 +28,9 @@ final class TtydWebSocketTests: XCTestCase {
         let received = expectation(description: "real ttyd launched the harmless fixture command")
         let connection = TtydWebSocket(url: try XCTUnwrap(URL(string: endpoint)))
         defer { connection.close() }
+        let terminal = TtydSession(connection: connection)
         connection.onOpen = {
-            connection.sendFrame(Data("{\"AuthToken\":\"\",\"columns\":80,\"rows\":24}".utf8))
+            terminal.start(token: "", columns: 80, rows: 24)
         }
         var sawOutput = false
         var output = Data()
