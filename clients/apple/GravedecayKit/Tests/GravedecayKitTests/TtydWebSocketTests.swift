@@ -32,6 +32,8 @@ final class TtydWebSocketTests: XCTestCase {
             connection.sendFrame(Data("{\"AuthToken\":\"\",\"columns\":80,\"rows\":24}".utf8))
         }
         var sawOutput = false
+        var output = Data()
+        var frames: [String] = []
         connection.onClose = { error in
             if !sawOutput {
                 XCTFail("ttyd transport closed before output: \(String(describing: error))")
@@ -39,14 +41,18 @@ final class TtydWebSocketTests: XCTestCase {
             }
         }
         connection.onFrame = { data in
-            if data.first == UInt8(ascii: "0"),
-               String(decoding: data.dropFirst(), as: UTF8.self).contains("grave-origin-ready") {
-                sawOutput = true
-                received.fulfill()
+            frames.append(String(decoding: data, as: UTF8.self))
+            if data.first == UInt8(ascii: "0") {
+                output.append(data.dropFirst())
+                if !sawOutput && String(decoding: output, as: UTF8.self).contains("grave-origin-ready") {
+                    sawOutput = true
+                    received.fulfill()
+                }
             }
         }
         connection.connect()
         wait(for: [received], timeout: 15)
+        XCTAssertTrue(sawOutput, "received frames: \(frames)")
     }
 }
 #endif
