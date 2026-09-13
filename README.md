@@ -223,6 +223,7 @@ grave preview 3000               # expose a dev server on the tailnet
 grave logs t3|dash|term|<unit>   # follow logs
 grave update                     # snapshot (if snapper), update pkgs/npm/images
 grave backup / restore           # git bundles + configs + docker volumes
+grave backup verify <timestamp>  # checksum a backup before relying on it
 grave notify "title" ["body"]    # page your devices
 ```
 

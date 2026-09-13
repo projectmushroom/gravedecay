@@ -1799,6 +1799,12 @@ cmd_doctor() { # grave doctor [--no-page]
     fi
   fi
   check "backups dir writable"          test -w "$BACKUP_DIR"
+  check "backup integrity helper installed" test -r "$GRAVE_ROOT/scripts/backup-integrity.py"
+  if [[ -e "$BACKUP_DIR/.last-backup" || -L "$BACKUP_DIR/.last-backup" ]]; then
+    check "latest completed backup inventory intact" backup_latest_check
+  elif [[ -f "$BACKUP_DIR/.last-verified" ]]; then
+    say "  ${YLW}– legacy backup has no inventory — run: grave backup${RST}"
+  fi
   # Backup freshness (#112): .last-verified is written only after every artifact
   # in a run was created AND verified, so "fresh marker" means "a restorable
   # backup exists", not "the timer fired". Gated on the timer unit so installs
@@ -1981,11 +1987,45 @@ backup_tar() { # backup_tar <label> <out.tar.gz> <tar args…> — create + veri
   fi
 }
 
-cmd_backup() {
+backup_integrity() {
+  python3 "$GRAVE_ROOT/scripts/backup-integrity.py" "$@"
+}
+
+backup_latest_check() {
+  local ts
+  [[ -f "$BACKUP_DIR/.last-backup" && ! -L "$BACKUP_DIR/.last-backup" ]] || return 1
+  ts=$(<"$BACKUP_DIR/.last-backup")
+  [[ "$ts" =~ ^[0-9]{8}-[0-9]{6}$ ]] || return 1
+  backup_integrity check "$BACKUP_DIR/$ts"
+}
+
+cmd_backup() (
+  # Subshell scopes the lock and private umask even when migration calls us.
+  if [[ "${1:-}" == verify ]]; then
+    [[ $# == 2 && "$2" =~ ^[0-9]{8}-[0-9]{6}$ ]] \
+      || { bad "usage: grave backup verify <YYYYMMDD-HHMMSS>"; exit 1; }
+    backup_integrity verify "$BACKUP_DIR/$2"
+    exit
+  fi
   local include_secrets=0
-  [[ "${1:-}" == "--include-secrets" ]] && include_secrets=1
+  case "$*" in
+    "") ;;
+    --include-secrets) include_secrets=1 ;;
+    *) bad "usage: grave backup [--include-secrets] | verify <timestamp>"; exit 1 ;;
+  esac
+  [[ "$BACKUP_KEEP" =~ ^[1-9][0-9]*$ ]] \
+    || { bad "BACKUP_KEEP must be a positive integer"; exit 1; }
   need_root_helper
-  local ts dest failures=0; ts=$(date +%Y%m%d-%H%M%S); dest="$BACKUP_DIR/$ts"
+  umask 077
+  mkdir -p "$BACKUP_DIR"
+  local backup_lock
+  exec {backup_lock}>"$BACKUP_DIR/.backup.lock"
+  flock -n "$backup_lock" || { bad "another backup is running"; exit 1; }
+  local ts dest final failures=0
+  ts=$(date +%Y%m%d-%H%M%S); final="$BACKUP_DIR/$ts"
+  [[ ! -e "$final" && ! -L "$final" ]] \
+    || { bad "backup $ts already exists — retry in a second"; exit 1; }
+  dest=$(mktemp -d "$BACKUP_DIR/.incomplete-$ts.XXXXXX")
   mkdir -p "$dest"/{repos,volumes,configs}
   say "Backing up to $dest"
 
@@ -2082,23 +2122,31 @@ cmd_backup() {
     say "  ${YLW}docker stopped — volumes skipped this run${RST}"
   fi
 
-  # retention — only timestamped backups (YYYYMMDD-HHMMSS). $BACKUP_DIR also holds
-  # migration-* and removed-workspaces/, which sort AFTER the digits and would
-  # otherwise occupy the "keep last N" slots, pruning real backups early (and
-  # risk rm-ing non-backup dirs). Filter to the backup name shape.
-  local old
-  while IFS= read -r old; do
-    rm -rf "$BACKUP_DIR/${old:?}"; say "  pruned old backup $old"
-  done < <(ls -1 "$BACKUP_DIR" 2>/dev/null | grep -E '^[0-9]{8}-[0-9]{6}$' | sort | head -n -"$BACKUP_KEEP")
   if (( failures > 0 )); then
     log "backup: $ts FAILED ($failures artifact(s))"
     bad "backup incomplete: $failures artifact(s) failed — kept at $dest; freshness marker not updated"
     exit 1
   fi
-  date -u +%FT%TZ >"$BACKUP_DIR/.last-verified"
+  # Seal only complete runs. Publication is a rename on the backup filesystem;
+  # interrupted runs remain .incomplete-* and never enter retention.
+  backup_integrity seal "$dest"
+  mv -T "$dest" "$final"
+  dest="$final"
+  printf '%s\n' "$ts" >"$BACKUP_DIR/.last-backup.tmp"
+  mv -f "$BACKUP_DIR/.last-backup.tmp" "$BACKUP_DIR/.last-backup"
+  date -u +%FT%TZ >"$BACKUP_DIR/.last-verified.tmp"
+  mv -f "$BACKUP_DIR/.last-verified.tmp" "$BACKUP_DIR/.last-verified"
+
+  # Retention runs only after success, and ignores staging/migration trees.
+  local old
+  while IFS= read -r old; do
+    [[ -d "$BACKUP_DIR/$old" && ! -L "$BACKUP_DIR/$old" ]] || continue
+    rm -rf "$BACKUP_DIR/${old:?}"; say "  pruned old backup $old"
+  done < <(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' \
+    | grep -E '^[0-9]{8}-[0-9]{6}$' | grep -vFx "$ts" | sort -r | tail -n +"$BACKUP_KEEP")
   log "backup: $ts complete"
   ok "backup complete: $dest"
-}
+)
 
 cmd_restore() {
   local ts="${1:-}"
@@ -2110,20 +2158,28 @@ cmd_restore() {
     say "Full procedures: $GRAVE_ROOT/docs/RECOVERY.md"
     return
   fi
+  [[ "$ts" =~ ^[0-9]{8}-[0-9]{6}$ ]] \
+    || { bad "backup must be a YYYYMMDD-HHMMSS timestamp"; exit 1; }
   local dest="$BACKUP_DIR/$ts"
-  [[ -d "$dest" ]] || { bad "no such backup: $ts"; exit 1; }
+  [[ ! -L "$dest" && -d "$dest" ]] || { bad "no such backup: $ts"; exit 1; }
+  case "${2:-}" in
+    volume|repo|workspaces) backup_integrity preflight "$dest" || return 1 ;;
+  esac
   case "${2:-}" in
     volume)
       local vol="${3:?volume name}"
       # $vol flows into `docker run -v $vol:/data` and a container `sh -c`, so an
       # unvalidated value could bind a host path (vol=/etc) or inject shell.
       [[ "$vol" =~ ^[A-Za-z0-9_.-]+$ ]] || { bad "volume name must be letters, digits, '.', '-' or '_'"; exit 1; }
+      [[ -f "$dest/volumes/$vol.tar.gz" ]] || { bad "backup has no archive for volume $vol"; exit 1; }
       dk volume create "$vol" >/dev/null
       dk run --rm -v "$vol":/data -v "$dest/volumes":/backup:ro alpine \
         sh -c "cd /data && tar -xzf /backup/$vol.tar.gz"
       ok "volume $vol restored from $ts" ;;
     repo)
       local name="${3:?repo name}"
+      [[ "$name" != .* && "$name" != -* && "$name" != */* && -n "$name" ]] \
+        || { bad "repo name must be a plain directory name"; exit 1; }
       git clone "$dest/repos/$name.bundle" "$GRAVE_ROOT/repos/$name-restored"
       ok "repo restored to $GRAVE_ROOT/repos/$name-restored" ;;
     workspaces)
@@ -2712,7 +2768,8 @@ grave — gravedecay appliance control 🪦
   grave backup               bundle repos, configs, docker volumes — every
                              artifact verified; a timer runs one nightly and
                              doctor enforces freshness (docs/RECOVERY.md)
-  grave restore [backup]     list / restore backups
+  grave backup verify <ts>   read and checksum every artifact without restoring
+  grave restore [backup]     list / restore backups (checksum preflight)
   grave uninstall            remove the platform: units, CLIs, /etc/gravedecay,
                              tailnet mounts, containers. KEEPS $GRAVE_ROOT
                              (repos, agents, secrets, backups) and leaves

@@ -196,6 +196,7 @@ class AgentWorktreeTests(unittest.TestCase):
         (self.worktree() / "new.txt").write_text("untracked work\n")
         for name in ["config", "docker", "docs", "scripts", "logs"]:
             (self.root / name).mkdir(exist_ok=True)
+        shutil.copyfile(ROOT / "libexec/backup-integrity.py", self.root / "scripts/backup-integrity.py")
         source = (ROOT / "bin/grave").read_text().rsplit("\ncase ", 1)[0]
         # Run the actual backup function; fake only privileged/host services.
         p = subprocess.run(["bash"], input=source +
