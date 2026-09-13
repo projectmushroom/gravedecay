@@ -48,7 +48,11 @@ artifact succeeds and the inventory is recorded is that directory renamed to
 `<timestamp>/`. A second simultaneous backup fails immediately; a repeated
 timestamp is refused rather than overwritten. Interrupted or failed staging
 directories remain for inspection and are excluded from retention; remove them
-manually when no longer needed. New backup directories are mode 700.
+manually when no longer needed. New backup directories are mode 700. When root
+creates a backup (including during multi-user migration), completed artifacts,
+freshness markers, and the run lock belong to the appliance owner, determined
+by `$GRAVE_ROOT` ownership. Doctor and the next owner-run backup retain access;
+workspace collaborators do not gain access.
 
 After copying a backup, or before relying on it for recovery, run:
 

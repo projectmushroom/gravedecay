@@ -2018,9 +2018,17 @@ cmd_backup() (
   need_root_helper
   umask 077
   mkdir -p "$BACKUP_DIR"
-  local backup_lock
+  # Migration invokes this as root, but the owner runs doctor and the nightly
+  # timer. Keep private output usable by that account (not SUDO_USER, which may
+  # be a different administrator). GRAVE_ROOT ownership is the install contract.
+  local backup_lock backup_owner=""
+  if (( EUID == 0 )); then
+    backup_owner=$(stat -c '%u:%g' "$GRAVE_ROOT")
+    chown "$backup_owner" "$BACKUP_DIR"
+  fi
   exec {backup_lock}>"$BACKUP_DIR/.backup.lock"
   flock -n "$backup_lock" || { bad "another backup is running"; exit 1; }
+  [[ -z "$backup_owner" ]] || chown "$backup_owner" "$BACKUP_DIR/.backup.lock"
   local ts dest final failures=0
   ts=$(date +%Y%m%d-%H%M%S); final="$BACKUP_DIR/$ts"
   [[ ! -e "$final" && ! -L "$final" ]] \
@@ -2130,11 +2138,14 @@ cmd_backup() (
   # Seal only complete runs. Publication is a rename on the backup filesystem;
   # interrupted runs remain .incomplete-* and never enter retention.
   backup_integrity seal "$dest"
+  [[ -z "$backup_owner" ]] || chown -R --no-dereference "$backup_owner" "$dest"
   mv -T "$dest" "$final"
   dest="$final"
   printf '%s\n' "$ts" >"$BACKUP_DIR/.last-backup.tmp"
+  [[ -z "$backup_owner" ]] || chown "$backup_owner" "$BACKUP_DIR/.last-backup.tmp"
   mv -f "$BACKUP_DIR/.last-backup.tmp" "$BACKUP_DIR/.last-backup"
   date -u +%FT%TZ >"$BACKUP_DIR/.last-verified.tmp"
+  [[ -z "$backup_owner" ]] || chown "$backup_owner" "$BACKUP_DIR/.last-verified.tmp"
   mv -f "$BACKUP_DIR/.last-verified.tmp" "$BACKUP_DIR/.last-verified"
 
   # Retention runs only after success, and ignores staging/migration trees.
