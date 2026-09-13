@@ -254,6 +254,13 @@ def cmd_doctor(a):
                 active=subprocess.run(["systemctl","is-active","--quiet",instance]).returncode==0
                 if active:
                     user=subprocess.check_output(["systemctl","show","-p","User","--value",instance],text=True).strip()
+                    if unit == "gravedecay-term":
+                        pid=subprocess.check_output(["systemctl","show","-p","MainPID","--value",instance],text=True).strip()
+                        try:
+                            args=Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0") if pid.isdecimal() and int(pid)>0 else []
+                        except OSError:
+                            args=[]
+                        if b"--check-origin" not in args: die(f"terminal origin validation missing: {instance}")
                     if user != unix_name(w["slug"]): die(f"service identity drift: {instance}")
             for kind,port in w["ports"].items():
                 listeners=subprocess.run(["ss","-H","-ltn",f"sport = :{port}"],capture_output=True,text=True).stdout

@@ -9,7 +9,7 @@ t3 serve --mode web --host 0.0.0.0 --port 4711 --base-dir "$T3_BASE_DIR" "$GRAVE
 t3_pid=$!
 python3 /opt/gravedecay/gravedecay.py &
 dashboard_pid=$!
-ttyd -p 4713 -i 0.0.0.0 -W --url-arg --base-path /term \
+ttyd -p 4713 -i 0.0.0.0 -W --check-origin --url-arg --base-path /term \
   -I /opt/gravedecay/web/term/index.html /opt/gravedecay/webterm &
 term_pid=$!
 

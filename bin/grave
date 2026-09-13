@@ -1784,6 +1784,7 @@ cmd_doctor() { # grave doctor [--no-page]
     say "  ${YLW}– gravedecay stopped${RST}"
   fi
   if systemctl is-active --quiet gravedecay-term; then
+    check "web terminal validates origins" terminal_origin_ok
     check "web terminal answering"       curl -sf -o /dev/null "http://127.0.0.1:${TERM_PORT:-4713}/"
     # Stock ttyd 1.7.7 serves a frontend that drops OSC 52 — clipboard copy
     # out of tmux silently dies (docs/TERMINAL.md). The unit must serve the
@@ -1926,6 +1927,12 @@ cmd_dashboard_probe() {
 dashboard_local_push_ok() { GRAVE_ROOT="$GRAVE_ROOT" DASH_PORT="$DASH_PORT" python3 "$GRAVE_ROOT/scripts/gravedecay.py" --local-request /api/push-key | jq -e .ok >/dev/null; }
 
 dashboard_probe() { sudo -n "$0" __dashboard-probe "$1"; }
+terminal_origin_ok() {
+  local pid
+  pid=$(systemctl show -p MainPID --value gravedecay-term.service) || return 1
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  grep -zFxq -- '--check-origin' "/proc/$pid/cmdline"
+}
 dashboard_frame_policy_ok() {
   local headers
   if [[ "${MULTI_USER:-0}" == 1 ]]; then

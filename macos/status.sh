@@ -58,6 +58,11 @@ if [ "$dash" = 1 ]; then
 fi
 # t3/ttyd have no /healthz; their answering root page is the liveness signal.
 check io.gravedecay.t3 4711 "$agentsmode" /; check io.gravedecay.term 4713 "$agentsmode" /
+if [ "$agentsmode" = 1 ]; then
+  if launchctl print "gui/$uid/io.gravedecay.term" 2>/dev/null | grep -Eq '^[[:space:]]+--check-origin$'; then
+    echo "terminal origin validation: ok"
+  else echo "terminal origin validation: missing — rerun macos/install.sh --agents"; rc=1; fi
+fi
 if [ -n "$PYTHON" ] && [ -f "$ROOT/config/release.json" ]; then
   "$PYTHON" - "$ROOT/config/release.json" <<'PY' 2>/dev/null || true
 import json, sys

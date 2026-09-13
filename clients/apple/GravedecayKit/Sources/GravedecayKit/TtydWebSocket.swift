@@ -24,8 +24,26 @@ public final class TtydWebSocket: NSObject, TtydConnection {
         super.init()
     }
 
+    // URLSession does not promise the Origin header a browser supplies.
+    // Keep only the endpoint's HTTP origin, without a path or credentials.
+    static func request(for url: URL) -> URLRequest {
+        var origin = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        origin.scheme = url.scheme == "wss" ? "https" : "http"
+        origin.user = nil
+        origin.password = nil
+        origin.path = ""
+        origin.query = nil
+        origin.fragment = nil
+        if (origin.scheme == "https" && origin.port == 443) ||
+           (origin.scheme == "http" && origin.port == 80) { origin.port = nil }
+        var request = URLRequest(url: url)
+        request.setValue(origin.string!, forHTTPHeaderField: "Origin")
+        request.setValue("tty", forHTTPHeaderField: "Sec-WebSocket-Protocol")
+        return request
+    }
+
     public func connect() {
-        let task = session.webSocketTask(with: url, protocols: ["tty"])
+        let task = session.webSocketTask(with: Self.request(for: url))
         self.task = task
         task.resume()
         receiveLoop(task)

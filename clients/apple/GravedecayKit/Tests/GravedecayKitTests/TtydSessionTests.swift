@@ -43,6 +43,8 @@ final class TtydSessionTests: XCTestCase {
         let obj = try XCTUnwrap(
             JSONSerialization.jsonObject(with: XCTUnwrap(harness.sentFrames.first)) as? [String: Any])
         XCTAssertEqual(obj["AuthToken"] as? String, "tok")
+        XCTAssertEqual(harness.sentFrames.count, 2)
+        XCTAssertEqual(harness.sentFrames.last, TtydProtocol.resumeFrame)
     }
 
     func testOutputRoutedToDelegate() {

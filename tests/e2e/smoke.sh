@@ -111,6 +111,8 @@ echo "=== phase 5: doctor is the contract ==="
 as_mole grave doctor
 as_mole npm ci --ignore-scripts
 as_mole node tests/e2e/playwright-connect.cjs
+as_mole python3 tests/e2e/terminal-origins.py 4713
+as_mole python3 -m unittest discover -s tests -p test_terminal_origins.py -v
 docker exec "$CTR" curl -sf http://127.0.0.1:4712/healthz >/dev/null
 docker exec "$CTR" curl -sf -o /dev/null http://127.0.0.1:4711/
 docker exec "$CTR" curl -sf -o /dev/null http://127.0.0.1:4713/
@@ -136,6 +138,10 @@ as_mole bash -c '
 docker exec "$CTR" curl -sf --max-time 5 http://127.0.0.1:4810/ >/dev/null
 docker exec "$CTR" curl -sf --max-time 5 http://127.0.0.1:4910/ >/dev/null
 docker exec "$CTR" curl -sf --max-time 5 http://127.0.0.1:5010/healthz >/dev/null
+docker exec "$CTR" python3 /repo/tests/e2e/terminal-origins.py 4910
+# Exercise public Host/Origin preservation through the actual root gateway.
+docker exec "$CTR" python3 /repo/tests/e2e/terminal-origins.py 4710 \
+  --gateway-token-file /srv/dev/config/secrets/gateway-token --user mole@example.com
 docker exec "$CTR" grave users add 200 bob@example.com bob --no-llm
 if docker exec "$CTR" runuser -u grave-bob -- cat /srv/dev/backups/.last-backup; then
   echo "FATAL: collaborator can read private backup metadata"

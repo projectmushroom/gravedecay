@@ -1,5 +1,13 @@
 # Security model
 
+## Terminal browser access
+
+All shipped web terminal launchers require ttyd Origin validation, including
+Linux owner/workspace services, portable deployment, and optional macOS agents.
+Missing and mismatched Origins are refused; native clients must send a matching
+Origin. The Apple transport does so explicitly. This supplements the tailnet
+and workspace boundaries. See [terminal policy and rollout](TERMINAL.md#websocket-origin-policy).
+
 ## Browser framing and automation
 
 Every dashboard response includes `Content-Security-Policy: frame-ancestors 'none'`
