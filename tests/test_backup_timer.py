@@ -46,8 +46,8 @@ class BackupTimerContractTests(unittest.TestCase):
     def test_marker_written_only_on_clean_verified_run(self):
         # .last-verified is the doctor freshness source, so it must be the last
         # thing a fully clean run does — never written on a partial failure.
-        self.assertIn('date -u +%FT%TZ >"$BACKUP_DIR/.last-verified"', GRAVE)
-        marker = GRAVE.index('>"$BACKUP_DIR/.last-verified"')
+        self.assertIn('mv -f "$BACKUP_DIR/.last-verified.tmp" "$BACKUP_DIR/.last-verified"', GRAVE)
+        marker = GRAVE.index('>"$BACKUP_DIR/.last-verified.tmp"')
         bail = GRAVE.index("backup incomplete")
         self.assertLess(bail, marker)
 

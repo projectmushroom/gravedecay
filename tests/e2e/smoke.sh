@@ -118,12 +118,27 @@ as_mole bash /repo/tests/e2e/jobs.sh
 echo "=== phase 6: multi-user loopback boundary ==="
 as_mole grave multiuser enable 100 mole@example.com mole --profile generic
 docker exec "$CTR" grave __users doctor
+# Migration backed up as root. Private artifacts and metadata must still be
+# usable by the appliance owner, including the lock for the next nightly run.
+as_mole bash -c '
+  ts=$(cat /srv/dev/backups/.last-backup)
+  grave backup verify "$ts"
+  test "$(stat -c "%U %a" "/srv/dev/backups/$ts")" = "mole 700"
+  test "$(stat -c "%U %a" /srv/dev/backups/.last-backup)" = "mole 600"
+  test "$(stat -c "%U %a" /srv/dev/backups/.last-verified)" = "mole 600"
+  exec 9>/srv/dev/backups/.backup.lock
+  flock -n 9
+'
 # Prove the owner workspace backends are genuinely live before a second Unix
 # user is expected to be unable to reach them.
 docker exec "$CTR" curl -sf --max-time 5 http://127.0.0.1:4810/ >/dev/null
 docker exec "$CTR" curl -sf --max-time 5 http://127.0.0.1:4910/ >/dev/null
 docker exec "$CTR" curl -sf --max-time 5 http://127.0.0.1:5010/healthz >/dev/null
 docker exec "$CTR" grave users add 200 bob@example.com bob --no-llm
+if docker exec "$CTR" runuser -u grave-bob -- cat /srv/dev/backups/.last-backup; then
+  echo "FATAL: collaborator can read private backup metadata"
+  exit 1
+fi
 # A second workspace identity cannot dial any owner workspace backend or legacy
 # service, even with a forged capability. The root gateway still routes it.
 for port in 4810 4910 5010 4711 4712 4713; do
