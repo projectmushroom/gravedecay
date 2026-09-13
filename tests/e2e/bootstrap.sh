@@ -68,22 +68,10 @@ chmod 755 /usr/bin/ufw
 mkdir -p /etc/docker
 printf '{"storage-driver":"vfs"}\n' >/etc/docker/daemon.json
 
-# Real docker-in-container: the core stack (postgres+redis) must actually
-# come up. The playwright browsers image is ~2 GiB, so pre-seed that stack
-# with a tiny stand-in — raise deliberately never overwrites an existing one.
+# Real docker-in-container: raise installs both shipped compose stacks.
+# Keep Playwright real so smoke.sh verifies the pinned server can launch a
+# browser and accept a connection from the matching client.
 systemctl enable --now docker
-install -d -o mole -g mole /srv/dev /srv/dev/docker /srv/dev/docker/browsers
-cat >/srv/dev/docker/browsers/compose.yaml <<'EOF'
-services:
-  browsers:
-    image: alpine:3
-    command: sleep infinity
-    init: true
-    restart: unless-stopped
-    networks: [devnet]
-networks:
-  devnet:
-    external: true
-EOF
+install -d -o mole -g mole /srv/dev
 chown -R mole:mole /srv/dev
 echo "bootstrap complete"
