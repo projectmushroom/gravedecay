@@ -40,8 +40,17 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-      - name: Core tests (Darwin, includes TtydWebSocket)
-        run: swift test --package-path clients/apple/GravedecayKit
+      - name: Core tests (Darwin, includes real ttyd transport)
+        run: |
+          brew install ttyd
+          ttyd -i 127.0.0.1 -p 3997 --check-origin /usr/bin/printf grave-origin-ready >"$RUNNER_TEMP/ttyd.log" 2>&1 &
+          ttyd_pid=$!
+          trap 'kill "$ttyd_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            curl -sf http://127.0.0.1:3997/ >/dev/null && break
+            sleep 1
+          done
+          GRAVE_TTYD_TEST_URL=ws://127.0.0.1:3997/ws swift test --package-path clients/apple/GravedecayKit
       - name: Test and build menu-bar fleet widget
         run: |
           swift test --package-path clients/macos-menubar

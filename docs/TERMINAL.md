@@ -5,6 +5,32 @@ ttyd on loopback `:4713`, exposed at `https://<box>.ts.net/term` by
 socket (`bin/webterm` picks the session from `?arg=`), so the browser, SSH,
 and `grave agents attach` all reach the same persistent shell.
 
+## WebSocket origin policy
+
+Every shipped ttyd launcher enables `--check-origin`: owner and workspace
+systemd units, the portable container, and the optional macOS LaunchAgent.
+Handshakes require an Origin whose host and non-default port match the public
+Host header. Hostile, `null`, and missing Origins are rejected before ttyd
+creates a PTY. Normal browser/PWA clients send Origin automatically; the Apple
+client explicitly sends the HTTP(S) origin corresponding to its WS(S) endpoint.
+Custom native clients must do the same.
+
+The workspace gateway and portable nginx preserve the public Host and Origin
+when forwarding upgrades. Tailscale identity and workspace authorization remain
+required independently; Origin validation protects against browser requests
+using a victim's existing tailnet access, and is not native-client authentication.
+The upstream ttyd check compares host/port, not schemes; tailnet entry points
+use HTTPS. See [ttyd's implementation](https://github.com/tsl0922/ttyd/blob/1.7.7/src/protocol.c).
+
+Apply the change on existing Linux appliances by re-running `raise.sh`; recreate
+the portable app from the updated image, or rerun `macos/install.sh --agents`
+for the optional Mac terminal. `grave doctor` checks running owner/workspace
+process arguments on Linux. `macos/status.sh` checks the loaded LaunchAgent
+arguments, so editing a plist without reloading it does not satisfy the check.
+Appliance CI tests real same-origin, hostile, wrong-port, null, and missing
+Origin handshakes, including the workspace gateway; Apple CI connects its real
+URLSession transport to an origin-checking ttyd and reads fixture output.
+
 ## Why a custom frontend
 
 ttyd serves a single built-in page. The packaged release (1.7.7, March 2024)
