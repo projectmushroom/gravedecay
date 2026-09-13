@@ -1670,6 +1670,7 @@ cmd_doctor() { # grave doctor [--no-page]
   fi
   if dkctl is-active --quiet docker; then
     check "docker healthy"              dk info
+    check "browser automation image matches installed stack" browsers_image_ok
     # dk is a shell function, so expand the real argv for the piped subshell
     check "no LAN-exposed containers"   bash -c "! ${_DOCKER[*]} ps --format '{{.Ports}}' | grep -E '0\.0\.0\.0|\[::\]'"
   else
@@ -1744,6 +1745,7 @@ cmd_doctor() { # grave doctor [--no-page]
     say "  ${YLW}– a relay tunnel is running outside the appliance T3 instance (desktop app?) — the box is exposed beyond the declared Connect mode${RST}"
   fi
   if systemctl is-active --quiet gravedecay; then
+    check "dashboard refuses framing" dashboard_frame_policy_ok
     if [[ "${MULTI_USER:-0}" == 1 ]]; then
       check "gravedecay maintenance health" sudo -n "$0" __dashboard-health
       check "dashboard summary API contract" dashboard_summary_ok
@@ -1924,6 +1926,24 @@ cmd_dashboard_probe() {
 dashboard_local_push_ok() { GRAVE_ROOT="$GRAVE_ROOT" DASH_PORT="$DASH_PORT" python3 "$GRAVE_ROOT/scripts/gravedecay.py" --local-request /api/push-key | jq -e .ok >/dev/null; }
 
 dashboard_probe() { sudo -n "$0" __dashboard-probe "$1"; }
+dashboard_frame_policy_ok() {
+  local headers
+  if [[ "${MULTI_USER:-0}" == 1 ]]; then
+    headers=$(dashboard_probe sw) || return 1
+  else
+    headers=$(curl -sf --max-time 5 -D - -o /dev/null "http://127.0.0.1:$DASH_PORT/healthz") || return 1
+  fi
+  headers=${headers//$'\r'/}
+  headers=${headers%%$'\n\n'*}
+  grep -Fxiq "Content-Security-Policy: frame-ancestors 'none'" <<<"$headers" &&
+    grep -Fxiq 'X-Frame-Options: DENY' <<<"$headers"
+}
+browsers_image_ok() {
+  local expected actual
+  expected=$(compose browsers config --images) || return 1
+  actual=$(dk inspect --format '{{.Config.Image}}' browsers-playwright) || return 1
+  [[ -n "$expected" && "$actual" == "$expected" ]]
+}
 dashboard_summary_ok() { dashboard_probe summary | jq -e '.product == "gravedecay" and .api_version == 1' >/dev/null; }
 dashboard_build_ok() { [[ "$(sha256sum "$GRAVE_ROOT/scripts/gravedecay.py" | cut -d' ' -f1)" == "$(dashboard_probe health | jq -r .build)" ]]; }
 dashboard_shell_ok() { [[ "$(sha256sum "$GRAVE_ROOT/scripts/dashboard-static/index.html" | cut -d' ' -f1)" == "$(dashboard_probe health | jq -r .shell)" ]]; }

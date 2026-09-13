@@ -7,6 +7,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.request
 
@@ -98,6 +99,60 @@ class DashboardContractTests(unittest.TestCase):
             self.assertEqual(response.read()[:6], b"\x00\x00\x01\x00\x02\x00")
         self.assertNotIn("@ICON@", DASHBOARD.PAGE)
         self.assertNotIn("@ICON@", DASHBOARD.SW)
+
+    def test_frame_policy_covers_success_errors_and_base_handler_errors(self):
+        import http.client
+        from urllib.parse import urlsplit
+        origin = urlsplit(self.origin)
+        for method, path, expected in (("GET", "/", 200),
+                                       ("GET", "/offline.html", 200),
+                                       ("GET", "/healthz", 200),
+                                       ("GET", "/sw.js", 200),
+                                       ("GET", "/does-not-exist", 404),
+                                       ("HEAD", "/", 501)):
+            with self.subTest(method=method, path=path), mock.patch.object(DASHBOARD, "state", return_value={}):
+                connection = http.client.HTTPConnection(origin.hostname, origin.port, timeout=5)
+                try:
+                    connection.request(method, path, headers=OWNER)
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, expected)
+                    self.assertEqual(response.getheader("Content-Security-Policy"), "frame-ancestors 'none'")
+                    self.assertEqual(response.getheader("X-Frame-Options"), "DENY")
+                    response.read()
+                finally:
+                    connection.close()
+
+    def test_frame_policy_covers_redirects(self):
+        import http.client
+        from urllib.parse import urlsplit
+        origin = urlsplit(self.origin)
+        with mock.patch.object(DASHBOARD, "BASE", "/grave"):
+            connection = http.client.HTTPConnection(origin.hostname, origin.port, timeout=5)
+            try:
+                connection.request("GET", "/grave", headers=OWNER)
+                response = connection.getresponse()
+                self.assertEqual(response.status, 301)
+                self.assertEqual(response.getheader("Content-Security-Policy"), "frame-ancestors 'none'")
+                self.assertEqual(response.getheader("X-Frame-Options"), "DENY")
+            finally:
+                connection.close()
+
+    def test_frame_policy_covers_downloads_and_streamed_actions(self):
+        import sys
+        with tempfile.NamedTemporaryFile() as artifact:
+            artifact.write(b"download content")
+            artifact.flush()
+            with mock.patch.object(DASHBOARD, "_safe_path", return_value=artifact.name):
+                with self.get("/api/download?path=artifact") as response:
+                    self.assertEqual(response.read(), b"download content")
+                    self.assertEqual(response.headers["Content-Security-Policy"], "frame-ancestors 'none'")
+                    self.assertEqual(response.headers["X-Frame-Options"], "DENY")
+        command = [sys.executable, "-c", "print('policy test')"]
+        with mock.patch.dict(DASHBOARD.ACTIONS, {"frame-test": command}):
+            with self.get("/api/action-stream?action=frame-test") as response:
+                self.assertIn(b"event: done", response.read())
+                self.assertEqual(response.headers["Content-Security-Policy"], "frame-ancestors 'none'")
+                self.assertEqual(response.headers["X-Frame-Options"], "DENY")
 
     def test_multi_user_backend_requires_gateway_capability_except_health(self):
         secured = load_dashboard({"GRAVEDECAY_BACKEND_TOKEN": "a" * 64})

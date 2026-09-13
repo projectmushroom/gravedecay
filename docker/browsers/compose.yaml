@@ -5,12 +5,12 @@ name: browsers
 
 services:
   playwright:
-    image: mcr.microsoft.com/playwright:v1.54.0-noble
+    image: mcr.microsoft.com/playwright:v1.61.1-noble
     container_name: browsers-playwright
     restart: unless-stopped
     init: true
     command: >
-      /bin/sh -c "npx -y playwright@1.54.0 run-server --port 3050 --host 0.0.0.0"
+      /bin/sh -c "npx -y playwright@1.61.1 run-server --port 3050 --host 0.0.0.0"
     ports:
       - "127.0.0.1:3050:3050"
     ipc: host

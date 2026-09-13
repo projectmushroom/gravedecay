@@ -1,5 +1,24 @@
 # Security model
 
+## Browser framing and automation
+
+Every dashboard response includes `Content-Security-Policy: frame-ancestors 'none'`
+and `X-Frame-Options: DENY`, including errors, redirects, downloads, and streamed
+actions. Other pages cannot embed the dashboard to disguise its controls. The
+policy does not restrict which app tiles the dashboard itself embeds, and
+top-level browser/PWA use keeps working. Request-level CSRF and identity checks
+remain separate requirements. Linux `grave doctor` checks the running response
+policy through the privileged probe in multi-user mode.
+
+The browser automation image and its `playwright run-server` package are pinned
+to the same version as the repository's Playwright test client. The contract
+suite rejects version drift and versions before the fix for
+[CVE-2025-59288](https://github.com/advisories/GHSA-7mvr-c777-76hp).
+[Playwright requires matching client/server versions](https://playwright.dev/docs/docker#remote-connection).
+Appliance CI connects to the actual compose service and launches Chromium;
+doctor detects a container whose image differs from the installed compose
+configuration. The existing host listener stays on `127.0.0.1:3050`.
+
 ## Threat model
 
 A personal box on a home LAN, reachable only over a personal tailnet. The
