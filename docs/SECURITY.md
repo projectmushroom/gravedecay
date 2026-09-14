@@ -249,8 +249,12 @@ creates directories and updates agent hooks only after exec under the workspace
 UID. Root creates only a verified new empty home; it never recursively chowns
 workspace content during provisioning. Doctor applies the same path and ownership
 checks without mutation. See [MULTIUSER.md](MULTIUSER.md#workspace-provisioning-safety).
-The remaining root-side revoke/removal, owner migration/restore, and private
-workspace backup work are tracked separately in #198.
+Project revocation likewise executes as the workspace UID with no-replace
+rename. Workspace removal uses verified administrator-controlled parent directory
+handles, records restartable intent, and renames the whole home into private
+root-owned archive parents without traversing its contents. Doctor checks archive
+privacy and unfinished removals. See [retention behavior](MULTIUSER.md#revocation-and-workspace-removal).
+Owner migration/restore and private workspace backup work remain tracked in #198.
 See [SECRETS.md](SECRETS.md#multi-user-workspaces) for rollout and file formats.
 
 ## The web terminal

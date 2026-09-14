@@ -129,3 +129,20 @@ of a running agent. Pause writing agents when a consistent checkpoint matters.
 Hourly snapper timeline on the `$GRAVE_ROOT` subvolume covers oops-level
 mistakes: `sudo snapper -c srv list`, `sudo snapper -c srv undochange N..M`.
 Snapshots are not backups — they die with the disk.
+
+## Retained removed workspaces
+
+`grave users remove <workspace> --confirm <workspace>` preserves the home at the
+printed `backups/removed-workspaces/<workspace>-<random>/home` path. Root-owned
+mode-700 parent directories protect it even if its original UID is reassigned.
+Use administrator/root access to inspect or recover these archives; the ordinary
+backup retention timer excludes `removed-workspaces`.
+
+If removal fails after moving the home, leave the registry receipt intact and
+rerun the same confirmed remove command after resolving the reported failure
+(for example, remaining processes preventing `userdel`). `grave users status`
+reports `removal_pending`; doctor rejects unfinished removal. Do not recreate a
+home or copy an archive over an existing workspace to bypass the receipt. The
+command checks directory identity on retry and refuses conflicting data. Removal
+requires a same-filesystem rename and never falls back to recursively copying
+collaborator-controlled contents as root.
