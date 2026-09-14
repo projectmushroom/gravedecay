@@ -44,8 +44,8 @@ class MacosContractTests(unittest.TestCase):
         finally:
             dash.collect_docker = old_docker
         self.assertEqual(state["platform"], "macos")
-        self.assertEqual(state["docker"], sentinel)
-        self.assertEqual(state["tmux"], [])
+        self.assertNotIn("docker", state)
+        self.assertNotIn("tmux", state)
         self.assertEqual(dash._summary_links(), {"dashboard": "/grave/", "network": "/net/"})
         no_net = load(ROOT / "dashboard/gravedecay.py", {"GRAVEDECAY_PLATFORM": "macos", "GRAVEDECAY_APPS": ""})
         self.assertEqual(no_net._summary_links(), {"dashboard": "/grave/"})
@@ -125,11 +125,9 @@ class MacosContractTests(unittest.TestCase):
                 setattr(dash, name, fn)
         self.assertEqual(owner["repos"], [{"name": "secret"}])
         self.assertEqual(owner["github"]["repos"][0]["prs"][0]["title"], "secret")
-        self.assertEqual(viewer["repos"], [])
-        self.assertEqual(viewer["repo_scan"]["root"], None)
-        self.assertEqual(viewer["settings"]["repo_root"], "")
-        self.assertEqual(viewer["github"]["error"], "restricted")
-        self.assertEqual(viewer["linear"]["issues"], [])
+        dash.validate_public_state(viewer)
+        for key in ("repos", "repo_scan", "settings", "github", "linear"):
+            self.assertNotIn(key, viewer)
 
     def test_macos_github_work_is_per_repo_sorted_and_command_bounded(self):
         dash = load(ROOT / "dashboard/gravedecay.py", {"GRAVEDECAY_PLATFORM": "macos"})
@@ -681,7 +679,7 @@ class MacosContractTests(unittest.TestCase):
         owner_state = dash.state({"Tailscale-User-Login": "owner@example.test"})
         self.assertEqual(owner_state["tmux"][0]["name"], "claude")
         self.assertTrue(owner_state["macos_agents"])
-        self.assertEqual(dash.state({"Tailscale-User-Login": "other@example.test"})["tmux"], [])
+        self.assertNotIn("tmux", dash.state({"Tailscale-User-Login": "other@example.test"}))
         kills = []
         dash.sh = lambda cmd, timeout=10: (kills.append(cmd) or (0, "", ""))
         server = dash.ThreadingHTTPServer(("127.0.0.1", 0), dash.Handler)

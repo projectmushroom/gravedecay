@@ -91,10 +91,10 @@ class NativeHostTests(unittest.TestCase):
             self.assertEqual(first['links'], {'dashboard': '/grave/', 'network': '/net/'})
         with self.request(port, '/api/state') as response:
             state = json.load(response)
-            self.assertTrue(state['macos_native'])
-            self.assertFalse(state['macos_agents'])
-            self.assertEqual(state['repos'], [])
-            self.assertEqual(state['github']['error'], 'restricted')
+            self.assertEqual(state['access'], 'read-only')
+            self.assertEqual(state['platform'], 'macos')
+            for key in ('macos_native', 'macos_agents', 'repos', 'github', 'settings', 'apps'):
+                self.assertNotIn(key, state)
         for headers in ({}, {'Tailscale-User-Login': 'other@example.test'}):
             with self.assertRaises(urllib.error.HTTPError) as raised:
                 self.request(port, '/api/settings', headers, b'{}')

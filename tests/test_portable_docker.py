@@ -53,7 +53,8 @@ class PortableDockerContractTests(unittest.TestCase):
         dash.collect_inbox = lambda: []
         dash.collect_agent_history = lambda: []
         dash.collect_tmux = lambda: []
-        state = dash.state({})
+        dash.ALLOWED_USERS = {"owner@example.test"}
+        state = dash.state({"Tailscale-User-Login": "owner@example.test"})
         self.assertEqual(state["platform"], "container")
         self.assertEqual(state["services"], [])
         self.assertEqual(state["journal"], [])
