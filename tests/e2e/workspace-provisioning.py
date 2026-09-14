@@ -61,10 +61,13 @@ with tempfile.TemporaryDirectory(prefix='grave-provisioning-',dir='/run') as tem
     dirty=HOME/'repos/provisioning-dirty.txt'
     bob('touch',dirty)
     control=Path('/srv/dev/config/workspace-services/bob.env')
-    token_before=control.read_bytes()
+    def capability():
+        return next(line for line in control.read_text().splitlines() if line.startswith('GRAVEDECAY_BACKEND_TOKEN='))
+    token_before=capability()
     for _ in range(2):
         subprocess.run(['grave','__users','reapply'],check=True,capture_output=True,timeout=30)
-    assert dirty.exists() and control.read_bytes()==token_before
+    assert dirty.exists(), 'reapply removed dirty workspace data'
+    assert capability()==token_before, 'reapply rotated the backend capability'
     assert control.stat().st_uid==0 and control.stat().st_mode&0o777==0o600
     for relative in ('.claude/settings.json','.codex/config.toml'):
         info=(HOME/relative).stat()
