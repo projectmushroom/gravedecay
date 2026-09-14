@@ -36,6 +36,34 @@ as that Unix user, including the service launcher; PID 1 never reads files
 under the workspace home. The allowlisted formats and upgrade procedure are
 in [SECRETS.md](SECRETS.md#multi-user-workspaces).
 
+## Workspace provisioning safety
+
+`grave users add` and `grave users reapply` validate the home and managed
+configuration paths without following symlinks. Root creates only a new empty
+home beneath a verified administrator-owned parent. Existing homes must already
+belong to the expected workspace UID with private permissions; account/home
+drift is an error, not an invitation to chown an existing tree.
+
+Directory creation and Claude/Codex hook updates then execute in a fresh process
+under that workspace UID with no supplementary groups or inherited administrator
+environment. The helper uses directory descriptors, rejects symbolic components,
+wrong ownership, writable shared directories, and linked/nonregular config files,
+and publishes file updates by atomic replacement. Existing user settings, custom
+notification commands, and dirty repositories survive reapply. Malformed Claude
+settings are preserved for the user to repair. Root-owned service configuration
+is separately validated and replaced atomically, retaining backend capabilities.
+
+Doctor checks the same managed home, state, config, runtime, log, agent-hook, and
+registered project paths read-only. If it reports drift, stop the affected
+workspace, inspect the named path and retain its contents, then restore a real
+directory/file with the correct UID and private directory permissions before
+reapplying. Reapply deliberately does not repair ownership drift automatically.
+`raise.sh` installs the updated CLI; no new daemon or port is required.
+
+This covers add/reapply provisioning. The remaining root-side revoke/removal
+operations, owner migration/restore paths, and private backup coverage remain
+part of the broader #198 audit.
+
 ## Request flow and failures
 
 1. Tailscale Serve terminates HTTPS and supplies its authenticated identity

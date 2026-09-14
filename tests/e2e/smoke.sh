@@ -195,6 +195,7 @@ fi
 as_mole grave doctor
 
 docker exec "$CTR" python3 /repo/tests/e2e/workspace-credentials.py
+docker exec "$CTR" python3 /repo/tests/e2e/workspace-provisioning.py
 
 echo "=== phase 7: single-user restoration removes multi-user boundary ==="
 docker exec "$CTR" sed -i 's/^MULTI_USER=.*/MULTI_USER=0/' /etc/gravedecay/grave.conf

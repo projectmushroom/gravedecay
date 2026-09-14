@@ -97,60 +97,212 @@ def find(data, value):
 def service_env(w): return SERVICE_ROOT/(w["slug"]+".env")
 def provider_link(w): return SERVICE_ROOT/(w["slug"]+"-provider.env")
 def sync_provider(w):
-    link=provider_link(w)
-    try: link.unlink()
-    except FileNotFoundError: pass
-    if w.get("provider",{}).get("llm") and PROVIDER_SECRET.is_file(): link.symlink_to(PROVIDER_SECRET)
-def chown_workspace(path, account):
-    if os.environ.get("GRAVE_WORKSPACE_TEST") != "1" and account:
-        os.chown(path, account.pw_uid, account.pw_gid)
-def ensure_agent_dir(path, account):
-    path.mkdir(parents=True, exist_ok=True); path.chmod(0o700); chown_workspace(path, account)
-def provision_agent_hooks(home, account):
-    helper=Path(os.environ.get("GRAVE_AGENT_NOTIFY", ROOT/"scripts/grave-agent-notify"))
-    command=f"{helper} claude"
-    claude=home/".claude"; codex=home/".codex"
-    ensure_agent_dir(claude, account); ensure_agent_dir(codex, account)
-    settings=claude/"settings.json"
-    try:
-        data=json.loads(settings.read_text()) if settings.exists() and settings.stat().st_size else {}
-    except (OSError, json.JSONDecodeError):
-        data=None
-    if data is not None:
-        hooks=data.setdefault("hooks", {})
-        entry={"matcher":"","hooks":[{"type":"command","command":command}]}
-        for name in ("Stop","Notification"):
-            current=hooks.get(name) if isinstance(hooks.get(name), list) else []
-            if not any(h.get("command") == command for block in current for h in block.get("hooks", [])):
-                current.append(entry)
-            hooks[name]=current
-        settings.write_text(json.dumps(data, indent=2) + "\n"); settings.chmod(0o600); chown_workspace(settings, account)
+    configured=PROVIDER_SECRET.exists() or PROVIDER_SECRET.is_symlink()
+    if configured: check_manager_file(PROVIDER_SECRET)
+    with service_directory() as parent:
+        name=provider_link(w).name
+        try: os.unlink(name,dir_fd=parent)
+        except FileNotFoundError: pass
+        if w.get('provider',{}).get('llm') and configured:
+            os.symlink(str(PROVIDER_SECRET),name,dir_fd=parent)
 
-    config=codex/"config.toml"
-    text=config.read_text() if config.exists() else ""
-    if "grave-agent-notify" not in text and not re.search(r"(?m)^[ \t]*notify[ \t]*=", text):
-        helper_s=str(helper).replace("\\", "\\\\").replace('"', '\\"')
-        text=text.rstrip() + f'\n\nnotify = ["{helper_s}", "codex"]\n'
-        config.write_text(text)
-    config.touch(exist_ok=True); config.chmod(0o600); chown_workspace(config, account)
+# Workspace content is always handled after exec under its Unix identity.
+# Root only creates/validates the home itself beneath a trusted parent.
+from contextlib import contextmanager
+
+@contextmanager
+def directory_at(parent, name, uid=None, private=False, create=False):
+    created=False
+    if create:
+        try: os.mkdir(name,0o700,dir_fd=parent); created=True
+        except FileExistsError: pass
+    fd=os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
+    try:
+        info=os.fstat(fd)
+        if uid is not None and (info.st_uid != uid or info.st_mode & (0o077 if private else 0o022)):
+            die(f"unsafe workspace directory ownership or mode: {name}")
+        yield fd,created
+    finally: os.close(fd)
+
+@contextmanager
+def absolute_directory(path, trusted=False, create=False):
+    path=Path(path)
+    if not path.is_absolute() or '..' in path.parts: die("unsafe absolute workspace path")
+    fd=os.open('/',os.O_RDONLY|os.O_DIRECTORY)
+    owners={0,os.geteuid(),ROOT.lstat().st_uid} if trusted else set()
+    try:
+        for component in path.parts[1:]:
+            if create:
+                try: os.mkdir(component,0o755,dir_fd=fd)
+                except FileExistsError: pass
+            child=os.open(component,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
+            os.close(fd); fd=child
+            if trusted:
+                info=os.fstat(fd)
+                sticky=info.st_uid==0 and info.st_mode & stat.S_ISVTX
+                if info.st_uid not in owners or (info.st_mode & 0o022 and not sticky):
+                    die(f"unsafe workspace ancestor: {component}")
+        yield fd
+    finally: os.close(fd)
+
+@contextmanager
+def service_directory():
+    with absolute_directory(SERVICE_ROOT.parent,trusted=True) as parent:
+        with directory_at(parent,SERVICE_ROOT.name,os.geteuid(),private=True,create=True) as (fd,_):
+            yield fd
+
+def read_control(parent, name):
+    try: fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent)
+    except FileNotFoundError: return ''
+    with os.fdopen(fd,'r') as source:
+        info=os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode & 0o077 or info.st_nlink!=1:
+            die('unsafe workspace service configuration')
+        data=source.read(16385)
+        if len(data)>16384: die('workspace service configuration too large')
+        return data
+
+def write_control(parent, name, value):
+    read_control(parent,name)
+    temporary='.service-'+secrets.token_hex(16)
+    fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=parent)
+    try:
+        with os.fdopen(fd,'w') as out:
+            out.write(value); out.flush(); os.fsync(out.fileno())
+        os.replace(temporary,name,src_dir_fd=parent,dst_dir_fd=parent)
+        os.fsync(parent)
+    finally:
+        try: os.unlink(temporary,dir_fd=parent)
+        except FileNotFoundError: pass
+
+class WorkspaceTree:
+    directories=('repos','state','state/t3','config','config/secrets','runtime','logs','.claude','.codex')
+    files=('.claude/settings.json','.codex/config.toml')
+    def __init__(self, home): self.home=Path(home)
+    @contextmanager
+    def directory(self, relative='', create=False):
+        with absolute_directory(self.home) as home:
+            info=os.fstat(home)
+            if info.st_uid != os.geteuid() or info.st_mode & 0o077:
+                die("unsafe workspace home ownership or mode")
+            fd=os.dup(home)
+            try:
+                for part in Path(relative).parts:
+                    if part in ('.','..') or '/' in part: die("unsafe workspace component")
+                    with directory_at(fd,part,os.geteuid(),private=True,create=create) as (child,_):
+                        replacement=os.dup(child)
+                    os.close(fd); fd=replacement
+                yield fd
+            finally: os.close(fd)
+    def read(self, relative):
+        path=Path(relative)
+        with self.directory(str(path.parent)) as parent:
+            try: fd=os.open(path.name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent)
+            except FileNotFoundError: return None
+            with os.fdopen(fd,'rb') as source:
+                info=os.fstat(source.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1 or info.st_mode & 0o022:
+                    die(f"unsafe workspace file ownership, type or links: {relative}")
+                data=source.read(1024*1024+1)
+                if len(data)>1024*1024: die(f"workspace config too large: {relative}")
+                return data.decode('utf-8')
+    def write(self, relative, value):
+        # Preflight the old file, then replace an entry rather than truncate or
+        # chmod/chown through a collaborator-replaceable pathname.
+        self.read(relative)
+        path=Path(relative)
+        with self.directory(str(path.parent)) as parent:
+            name='.grave-'+secrets.token_hex(16)
+            fd=os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=parent)
+            try:
+                with os.fdopen(fd,'w') as out:
+                    out.write(value); out.flush(); os.fsync(out.fileno())
+                os.replace(name,path.name,src_dir_fd=parent,dst_dir_fd=parent)
+                os.fsync(parent)
+            finally:
+                try: os.unlink(name,dir_fd=parent)
+                except FileNotFoundError: pass
+    def check(self, projects=(), allow_missing=False):
+        for relative in self.directories:
+            try:
+                with self.directory(relative): pass
+            except FileNotFoundError:
+                if not allow_missing: raise
+        for relative in self.files:
+            try: self.read(relative)
+            except FileNotFoundError:
+                if not allow_missing: raise
+        for project in projects:
+            if not PROJECT.fullmatch(project): die("unsafe project name")
+            with self.directory('repos') as repos:
+                with directory_at(repos,project,os.geteuid()): pass
+    def provision(self, helper, projects):
+        # Verify all existing managed paths before modifying any contents.
+        self.check(projects,allow_missing=True)
+        for relative in self.directories:
+            with self.directory(relative,create=True): pass
+        settings=self.read('.claude/settings.json')
+        try: data=json.loads(settings) if settings else {}
+        except json.JSONDecodeError: data=None
+        if isinstance(data,dict) and isinstance(data.get('hooks',{}),dict):
+            hooks=data.setdefault('hooks',{})
+            command=f'{helper} claude'
+            entry={'matcher':'','hooks':[{'type':'command','command':command}]}
+            for name in ('Stop','Notification'):
+                current=hooks.get(name) if isinstance(hooks.get(name),list) else []
+                if not any(isinstance(block,dict) and isinstance(block.get('hooks'),list) and
+                           any(isinstance(h,dict) and h.get('command')==command for h in block['hooks']) for block in current):
+                    current.append(entry)
+                hooks[name]=current
+            self.write('.claude/settings.json',json.dumps(data,indent=2)+'\n')
+        config=self.read('.codex/config.toml') or ''
+        if 'grave-agent-notify' not in config and not re.search(r'(?m)^[ \t]*notify[ \t]*=',config):
+            config=config.rstrip()+f'\n\nnotify = [{json.dumps(str(helper))}, "codex"]\n'
+        self.write('.codex/config.toml',config)
+
+def workspace_account(w):
+    if os.environ.get('GRAVE_WORKSPACE_TEST')=='1':
+        return pwd.getpwuid(os.geteuid())
+    account=pwd.getpwnam(unix_name(w['slug']))
+    if account.pw_uid==0 or account.pw_dir != str(HOME_ROOT/w['slug']):
+        die(f"unsafe Unix account drift for {unix_name(w['slug'])}")
+    return account
+
+def tree_command(w, action):
+    account=workspace_account(w)
+    payload={'projects':[p['name'] for p in w['projects']],
+             'helper':str(Path(os.environ.get('GRAVE_AGENT_NOTIFY',ROOT/'scripts/grave-agent-notify')))}
+    env={'PATH':'/usr/local/bin:/usr/bin:/bin','HOME':str(HOME_ROOT/w['slug'])}
+    options={} if os.environ.get('GRAVE_WORKSPACE_TEST')=='1' else {'user':account.pw_uid,'group':account.pw_gid,'extra_groups':[]}
+    result=subprocess.run([sys.executable,str(Path(__file__).absolute()),'__tree',action,str(HOME_ROOT/w['slug'])],
+                          input=json.dumps(payload),env=env,text=True,capture_output=True,**options)
+    if result.returncode: die(f"unsafe workspace tree: {w['slug']}; "+result.stderr.strip())
+
+def prepare_workspace_home(w):
+    home=HOME_ROOT/w['slug']
+    with absolute_directory(HOME_ROOT,trusted=True,create=True) as parent:
+        try: account=workspace_account(w)
+        except KeyError:
+            # Refuse an unmanaged existing entry before useradd can adopt it.
+            try: os.stat(w['slug'],dir_fd=parent,follow_symlinks=False)
+            except FileNotFoundError: pass
+            else: die(f"unmanaged workspace home already exists: {w['slug']}")
+            run('useradd','--system','--no-create-home','--home-dir',str(home),'--shell','/bin/bash',unix_name(w['slug']))
+            account=workspace_account(w)
+        with directory_at(parent,w['slug'],create=True) as (fd,created):
+            if created:
+                os.fchmod(fd,0o700)
+                os.fchown(fd,account.pw_uid,account.pw_gid)
+            info=os.fstat(fd)
+            if info.st_uid!=account.pw_uid or info.st_mode & 0o077:
+                die(f"unsafe workspace home ownership or mode: {w['slug']}")
 
 def provision(w):
-    name=unix_name(w["slug"]); home=HOME_ROOT/w["slug"]
-    try: account=pwd.getpwnam(name)
-    except KeyError:
-        run("useradd", "--system", "--create-home", "--home-dir", str(home), "--shell", "/bin/bash", name)
-        account=None
-    if not account and os.environ.get("GRAVE_WORKSPACE_TEST") != "1":
-        account=pwd.getpwnam(name)
-    if os.environ.get("GRAVE_WORKSPACE_TEST") == "1":
-        for d in (home, home/"repos", home/"state/t3", home/"config", home/"config/secrets", home/"runtime", home/"logs"): d.mkdir(mode=0o700, parents=True, exist_ok=True)
-    else:
-        run("install", "-d", "-m", "700", "-o", name, "-g", name, *(str(d) for d in (home, home/"repos", home/"state", home/"state/t3", home/"config", home/"config/secrets", home/"runtime", home/"logs")))
-    if account and (account.pw_dir != str(home) or account.pw_uid == 0): die(f"unsafe Unix account drift for {name}")
-    provision_agent_hooks(home, account)
-    SERVICE_ROOT.mkdir(parents=True,exist_ok=True); SERVICE_ROOT.chmod(0o700)
+    prepare_workspace_home(w)
+    tree_command(w,'provision')
+    home=HOME_ROOT/w['slug']
     env=service_env(w)
-    old=env.read_text() if env.exists() else ""
+    with service_directory() as parent: old=read_control(parent,env.name)
     token=next((line.partition("=")[2].strip().strip('"') for line in old.splitlines()
                 if line.startswith("GRAVEDECAY_BACKEND_TOKEN=") and len(line.partition("=")[2].strip().strip('"')) >= 32),secrets.token_hex(32))
     # Later `grave users add` calls do not carry raise.sh's explicit tool
@@ -163,8 +315,8 @@ def provision(w):
             "T3_PORT":w["ports"]["t3"],"TERM_PORT":w["ports"]["term"],"DASH_PORT":w["ports"]["dash"],
             "T3_BIN":t3_bin,"GRAVEDECAY_T3":t3_bin,"TTYD_BIN":ttyd_bin,"GRAVEDECAY_GRAVE":grave_bin,
             "PATH":os.environ.get("GRAVE_TOOL_PATH","")+"/usr/local/bin:/usr/bin:/bin","GRAVEDECAY_BACKEND_TOKEN":token}
-    env.write_text("".join(f'{key}="{str(value).replace(chr(34), "")}"\n' for key,value in values.items()))
-    env.chmod(0o600)
+    with service_directory() as parent:
+        write_control(parent,env.name,"".join(f'{key}="{str(value).replace(chr(34), "")}"\n' for key,value in values.items()))
     sync_provider(w)
     if os.environ.get("GRAVE_WORKSPACE_TEST") != "1":
         if env.stat().st_uid != 0: die("service environment must be root-owned")
@@ -225,6 +377,7 @@ def cmd_doctor(a):
     if PROVIDER_SECRET.exists() or PROVIDER_SECRET.is_symlink(): check_manager_file(PROVIDER_SECRET)
     for w in data["workspaces"]:
         home=HOME_ROOT/w["slug"]
+        tree_command(w,'check')
         check_manager_file(service_env(w))
         for kind in ("linear","activity"): check_personal_credentials(w,kind)
         linked=check_manager_file(provider_link(w),optional=True,provider_reference=True)
@@ -467,4 +620,15 @@ def main():
     a=p.parse_args(); REGISTRY.parent.mkdir(parents=True,exist_ok=True)
     lock=REGISTRY.with_suffix(".lock")
     with lock.open("a") as f: fcntl.flock(f,fcntl.LOCK_EX); a.fn(a)
-if __name__ == "__main__": main()
+if __name__ == "__main__":
+    try:
+        if len(sys.argv)>1 and sys.argv[1]=='__tree':
+            if os.geteuid()==0: die("workspace content operations must not run as root")
+            _,_,action,home=sys.argv
+            tree=WorkspaceTree(home); payload=json.load(sys.stdin)
+            if action=='provision': tree.provision(payload['helper'],payload['projects'])
+            elif action=='check': tree.check(payload['projects'])
+            else: die("invalid workspace tree operation")
+        else: main()
+    except (OSError,UnicodeError) as exc:
+        die(f"workspace path unavailable or unsafe ({type(exc).__name__}); inspect ownership and symlinks")
