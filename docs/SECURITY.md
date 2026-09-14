@@ -244,9 +244,13 @@ entitlement reference remain systemd `EnvironmentFile` sources. Doctor checks
 the effective unit configuration (including drop-ins) against that exact list,
 rejects writable or symlinked ancestors and unsafe files, and verifies the
 root-owned provider link targets the exact private shared-provider file.
-The appliance administrator remains trusted. This addresses credential loading
-and personal credential writes; the broader privileged provisioning-path audit
-and private workspace backup work are tracked separately in #198.
+The appliance administrator remains trusted. Workspace add/reapply now also
+creates directories and updates agent hooks only after exec under the workspace
+UID. Root creates only a verified new empty home; it never recursively chowns
+workspace content during provisioning. Doctor applies the same path and ownership
+checks without mutation. See [MULTIUSER.md](MULTIUSER.md#workspace-provisioning-safety).
+The remaining root-side revoke/removal, owner migration/restore, and private
+workspace backup work are tracked separately in #198.
 See [SECRETS.md](SECRETS.md#multi-user-workspaces) for rollout and file formats.
 
 ## The web terminal
