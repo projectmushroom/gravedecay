@@ -194,6 +194,8 @@ if docker exec "$CTR" systemctl is-active --quiet gravedecay-term; then
 fi
 as_mole grave doctor
 
+docker exec "$CTR" python3 /repo/tests/e2e/workspace-credentials.py
+
 echo "=== phase 7: single-user restoration removes multi-user boundary ==="
 docker exec "$CTR" sed -i 's/^MULTI_USER=.*/MULTI_USER=0/' /etc/gravedecay/grave.conf
 as_mole bash -c './raise.sh --profile generic </dev/null'

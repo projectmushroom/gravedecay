@@ -65,11 +65,34 @@ env file and restarting t3code.
 
 Never reuse the appliance owner's integration environment in a developer
 unit. Use `grave integrations linear-set <workspace>` and paste the key on
-stdin; it writes only that workspace's `config/secrets/linear.env` (600,
+stdin; it switches to the workspace Unix user and atomically writes only that
+workspace's `config/secrets/linear.env` (600,
 owned by its Unix user), registers Linear in that user's Claude and Codex
 configuration using `${LINEAR_API_KEY}`, and restarts only that workspace.
 `grave integrations status <workspace>` reports configured/onboarding without
-printing a value. `linear-logout` deletes the secret and MCP entries.
+printing a value. `linear-logout` deletes the secret and MCP entries under the
+same Unix identity. Neither operation opens personal credential paths as root.
+Writes reject symlinks, hardlinks, nonregular files, and unsafe directory paths.
+
+Workspace services load personal credentials through `workspace-env.py` **after**
+systemd switches to `grave-<slug>`. PID 1 never reads a workspace-owned
+`EnvironmentFile`. T3 and terminal accept only `LINEAR_API_KEY`; the dashboard
+accepts only `T3_ACTIVITY_URL`, `T3_ACTIVITY_TOKEN`, `T3_ACTIVITY_ENVIRONMENT`,
+and `T3_ACTIVITY_ENVIRONMENT_ID` from `config/secrets/t3-activity.env`.
+Files must be private (600), regular, singly linked, and owned by that workspace;
+the secrets directory must be private (700). No path component may be a symlink.
+Blank lines, comments, and simple quoted values are supported; shell expansion,
+duplicate or additional assignments, incomplete files, and files over 8 KiB
+are rejected. Missing files mean the integration is not configured. Unsafe
+files prevent that service from starting and produce a redacted journal error.
+
+Re-run `raise.sh` to install the loader, replace the three workspace unit
+templates, and restart enabled workspaces. Existing valid personal files stay
+in place. Remove any custom drop-in that still adds a workspace-owned
+`EnvironmentFile`; doctor flags it even if the service is stopped. `grave users
+doctor` (also called by `grave doctor`) checks the effective unit sources,
+loader, personal files as their Unix user, and ownership/path invariants for
+manager-read service configuration and provider entitlement references.
 
 GitHub authentication likewise runs with the workspace HOME: `github-login`,
 `github-logout --user <login>`, and ordinary `gh auth status` can never fall

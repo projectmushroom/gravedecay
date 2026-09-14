@@ -228,6 +228,27 @@ validation preserves the installed executable. This remains an administrator
 capability: syntax validation does not make owner-supplied code trusted for
 unprivileged collaborators. No general `sudo install` permission is added.
 
+## Workspace service credentials
+
+Personal Linear and T3 activity files are read only by the workspace Unix user,
+through the installed `workspace-env.py` launcher. The root lifecycle helper
+also switches UID before writing, checking, or deleting a personal credential.
+The launcher rejects symbolic path components, hardlinked or nonregular files,
+unsafe permissions/ownership, and assignments outside the integration's allowlist.
+A substituted root-only secret therefore cannot be read by PID 1 and delivered
+to an unentitled workspace on restart. Invalid input stops that service without
+printing secret contents; optional missing credentials leave onboarding available.
+
+Only root-owned workspace service configuration and the explicit shared-provider
+entitlement reference remain systemd `EnvironmentFile` sources. Doctor checks
+the effective unit configuration (including drop-ins) against that exact list,
+rejects writable or symlinked ancestors and unsafe files, and verifies the
+root-owned provider link targets the exact private shared-provider file.
+The appliance administrator remains trusted. This addresses credential loading
+and personal credential writes; the broader privileged provisioning-path audit
+and private workspace backup work are tracked separately in #198.
+See [SECRETS.md](SECRETS.md#multi-user-workspaces) for rollout and file formats.
+
 ## The web terminal
 
 The following shared-terminal behavior applies only to default single-user

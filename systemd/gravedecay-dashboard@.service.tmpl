@@ -10,8 +10,7 @@ Type=simple
 User=grave-%i
 Group=grave-%i
 EnvironmentFile=@GRAVE_ROOT@/config/workspace-services/%i.env
-EnvironmentFile=-@GRAVE_ROOT@/workspaces/%i/config/secrets/t3-activity.env
-ExecStart=@PYTHON@ @GRAVE_ROOT@/scripts/gravedecay.py
+ExecStart=@PYTHON@ @GRAVE_ROOT@/scripts/workspace-env.py exec @GRAVE_ROOT@/workspaces/%i activity @PYTHON@ @GRAVE_ROOT@/scripts/gravedecay.py
 Environment=HOME=@GRAVE_ROOT@/workspaces/%i
 Environment=GRAVE_ROOT=@GRAVE_ROOT@/workspaces/%i
 Environment=GRAVEDECAY_BASE=/grave

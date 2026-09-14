@@ -11,9 +11,8 @@ User=grave-%i
 Group=grave-%i
 EnvironmentFile=@GRAVE_ROOT@/config/workspace-services/%i.env
 EnvironmentFile=-@GRAVE_ROOT@/config/workspace-services/%i-provider.env
-EnvironmentFile=-@GRAVE_ROOT@/workspaces/%i/config/secrets/linear.env
 WorkingDirectory=@GRAVE_ROOT@/workspaces/%i/repos
-ExecStart=/usr/bin/env ${T3_BIN} serve --mode web --host 127.0.0.1 --port ${T3_PORT} --base-dir @GRAVE_ROOT@/workspaces/%i/state/t3 @GRAVE_ROOT@/workspaces/%i/repos
+ExecStart=@PYTHON@ @GRAVE_ROOT@/scripts/workspace-env.py exec @GRAVE_ROOT@/workspaces/%i linear /usr/bin/env ${T3_BIN} serve --mode web --host 127.0.0.1 --port ${T3_PORT} --base-dir @GRAVE_ROOT@/workspaces/%i/state/t3 @GRAVE_ROOT@/workspaces/%i/repos
 Environment=HOME=@GRAVE_ROOT@/workspaces/%i
 Environment=XDG_CONFIG_HOME=@GRAVE_ROOT@/workspaces/%i/config
 Environment=XDG_STATE_HOME=@GRAVE_ROOT@/workspaces/%i/state
