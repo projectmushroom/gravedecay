@@ -324,7 +324,7 @@ def credential_command(w, action, kind=None, value=None):
     helper=ROOT/"scripts/workspace-env.py"
     home=HOME_ROOT/w["slug"]
     command=["python3",str(helper),action,str(home)] + ([kind] if kind else [])
-    env={"PATH":"/usr/local/bin:/usr/bin:/bin", "HOME":str(home), "XDG_CONFIG_HOME":str(home/"config")}
+    env={"PATH":"/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", "HOME":str(home), "XDG_CONFIG_HOME":str(home/"config")}
     if os.environ.get("GRAVE_WORKSPACE_TEST") == "1":
         command[0]=sys.executable
         command[1]=str(Path(__file__).resolve().parents[1]/"libexec/workspace-env.py")
