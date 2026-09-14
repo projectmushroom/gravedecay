@@ -269,7 +269,8 @@ def workspace_account(w):
     return account
 
 def tree_command(w, action):
-    account=workspace_account(w)
+    try: account=workspace_account(w)
+    except KeyError: die(f"missing Unix account: {w['slug']}")
     payload={'projects':[p['name'] for p in w['projects']],
              'helper':str(Path(os.environ.get('GRAVE_AGENT_NOTIFY',ROOT/'scripts/grave-agent-notify')))}
     env={'PATH':'/usr/local/bin:/usr/bin:/bin','HOME':str(HOME_ROOT/w['slug'])}
