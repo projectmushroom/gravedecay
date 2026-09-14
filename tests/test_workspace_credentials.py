@@ -113,7 +113,8 @@ class WorkspaceCredentials(unittest.TestCase):
     def test_doctor_rejects_legacy_or_extra_manager_sources_and_missing_loader(self):
         w = {'slug': 'alice'}
         instance = 'gravedecay-t3@alice.service'
-        expected = f'{workspaces.service_env(w)} (ignore_errors=no) {workspaces.provider_link(w)} (ignore_errors=yes)'
+        # systemctl prints one line per source, including for --value.
+        expected = f'{workspaces.service_env(w)} (ignore_errors=no)\n{workspaces.provider_link(w)} (ignore_errors=yes)\n'
         command = f'{workspaces.ROOT}/scripts/workspace-env.py exec {workspaces.HOME_ROOT}/alice linear /usr/bin/t3'
         with patch.object(workspaces.subprocess, 'check_output', side_effect=[expected, command]):
             workspaces.check_unit_credentials(w, instance, 'gravedecay-t3')

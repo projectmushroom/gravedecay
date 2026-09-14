@@ -366,9 +366,9 @@ def check_manager_file(path, optional=False, provider_reference=False):
     return True
 
 def check_unit_credentials(w, instance, kind):
-    expected=f"{service_env(w)} (ignore_errors=no)"
-    if kind=="gravedecay-t3": expected+=f" {provider_link(w)} (ignore_errors=yes)"
-    actual=subprocess.check_output(["systemctl","show","-p","EnvironmentFiles","--value",instance],text=True).strip()
+    expected=[f"{service_env(w)} (ignore_errors=no)"]
+    if kind=="gravedecay-t3": expected.append(f"{provider_link(w)} (ignore_errors=yes)")
+    actual=subprocess.check_output(["systemctl","show","-p","EnvironmentFiles","--value",instance],text=True).splitlines()
     if actual != expected: die(f"unsafe service EnvironmentFiles: {instance}; re-raise to replace legacy units/drop-ins")
     command=subprocess.check_output(["systemctl","show","-p","ExecStart","--value",instance],text=True)
     profile="activity" if kind=="gravedecay-dashboard" else "linear"
