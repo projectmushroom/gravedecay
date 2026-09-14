@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Appliance-owned multi-user workspace registry and lifecycle helper."""
-import argparse, fcntl, ipaddress, json, os, pwd, re, secrets, shutil, subprocess, sys, tempfile, time
+import argparse, fcntl, ipaddress, json, os, pwd, re, secrets, shutil, stat, subprocess, sys, tempfile, time
 from pathlib import Path
 
 ROOT = Path(os.environ.get("GRAVE_ROOT", "/srv/dev"))
@@ -143,7 +143,7 @@ def provision(w):
     if not account and os.environ.get("GRAVE_WORKSPACE_TEST") != "1":
         account=pwd.getpwnam(name)
     if os.environ.get("GRAVE_WORKSPACE_TEST") == "1":
-        for d in (home, home/"repos", home/"state/t3", home/"config", home/"config/secrets", home/"runtime", home/"logs"): d.mkdir(parents=True, exist_ok=True)
+        for d in (home, home/"repos", home/"state/t3", home/"config", home/"config/secrets", home/"runtime", home/"logs"): d.mkdir(mode=0o700, parents=True, exist_ok=True)
     else:
         run("install", "-d", "-m", "700", "-o", name, "-g", name, *(str(d) for d in (home, home/"repos", home/"state", home/"state/t3", home/"config", home/"config/secrets", home/"runtime", home/"logs")))
     if account and (account.pw_dir != str(home) or account.pw_uid == 0): die(f"unsafe Unix account drift for {name}")
@@ -222,10 +222,13 @@ def cmd_doctor(a):
         if orphan_users: die("orphaned workspace users: "+", ".join(sorted(orphan_users)))
     entitled=any(w["provider"]["llm"] for w in data["workspaces"])
     if entitled and not PROVIDER_SECRET.is_file(): die("shared provider is required by an entitled workspace")
-    if PROVIDER_SECRET.exists() and (PROVIDER_SECRET.stat().st_mode&0o077 or (os.environ.get("GRAVE_WORKSPACE_TEST") != "1" and PROVIDER_SECRET.stat().st_uid != 0)):
-        die("shared provider secret ownership drift")
+    if PROVIDER_SECRET.exists() or PROVIDER_SECRET.is_symlink(): check_manager_file(PROVIDER_SECRET)
     for w in data["workspaces"]:
         home=HOME_ROOT/w["slug"]
+        check_manager_file(service_env(w))
+        for kind in ("linear","activity"): check_personal_credentials(w,kind)
+        linked=check_manager_file(provider_link(w),optional=True,provider_reference=True)
+        if linked != bool(w["provider"]["llm"] and PROVIDER_SECRET.exists()): die(f"provider entitlement drift: {w['slug']}")
         if os.environ.get("GRAVE_WORKSPACE_TEST") != "1":
             try: account=pwd.getpwnam(unix_name(w["slug"]))
             except KeyError: die(f"missing Unix account: {w['slug']}")
@@ -242,12 +245,8 @@ def cmd_doctor(a):
                 resolved=checkout.resolve()
                 if resolved in checkout_paths: die("unsafe shared writable checkout")
                 checkout_paths.add(resolved)
-            secret=linear_secret(w)
-            if secret.exists() and (secret.stat().st_uid != account.pw_uid or secret.stat().st_mode & 0o077): die(f"Linear secret ownership drift: {w['slug']}")
-            link=provider_link(w)
-            if w["provider"]["llm"] and PROVIDER_SECRET.exists() and (not link.is_symlink() or link.resolve()!=PROVIDER_SECRET.resolve()): die(f"provider entitlement drift: {w['slug']}")
-            if not w["provider"]["llm"] and link.exists(): die(f"revoked provider still linked: {w['slug']}")
             for unit in ("gravedecay-t3","gravedecay-term","gravedecay-dashboard"):
+                check_unit_credentials(w,f"{unit}@{w['slug']}.service",unit)
                 enabled=subprocess.run(["systemctl","is-enabled",f"{unit}@{w['slug']}.service"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0
                 if enabled != w["enabled"]: die(f"service enablement drift: {unit}@{w['slug']}")
                 instance=f"{unit}@{w['slug']}.service"
@@ -321,24 +320,75 @@ def cmd_adopt(a):
         if matches[0]["url"]!=a.url: die("adopted project remote mismatch")
         return
     w["projects"].append({"name":a.name,"url":a.url}); save(data); audit("project_adopted",w["slug"],a.name)
-def linear_secret(w): return HOME_ROOT/w["slug"]/"config/secrets/linear.env"
+def credential_command(w, action, kind=None, value=None):
+    helper=ROOT/"scripts/workspace-env.py"
+    home=HOME_ROOT/w["slug"]
+    command=["python3",str(helper),action,str(home)] + ([kind] if kind else [])
+    env={"PATH":"/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", "HOME":str(home), "XDG_CONFIG_HOME":str(home/"config")}
+    if os.environ.get("GRAVE_WORKSPACE_TEST") == "1":
+        command[0]=sys.executable
+        command[1]=str(Path(__file__).resolve().parents[1]/"libexec/workspace-env.py")
+    else:
+        command=["runuser","-u",unix_name(w["slug"]),"--",*command]
+    return subprocess.run(command,input=value,capture_output=True,text=True,env=env,check=False)
+
+def check_personal_credentials(w, kind):
+    result=credential_command(w,"check",kind)
+    if result.returncode: die(f"unsafe {kind} credentials: {w['slug']}; check private paths and allowed fields")
+    return result.stdout.strip()=="configured"
+
+def check_manager_file(path, optional=False, provider_reference=False):
+    """PID 1 inputs must stay outside collaborator-controlled directories.
+
+    The appliance owner is a trusted administrator. The one permitted link is
+    the root-created entitlement reference to the exact shared provider file.
+    """
+    expected_uid=os.geteuid() if os.environ.get("GRAVE_WORKSPACE_TEST")=="1" else 0
+    trusted={0,expected_uid,ROOT.stat().st_uid}
+    for parent in reversed(path.parents):
+        info=parent.lstat()
+        sticky_root=info.st_uid==0 and info.st_mode & stat.S_ISVTX
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid not in trusted
+                or (info.st_mode & 0o022 and not sticky_root)):
+            die("unsafe service credential directory: "+str(parent))
+    try: info=path.lstat()
+    except FileNotFoundError:
+        if optional: return False
+        die("missing service credential source: "+str(path))
+    if provider_reference:
+        if not stat.S_ISLNK(info.st_mode): die("provider entitlement must reference the shared provider file")
+        if info.st_uid != expected_uid or os.readlink(path) != str(PROVIDER_SECRET):
+            die("unsafe provider entitlement reference")
+        return check_manager_file(PROVIDER_SECRET)
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != expected_uid
+            or info.st_mode & 0o077 or info.st_nlink != 1):
+        die("unsafe service credential source: "+str(path))
+    return True
+
+def check_unit_credentials(w, instance, kind):
+    expected=[f"{service_env(w)} (ignore_errors=no)"]
+    if kind=="gravedecay-t3": expected.append(f"{provider_link(w)} (ignore_errors=yes)")
+    actual=subprocess.check_output(["systemctl","show","-p","EnvironmentFiles","--value",instance],text=True).splitlines()
+    if actual != expected: die(f"unsafe service EnvironmentFiles: {instance}; re-raise to replace legacy units/drop-ins")
+    command=subprocess.check_output(["systemctl","show","-p","ExecStart","--value",instance],text=True)
+    profile="activity" if kind=="gravedecay-dashboard" else "linear"
+    required=f"{ROOT}/scripts/workspace-env.py exec {HOME_ROOT/w['slug']} {profile} "
+    if required not in command: die(f"workspace credential loader missing: {instance}; re-raise")
+
 def cmd_integration_status(a):
-    data=load(); w=find(data,a.workspace); secret=linear_secret(w)
+    data=load(); w=find(data,a.workspace)
+    linear=check_personal_credentials(w,"linear")
     github=as_user_result(w,"gh","auth","status","--hostname","github.com",check=False,capture=True).returncode==0 if shutil.which("gh") else False
-    linear=secret.is_file() and not secret.stat().st_mode & 0o077
     print(json.dumps({"workspace":w["slug"],"github":"configured" if github else "onboarding","linear":"configured" if linear else "onboarding"}))
 def cmd_github_login(a):
     data=load(); w=find(data,a.workspace); as_user_result(w,"gh","auth","login","--hostname","github.com","--git-protocol","ssh","--web"); audit("integration_login",w["slug"],"github"); print(f"GitHub configured for {w['slug']}")
 def cmd_github_logout(a):
     data=load(); w=find(data,a.workspace); as_user_result(w,"gh","auth","logout","--hostname","github.com","--user",a.user); audit("integration_logout",w["slug"],"github"); print(f"GitHub login removed for {w['slug']}")
 def cmd_linear_set(a):
-    data=load(); w=find(data,a.workspace); value=sys.stdin.readline().strip()
-    if not value.startswith("lin_api_") or len(value)<20 or any(c.isspace() for c in value): die("invalid Linear API key on stdin")
-    secret=linear_secret(w); fd=os.open(secret,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
-    try: os.write(fd,f"LINEAR_API_KEY={value}\n".encode()); os.fchmod(fd,0o600)
-    finally: os.close(fd)
+    data=load(); w=find(data,a.workspace); value=sys.stdin.readline(8193).strip()
+    result=credential_command(w,"write-linear",value=value)
+    if result.returncode: die(f"cannot set Linear credentials: {w['slug']}; check key and private paths")
     if os.environ.get("GRAVE_WORKSPACE_TEST") != "1":
-        account=pwd.getpwnam(unix_name(w["slug"])); os.chown(secret,account.pw_uid,account.pw_gid)
         as_user_result(w,"codex","mcp","remove","linear",check=False)
         as_user_result(w,"codex","mcp","add","linear","--url","https://mcp.linear.app/mcp","--bearer-token-env-var","LINEAR_API_KEY")
         as_user_result(w,"claude","mcp","remove","--scope","user","linear",check=False)
@@ -346,9 +396,9 @@ def cmd_linear_set(a):
         run("systemctl","restart",f"gravedecay-t3@{w['slug']}",f"gravedecay-term@{w['slug']}",f"gravedecay-dashboard@{w['slug']}")
     audit("integration_login",w["slug"],"linear"); print(f"Linear configured for {w['slug']}")
 def cmd_linear_logout(a):
-    data=load(); w=find(data,a.workspace); secret=linear_secret(w)
-    try: secret.unlink()
-    except FileNotFoundError: pass
+    data=load(); w=find(data,a.workspace)
+    result=credential_command(w,"delete-linear")
+    if result.returncode: die(f"cannot remove Linear credentials: {w['slug']}; check private paths")
     if os.environ.get("GRAVE_WORKSPACE_TEST") != "1":
         as_user_result(w,"codex","mcp","remove","linear",check=False); as_user_result(w,"claude","mcp","remove","--scope","user","linear",check=False)
         run("systemctl","restart",f"gravedecay-t3@{w['slug']}",f"gravedecay-term@{w['slug']}",f"gravedecay-dashboard@{w['slug']}")

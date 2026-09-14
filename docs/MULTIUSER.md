@@ -31,7 +31,10 @@ selected by a request.
 
 The registry is `$GRAVE_ROOT/config/workspaces.json`, owned by the appliance
 administrator and mode 600. Integration credentials live separately in each
-workspace's mode-700 private configuration tree.
+workspace's mode-700 private configuration tree. Personal credential I/O runs
+as that Unix user, including the service launcher; PID 1 never reads files
+under the workspace home. The allowlisted formats and upgrade procedure are
+in [SECRETS.md](SECRETS.md#multi-user-workspaces).
 
 ## Request flow and failures
 
