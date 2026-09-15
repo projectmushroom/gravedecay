@@ -64,6 +64,7 @@ def save(data):
         with os.fdopen(fd, "w") as out:
             json.dump(data, out, indent=2, sort_keys=True); out.write("\n"); out.flush(); os.fsync(out.fileno())
         os.replace(name, REGISTRY)
+        with absolute_directory(REGISTRY.parent,trusted=True) as directory: os.fsync(directory)
     finally:
         try: os.unlink(name)
         except FileNotFoundError: pass
@@ -80,6 +81,13 @@ def validate(data):
             if not isinstance(project,dict) or not PROJECT.fullmatch(project.get("name","")) or not valid_remote(project.get("url","")) or project["name"] in project_names:
                 die(f"invalid project grant: {w['slug']}")
             project_names.add(project["name"])
+        removal=w.get('removal')
+        if removal is not None:
+            if (not isinstance(removal,dict) or set(removal)!={'archive','uid','gid','device','inode'}
+                    or not re.fullmatch(re.escape(w['slug'])+r'-[0-9a-f]{32}',str(removal.get('archive','')))
+                    or any(type(removal.get(key)) is not int or removal[key]<0 for key in ('uid','gid','device','inode'))
+                    or w['enabled']):
+                die('invalid workspace removal receipt')
         ports=w.get("ports", {})
         if set(ports) != set(PORT_BASE) or any(not isinstance(p, int) or not 1024 <= p <= 65535 for p in ports.values()):
             die(f"invalid ports: {w['slug']}")
@@ -90,9 +98,10 @@ def allocate(data, kind):
     used={w["ports"][kind] for w in data["workspaces"]}
     return next(p for p in range(PORT_BASE[kind], PORT_BASE[kind]+100) if p not in used)
 
-def find(data, value):
+def find(data, value, allow_removal=False):
     matches=[w for w in data["workspaces"] if value in (w["id"], w["slug"])]
     if len(matches) != 1: die(f"workspace not found: {value}")
+    if matches[0].get('removal') and not allow_removal: die('workspace removal is pending; retry the confirmed remove command')
     return matches[0]
 def service_env(w): return SERVICE_ROOT/(w["slug"]+".env")
 def provider_link(w): return SERVICE_ROOT/(w["slug"]+"-provider.env")
@@ -175,6 +184,19 @@ def write_control(parent, name, value):
         try: os.unlink(temporary,dir_fd=parent)
         except FileNotFoundError: pass
 
+def rename_exclusive(source, name, destination, retained):
+    # Linux appliances must support no-replace rename. Never fall back to an
+    # overwrite-prone rename when the collaborator controls the archive parent.
+    import ctypes, errno
+    libc=ctypes.CDLL(None,use_errno=True)
+    try: rename=libc.renameat2
+    except AttributeError: raise OSError(errno.ENOSYS,'safe project retention requires renameat2')
+    rename.argtypes=[ctypes.c_int,ctypes.c_char_p,ctypes.c_int,ctypes.c_char_p,ctypes.c_uint]
+    rename.restype=ctypes.c_int
+    if rename(source,os.fsencode(name),destination,os.fsencode(retained),1)!=0:
+        code=ctypes.get_errno()
+        raise OSError(code,os.strerror(code))
+
 class WorkspaceTree:
     directories=('repos','state','state/t3','config','config/secrets','runtime','logs','.claude','.codex')
     files=('.claude/settings.json','.codex/config.toml')
@@ -228,6 +250,9 @@ class WorkspaceTree:
                 with self.directory(relative): pass
             except FileNotFoundError:
                 if not allow_missing: raise
+        try:
+            with self.directory('revoked'): pass
+        except FileNotFoundError: pass
         for relative in self.files:
             try: self.read(relative)
             except FileNotFoundError:
@@ -236,6 +261,17 @@ class WorkspaceTree:
             if not PROJECT.fullmatch(project): die("unsafe project name")
             with self.directory('repos') as repos:
                 with directory_at(repos,project,os.geteuid()): pass
+    def revoke(self, name):
+        if not PROJECT.fullmatch(name): die('unsafe project name')
+        with self.directory('repos') as repos:
+            try: os.stat(name,dir_fd=repos,follow_symlinks=False)
+            except FileNotFoundError: return None
+            with directory_at(repos,name,os.geteuid()): pass
+            with self.directory('revoked',create=True) as revoked:
+                retained=name+'-'+time.strftime('%Y%m%d-%H%M%S',time.gmtime())+'-'+secrets.token_hex(8)
+                rename_exclusive(repos,name,revoked,retained)
+                os.fsync(repos); os.fsync(revoked)
+                return retained
     def provision(self, helper, projects):
         # Verify all existing managed paths before modifying any contents.
         self.check(projects,allow_missing=True)
@@ -268,16 +304,18 @@ def workspace_account(w):
         die(f"unsafe Unix account drift for {unix_name(w['slug'])}")
     return account
 
-def tree_command(w, action):
+def tree_command(w, action, **arguments):
     try: account=workspace_account(w)
     except KeyError: die(f"missing Unix account: {w['slug']}")
     payload={'projects':[p['name'] for p in w['projects']],
              'helper':str(Path(os.environ.get('GRAVE_AGENT_NOTIFY',ROOT/'scripts/grave-agent-notify')))}
+    payload.update(arguments)
     env={'PATH':'/usr/local/bin:/usr/bin:/bin','HOME':str(HOME_ROOT/w['slug'])}
     options={} if os.environ.get('GRAVE_WORKSPACE_TEST')=='1' else {'user':account.pw_uid,'group':account.pw_gid,'extra_groups':[]}
     result=subprocess.run([sys.executable,str(Path(__file__).absolute()),'__tree',action,str(HOME_ROOT/w['slug'])],
                           input=json.dumps(payload),env=env,text=True,capture_output=True,**options)
     if result.returncode: die(f"unsafe workspace tree: {w['slug']}; "+result.stderr.strip())
+    return result.stdout.strip()
 
 def prepare_workspace_home(w):
     home=HOME_ROOT/w['slug']
@@ -299,6 +337,7 @@ def prepare_workspace_home(w):
                 die(f"unsafe workspace home ownership or mode: {w['slug']}")
 
 def provision(w):
+    if w.get('removal'): die('workspace removal is pending; retry the confirmed remove command')
     prepare_workspace_home(w)
     tree_command(w,'provision')
     home=HOME_ROOT/w['slug']
@@ -349,17 +388,20 @@ def cmd_status(a):
         for kind in ("t3","term","dashboard"):
             if os.environ.get("GRAVE_WORKSPACE_TEST")=="1": services[kind]="test"
             else: services[kind]="active" if subprocess.run(["systemctl","is-active","--quiet",f"gravedecay-{kind}@{w['slug']}"],check=False).returncode==0 else "inactive"
-        rows.append({"slug":w["slug"],"enabled":w["enabled"],"bytes":size,"services":services,"projects":len(w["projects"]),"llm":w["provider"]["llm"]})
+        rows.append({"slug":w["slug"],"enabled":w["enabled"],"bytes":size,"services":services,"projects":len(w["projects"]),"llm":w["provider"]["llm"],"removal_pending":bool(w.get('removal'))})
     print(json.dumps(rows,indent=2))
 
 def cmd_inspect(a):
-    data=load(); validate(data); print(json.dumps(find(data,a.workspace),indent=2,sort_keys=True))
+    data=load(); validate(data); print(json.dumps(find(data,a.workspace,allow_removal=True),indent=2,sort_keys=True))
 def cmd_disable(a):
     data=load(); w=find(data,a.workspace); w["enabled"]=False; save(data)
     run("systemctl","disable","--now",f"gravedecay-t3@{w['slug']}.service",f"gravedecay-term@{w['slug']}.service",f"gravedecay-dashboard@{w['slug']}.service")
     audit("workspace_disabled",w["slug"]); print(f"disabled {w['slug']}")
 def cmd_doctor(a):
     data=load(); validate(data)
+    pending=[w['slug'] for w in data['workspaces'] if w.get('removal')]
+    if pending: die('workspace removal pending; retry confirmed remove for: '+', '.join(pending))
+    check_removal_archives()
     checkout_paths=set()
     if os.environ.get("GRAVE_WORKSPACE_TEST") != "1" and (not SERVICE_ROOT.is_dir() or SERVICE_ROOT.stat().st_uid!=0 or SERVICE_ROOT.stat().st_mode&0o077): die("workspace service directory ownership drift")
     registered={w["slug"] for w in data["workspaces"]}
@@ -420,18 +462,94 @@ def cmd_doctor(a):
                 if listeners and not loopback_listeners(listeners):
                     die(f"non-loopback workspace listener: {w['slug']}/{kind} ({listeners.strip()})")
     print(f"ok: {len(data['workspaces'])} workspace(s)")
+# Archiving never recursively traverses workspace content as root. Completed
+# removal archives stay behind root-owned private directories even if a UID is reused.
+@contextmanager
+def removal_archives(create=False):
+    with absolute_directory(ROOT/'backups',trusted=True,create=create) as backups:
+        with directory_at(backups,'removed-workspaces',os.geteuid(),private=True,create=create) as (fd,_):
+            yield fd
+
+def check_removal_archives():
+    try:
+        with removal_archives() as archives:
+            for name in os.listdir(archives):
+                with directory_at(archives,name,os.geteuid(),private=True) as (entry,_):
+                    with directory_at(entry,'home') as (home,_):
+                        if os.fstat(home).st_mode & 0o077: die('unsafe retained workspace home permissions')
+    except FileNotFoundError:
+        # An absent archive root is normal; missing content in an existing
+        # archive is not (checked separately to avoid swallowing that error).
+        if (ROOT/'backups/removed-workspaces').exists(): die('incomplete workspace removal archive')
+
+def removal_account(w, receipt=None):
+    try: account=workspace_account(w)
+    except KeyError:
+        if receipt: return None  # retry after userdel succeeded but registry save did not
+        die(f"missing Unix account: {w['slug']}")
+    if receipt and (account.pw_uid,account.pw_gid)!=(receipt['uid'],receipt['gid']):
+        die('workspace account changed during removal')
+    return account
+
+def retained_identity(parent, name, receipt):
+    with directory_at(parent,name,receipt['uid'],private=True) as (fd,_):
+        info=os.fstat(fd)
+        if (info.st_dev,info.st_ino)!=(receipt['device'],receipt['inode']):
+            die('workspace removal identity drift')
+
+def archive_workspace(data, w):
+    receipt=w.get('removal')
+    account=removal_account(w,receipt)
+    with absolute_directory(HOME_ROOT,trusted=True) as homes, removal_archives(create=True) as archives:
+        if receipt is None:
+            with directory_at(homes,w['slug'],account.pw_uid,private=True) as (home,_):
+                info=os.fstat(home)
+                if info.st_dev!=os.fstat(archives).st_dev:
+                    die('workspace removal archive must share the home filesystem; no data moved')
+                name=w['slug']+'-'+secrets.token_hex(16)
+                receipt={'archive':name,'uid':account.pw_uid,'gid':account.pw_gid,
+                         'device':info.st_dev,'inode':info.st_ino}
+            try: os.stat(name,dir_fd=archives,follow_symlinks=False)
+            except FileNotFoundError: pass
+            else: die('workspace removal archive already exists')
+            # Durable intent lets retries distinguish a completed rename from an
+            # unrelated pre-existing archive; keep the registry entry until userdel.
+            w['removal']=receipt
+            save(data)
+        name=receipt['archive']
+        with directory_at(archives,name,os.geteuid(),private=True,create=True) as (target,_):
+            os.fsync(archives)
+            try: source=os.stat(w['slug'],dir_fd=homes,follow_symlinks=False)
+            except FileNotFoundError: source=None
+            if source is not None:
+                if account is None: die('workspace home exists without its removal account')
+                retained_identity(homes,w['slug'],receipt)
+                try: os.stat('home',dir_fd=target,follow_symlinks=False)
+                except FileNotFoundError: pass
+                else: die('both source and archive exist; refusing to overwrite retained data')
+                # Both parents are administrator-controlled. No unprivileged
+                # process can substitute this source/destination directory entry.
+                os.rename(w['slug'],'home',src_dir_fd=homes,dst_dir_fd=target)
+                os.fsync(homes); os.fsync(target)
+            retained_identity(target,'home',receipt)
+            os.fsync(homes); os.fsync(target)
+    return ROOT/'backups/removed-workspaces'/name/'home',account
+
 def cmd_remove(a):
     if a.confirm != a.workspace: die("destructive removal requires --confirm WORKSPACE")
-    data=load(); w=find(data,a.workspace)
-    if w["enabled"]: die("disable workspace before removal")
-    run("systemctl","disable","--now",f"gravedecay-t3@{w['slug']}.service",f"gravedecay-term@{w['slug']}.service",f"gravedecay-dashboard@{w['slug']}.service")
-    archive=ROOT/"backups/removed-workspaces"/w["slug"]
-    home=HOME_ROOT/w["slug"]
-    if home.exists(): archive.parent.mkdir(parents=True,exist_ok=True); shutil.move(str(home),str(archive))
-    for path in (service_env(w),provider_link(w)):
-        try: path.unlink()
-        except FileNotFoundError: pass
-    run("userdel",unix_name(w["slug"])); data["workspaces"].remove(w); save(data); audit("workspace_removed",w["slug"],str(archive)); print(f"removed {w['slug']}; retained at {archive}")
+    data=load(); validate(data); w=find(data,a.workspace,allow_removal=True)
+    if w['enabled']: die('disable workspace before removal')
+    run('systemctl','disable','--now',f"gravedecay-t3@{w['slug']}.service",f"gravedecay-term@{w['slug']}.service",f"gravedecay-dashboard@{w['slug']}.service")
+    archive,account=archive_workspace(data,w)
+    with service_directory() as parent:
+        for path in (service_env(w),provider_link(w)):
+            try: os.unlink(path.name,dir_fd=parent)
+            except FileNotFoundError: pass
+        os.fsync(parent)
+    if account is not None: run('userdel',unix_name(w['slug']))
+    data['workspaces'].remove(w); save(data)
+    audit('workspace_removed',w['slug'],str(archive))
+    print(f"removed {w['slug']}; retained at {archive}")
 
 def valid_remote(url):
     return (url.startswith("https://") or url.startswith("ssh://") or re.fullmatch(r"git@[^: ]+:[^ ]+",url)) and "\n" not in url
@@ -449,12 +567,16 @@ def cmd_grant(a):
     else: as_user(w,"git","clone","--",a.url,str(dest))
     w["projects"].append({"name":a.name,"url":a.url}); save(data); audit("project_granted",w["slug"],a.name); print(f"granted {w['slug']}/{a.name}")
 def cmd_revoke(a):
-    data=load(); w=find(data,a.workspace); matches=[p for p in w["projects"] if p["name"]==a.name]
+    if not PROJECT.fullmatch(a.name): die('unsafe project name')
+    data=load(); validate(data); w=find(data,a.workspace)
+    matches=[p for p in w['projects'] if p['name']==a.name]
     if not matches: print(f"unchanged {w['slug']}/{a.name}"); return
-    src=HOME_ROOT/w["slug"]/"repos"/a.name
-    archive=HOME_ROOT/w["slug"]/"revoked"/(a.name+"-"+time.strftime("%Y%m%d-%H%M%S",time.gmtime()))
-    if src.exists(): archive.parent.mkdir(parents=True,exist_ok=True); src.rename(archive)
-    w["projects"].remove(matches[0]); save(data); audit("project_revoked",w["slug"],a.name); print(f"revoked {w['slug']}/{a.name}; retained at {archive}")
+    retained=tree_command(w,'revoke',name=a.name)
+    if retained and not re.fullmatch(re.escape(a.name)+r'-[0-9]{8}-[0-9]{6}-[0-9a-f]{16}',retained):
+        die('invalid retained project path')
+    w['projects'].remove(matches[0]); save(data); audit('project_revoked',w['slug'],a.name)
+    location=str(HOME_ROOT/w['slug']/'revoked'/retained) if retained else 'checkout already absent'
+    print(f"revoked {w['slug']}/{a.name}; retained at {location}")
 def cmd_git_config(a):
     data=load(); w=find(data,a.workspace)
     as_user(w,"git","config","--global","user.name",a.name)
@@ -629,6 +751,7 @@ if __name__ == "__main__":
             tree=WorkspaceTree(home); payload=json.load(sys.stdin)
             if action=='provision': tree.provision(payload['helper'],payload['projects'])
             elif action=='check': tree.check(payload['projects'])
+            elif action=='revoke': print(tree.revoke(payload['name']) or '')
             else: die("invalid workspace tree operation")
         else: main()
     except (OSError,UnicodeError) as exc:

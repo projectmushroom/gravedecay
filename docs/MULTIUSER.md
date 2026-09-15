@@ -60,9 +60,41 @@ directory/file with the correct UID and private directory permissions before
 reapplying. Reapply deliberately does not repair ownership drift automatically.
 `raise.sh` installs the updated CLI; no new daemon or port is required.
 
-This covers add/reapply provisioning. The remaining root-side revoke/removal
-operations, owner migration/restore paths, and private backup coverage remain
-part of the broader #198 audit.
+Owner migration/restore paths and private backup coverage remain part of the
+broader #198 audit. Revoke and removal behavior is described below.
+
+## Revocation and workspace removal
+
+`grave projects revoke <workspace> <project>` moves the checkout into that
+workspace's private `revoked/<project>-<timestamp>-<random>` directory before
+removing the grant. The move runs as the workspace UID through verified directory
+handles. Symlinked parents/checkouts and wrong ownership are rejected. Linux
+`renameat2` with no-replace semantics protects existing archives; unsupported or
+cross-filesystem moves fail without a copy fallback. Dirty and untracked files
+stay with the checkout. Doctor also checks the optional `revoked` directory.
+
+After `grave users disable <workspace>`, the existing explicit removal command
+`grave users remove <workspace> --confirm <workspace>` retains the entire home at
+`$GRAVE_ROOT/backups/removed-workspaces/<workspace>-<random>/home` and prints that
+path. Both archive parent directories are root-owned mode 700, so a removed user
+or a later user assigned the same numeric UID cannot read the retained data.
+Root performs a single directory rename between verified administrator-controlled
+parents; it never walks/copies the workspace's contents. The archive and home
+must share a filesystem. No existing archive is overwritten, and reused workspace
+slugs get separate archives.
+
+Removal records a private receipt (archive name, original UID/GID and directory
+identity) in the registry before moving data. If account deletion or another step
+fails, the disabled record remains with `removal_pending` in status, and doctor
+reports the pending removal. Re-run the same confirmed remove command after fixing
+the reported error. Reapply and normal workspace operations refuse a pending
+removal rather than recreating an empty home. Retries validate the original
+directory identity and reject conflicting source/archive data. The registry entry
+is removed only after service credentials and the Unix account have been removed.
+
+Doctor requires private root-owned removal archive parents. Legacy archives with
+different ownership/modes are reported for administrator inspection; this change
+does not silently rewrite their contents or permissions.
 
 ## Request flow and failures
 

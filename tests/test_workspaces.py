@@ -31,7 +31,8 @@ class WorkspaceTests(unittest.TestCase):
         self.assertFalse(json.loads((self.root/"config/workspaces.json").read_text())["workspaces"][0]["enabled"])
         self.run_cli("remove","alice","--confirm","wrong",ok=False)
         self.run_cli("remove","alice","--confirm","alice")
-        self.assertTrue((self.root/"backups/removed-workspaces/alice").is_dir())
+        archives=list((self.root/"backups/removed-workspaces").glob("alice-*/home"))
+        self.assertEqual(len(archives),1); self.assertTrue(archives[0].is_dir())
     def test_rejects_unsafe_and_duplicate_values(self):
         self.run_cli("add","123","a@example.com","../alice",ok=False)
         self.run_cli("add","123","a@example.com","alice")
