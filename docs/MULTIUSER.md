@@ -60,8 +60,8 @@ directory/file with the correct UID and private directory permissions before
 reapplying. Reapply deliberately does not repair ownership drift automatically.
 `raise.sh` installs the updated CLI; no new daemon or port is required.
 
-Owner migration/restore paths and private backup coverage remain part of the
-broader #198 audit. Revoke and removal behavior is described below.
+Restore paths and private backup coverage remain part of the broader #198
+audit. Owner migration and retention behavior are described below.
 
 ## Revocation and workspace removal
 
@@ -177,12 +177,36 @@ services intact. Rollback restores the previous Serve configuration and
 units; workspace data is retained. Ambiguous identity, duplicate IDs/slugs or
 ports, unsafe ownership, and an unconfirmed owner ID stop migration.
 
+Owner migration requires a fresh registry identity, slug, Unix account, and
+home. It never overlays an existing workspace. A fresh process running as the
+appliance owner copies state, dirty repositories, and personal credentials into
+`config/workspace-migrations/<slug>-<random>/content`, behind root-owned mode-700
+parents. Git metadata is read as that owner too. Top-level repository symlinks
+are skipped; nested repository symlinks are preserved without following their
+targets. Agent credential directories are copied directly, without nesting them.
+Copies become private while retaining executable bits; managed configuration
+links and special files fail validation. Recognized remote URLs become project
+grants; other repositories remain copied but ungranted.
+
+After validation, root assigns the new workspace UID only inside this isolated
+stage, without following links, then publishes the home by a no-replace rename.
+The stage and workspace homes must be on the same filesystem; there is no copy
+fallback. Original owner data stays in place and workspace services remain
+stopped until the ritual installs the multi-user boundary.
+
+An interrupted copy, publication, or service setup retains its private staging
+receipt. Doctor reports pending staging even before a registry exists, and a
+new migration refuses to proceed. Inspect the receipt, source data, registry,
+Unix account, and any published home as administrator; retain the failed copy
+before removing its staging entry. A retry still requires a fresh target.
+An already published workspace is never overwritten to resume migration.
+
 ## Operations
 
 Migration is explicit: `grave multiuser enable <stable-id> <owner-login>
 owner --profile <profile>`. It takes a normal backup plus a migration snapshot,
-creates the admin workspace without starting it, copies owner state and adopts
-existing Git remotes, then sets `MULTI_USER=1` and re-runs the ritual. The
+stages and validates owner state, publishes a fresh admin workspace without
+starting it, records supported Git remotes, then sets `MULTI_USER=1` and re-runs the ritual. The
 ritual installs and verifies the nftables boundary before starting backends,
 then disables the legacy global `t3code` and `gravedecay-term` units on every
 multi-user re-raise. Serve changes only during successful re-raise. Failure
