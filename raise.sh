@@ -562,6 +562,7 @@ fi
 # gateway/backend unit require it at boot.  No nft/kernel support is a hard
 # failure: starting private workspace services without this guard is unsafe.
 if [[ "${MULTI_USER:-0}" == 1 ]]; then
+  sudo -n "$GRAVE_BIN" __users owner-privacy
   command -v nft >/dev/null || { echo "multi-user mode requires nftables; install it and rerun" >&2; exit 1; }
   for token_file in "$GRAVE_ROOT/config/secrets/gateway-token" "$GRAVE_ROOT/config/secrets/admin-dashboard.env"; do
     if [[ ! -s "$token_file" ]]; then

@@ -60,8 +60,33 @@ directory/file with the correct UID and private directory permissions before
 reapplying. Reapply deliberately does not repair ownership drift automatically.
 `raise.sh` installs the updated CLI; no new daemon or port is required.
 
-Owner-state privacy and legacy backup permissions remain part of the broader
-#198 audit. Owner migration and retention behavior are described below.
+## Owner data and existing backups
+
+Before migration creates an owner workspace, and on every multi-user re-raise
+or `grave users reapply`, the appliance makes these exact directories beneath
+`$GRAVE_ROOT` owner-owned mode 700: `repos`, `agents`, `worktrees`, `logs`,
+`config`, `docker`, and `backups`. This also isolates original state retained
+after migration. It does not recursively change repository or configuration
+contents. The shared `scripts`, `web`, and `docs` trees and the workspace parent
+remain accessible; workspace homes retain their separate Unix owners.
+
+Existing backup directories and regular artifacts are repaired to owner ownership
+and modes 700/600 (preserving owner executable bits). A custom `BACKUP_DIR` gets
+the same treatment and must be a dedicated directory that does not overlap other
+managed trees. Root-private `backups/removed-workspaces` is validated but never
+traversed or reowned by this repair.
+
+`grave users owner-privacy` reapplies this policy; add `--check` for a read-only
+check. Both `grave users doctor` and `grave doctor` enforce it in multi-user mode.
+Repair uses verified directory handles and refuses symbolic path components,
+linked/nonregular backup files, foreign ownership, and shared-writable directories.
+A running backup makes it fail promptly: retry after the backup finishes. On
+unsafe-path errors, inspect and retain the named data before replacing the unsafe
+entry; never use recursive chown on workspace homes or retained workspaces.
+
+This policy covers the managed appliance data paths, not arbitrary files elsewhere
+in the owner's login home or external targets of repository symlinks. Keep those
+private separately. The remaining privileged-operation audit is tracked in #198.
 
 ## Revocation and workspace removal
 

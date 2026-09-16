@@ -2277,6 +2277,8 @@ cmd_multiuser() {
       [[ "${1:-}" == --profile ]] && { profile="${2:?profile}"; shift 2; }
       local owner="${SUDO_USER:-$(stat -c %U "$GRAVE_ROOT")}" owner_home helper migration conf_backup
       owner_home=$(getent passwd "$owner" | cut -d: -f6); helper="$(dirname "$0")/grave-workspaces"
+      "$0" __users owner-privacy
+      umask 077
       migration="$GRAVE_ROOT/backups/migration-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$migration"
       conf_backup="$migration/grave.conf"; cp "$CONF" "$conf_backup"
       tailscale serve get-config "$migration/serve.json" >/dev/null 2>&1 || true
@@ -2888,6 +2890,7 @@ case "${1:-help}" in
               # This keeps later additions correct on /usr/local and immutable
               # Homebrew hosts where the old /usr/bin defaults do not exist.
               export GRAVE_ROOT
+              export GRAVE_MULTI_USER="$MULTI_USER" GRAVE_BACKUP_DIR="$BACKUP_DIR"
               export GRAVE_T3_BIN="$(command -v t3 2>/dev/null || true)"
               export GRAVE_TTYD_BIN="$(command -v ttyd 2>/dev/null || true)"
               export GRAVE_TOOL_PATH="${TOOL_PATH:-}"

@@ -122,6 +122,7 @@ as_mole bash /repo/tests/e2e/jobs.sh
 echo "=== phase 6: multi-user loopback boundary ==="
 docker exec "$CTR" python3 /repo/tests/e2e/workspace-migration.py
 docker exec "$CTR" python3 /repo/tests/e2e/workspace-restore.py
+docker exec "$CTR" python3 /repo/tests/e2e/owner-privacy.py prepare
 as_mole grave multiuser enable 100 mole@example.com mole --profile generic
 docker exec "$CTR" grave __users doctor
 # Migration backed up as root. Private artifacts and metadata must still be
@@ -145,6 +146,7 @@ docker exec "$CTR" python3 /repo/tests/e2e/terminal-origins.py 4910
 docker exec "$CTR" python3 /repo/tests/e2e/terminal-origins.py 4710 \
   --gateway-token-file /srv/dev/config/secrets/gateway-token --user mole@example.com
 docker exec "$CTR" grave users add 200 bob@example.com bob --no-llm
+docker exec "$CTR" python3 /repo/tests/e2e/owner-privacy.py verify
 if docker exec "$CTR" runuser -u grave-bob -- cat /srv/dev/backups/.last-backup; then
   echo "FATAL: collaborator can read private backup metadata"
   exit 1

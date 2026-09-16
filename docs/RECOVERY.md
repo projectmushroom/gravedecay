@@ -84,6 +84,16 @@ archive, an older backup without coverage, or a registry change requires a new
 permissions and group memberships are unchanged; collaborators cannot access
 the owner's backup directory.
 
+In multi-user mode, migration and reapply also repair existing backup directory
+and artifact permissions/ownership, including a custom `BACKUP_DIR`. To repair
+again, run `grave users owner-privacy`; `grave users owner-privacy --check` verifies
+without changes. Artifacts remain byte-for-byte unchanged, and the repair does
+not claim checksum verification or advance backup freshness. Unsafe links,
+foreign owners, or shared-writable directories require inspection; an active
+backup requires retrying after it finishes. Retained workspace homes under
+`backups/removed-workspaces` keep their root-private archive boundary and original
+UIDs. See [MULTIUSER.md](MULTIUSER.md#owner-data-and-existing-backups).
+
 After copying a backup, or before relying on it for recovery, run:
 
 ```sh
