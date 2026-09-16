@@ -1808,6 +1808,9 @@ cmd_doctor() { # grave doctor [--no-page]
   elif [[ -f "$BACKUP_DIR/.last-verified" ]]; then
     say "  ${YLW}– legacy backup has no inventory — run: grave backup${RST}"
   fi
+  if [[ -e "$GRAVE_ROOT/config/workspaces.json" ]]; then
+    check "latest backup covers current workspace registry" workspace_backup_latest_check
+  fi
   # Backup freshness (#112): .last-verified is written only after every artifact
   # in a run was created AND verified, so "fresh marker" means "a restorable
   # backup exists", not "the timer fired". Gated on the timer unit so installs
@@ -2018,12 +2021,24 @@ backup_integrity() {
   python3 "$GRAVE_ROOT/scripts/backup-integrity.py" "$@"
 }
 
+backup_workspace_helper() {
+  if (( EUID == 0 )); then "$0" __users "$@"; else sudo -n "$0" __users "$@"; fi
+}
+
 backup_latest_check() {
   local ts
   [[ -f "$BACKUP_DIR/.last-backup" && ! -L "$BACKUP_DIR/.last-backup" ]] || return 1
   ts=$(<"$BACKUP_DIR/.last-backup")
   [[ "$ts" =~ ^[0-9]{8}-[0-9]{6}$ ]] || return 1
   backup_integrity check "$BACKUP_DIR/$ts"
+}
+
+workspace_backup_latest_check() {
+  local ts
+  [[ -f "$BACKUP_DIR/.last-backup" && ! -L "$BACKUP_DIR/.last-backup" ]] || return 1
+  ts=$(<"$BACKUP_DIR/.last-backup")
+  [[ "$ts" =~ ^[0-9]{8}-[0-9]{6}$ ]] || return 1
+  backup_workspace_helper backup-check "$BACKUP_DIR/$ts"
 }
 
 cmd_backup() (
@@ -2088,14 +2103,22 @@ cmd_backup() (
     fi
   done
 
-  local excludes=(--exclude='config/secrets' --exclude='workspaces/*/config/secrets' --exclude='workspaces/*/.config/gh' --exclude='workspaces/*/.codex/auth.json' --exclude='workspaces/*/.claude/.credentials.json' --exclude='workspaces/*/.claude.json')
+  local excludes=(--exclude='config/secrets' --exclude='workspaces/*/config/secrets' --exclude='workspaces/*/.config/gh' --exclude='workspaces/*/config/gh' --exclude='workspaces/*/.codex/auth.json' --exclude='workspaces/*/.claude/.credentials.json' --exclude='workspaces/*/.claude.json')
   (( include_secrets )) && excludes=()
   backup_tar "platform config" "$dest/configs/grave-platform.tar.gz" \
     "${excludes[@]}" --exclude='config/workspace-restores' --exclude='config/workspace-migrations' \
+    --exclude='config/workspace-services' --exclude='config/workspaces.lock' --exclude='config/workspaces.json' \
+    --exclude='config/secrets/gateway-token' --exclude='config/secrets/admin-dashboard.env' --exclude='config/secrets/provider.env' \
     -C "$GRAVE_ROOT" config docker docs scripts
-  if [[ -d "$GRAVE_ROOT/workspaces" ]]; then
-    backup_tar "workspace homes, state, and dirty worktrees" "$dest/configs/workspaces.tar.gz" \
-      "${excludes[@]}" -C "$GRAVE_ROOT" workspaces
+  if [[ -e "$GRAVE_ROOT/config/workspaces.json" || -e "$GRAVE_ROOT/workspaces" || -e "$GRAVE_ROOT/config/secrets/provider.env" ]]; then
+    local workspace_options=()
+    (( include_secrets )) && workspace_options=(--include-secrets)
+    if backup_workspace_helper backup-export "${workspace_options[@]}" >"$dest/configs/workspaces.tar.gz" \
+       && tar -tzf "$dest/configs/workspaces.tar.gz" >/dev/null 2>&1; then
+      ok "private workspace homes, registry, and dirty work (verified)"
+    else
+      bad "workspace backup failed"; failures=$((failures+1))
+    fi
   fi
   if [[ -d "$GRAVE_ROOT/worktrees" ]]; then
     # Bundles above preserve branches, but not staged/dirty/untracked files.

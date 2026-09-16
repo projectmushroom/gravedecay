@@ -267,7 +267,15 @@ port, home, account or service-config conflicts. Only validated unpublished
 copies receive fresh workspace UIDs; no-replace rename publishes them and
 service capabilities are regenerated. Failed restores retain receipts that
 block reapply and fail doctor. See [recovery](RECOVERY.md#restore-pieces).
-Owner privacy and private workspace backup work remain tracked in #198.
+Nightly workspace backup keeps the owner-run writer and uses a scoped root
+orchestrator with stdout-only output. Each home is read after exec as its own
+Unix UID, with empty supplementary groups; descriptor traversal never follows
+links. An unreadable home or failed worker fails the run without publishing or
+refreshing freshness. The locked registry snapshot travels with the data, and
+doctor checks current-registry coverage. Known credentials are excluded by default;
+explicit shared-provider recovery material is the only root-read secret in this
+export. Service capabilities are always excluded. See [recovery](RECOVERY.md).
+Owner privacy and legacy backup permissions remain tracked in #198.
 See [SECRETS.md](SECRETS.md#multi-user-workspaces) for rollout and file formats.
 
 ## The web terminal

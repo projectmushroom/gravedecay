@@ -60,7 +60,7 @@ directory/file with the correct UID and private directory permissions before
 reapplying. Reapply deliberately does not repair ownership drift automatically.
 `raise.sh` installs the updated CLI; no new daemon or port is required.
 
-Private backup coverage and owner-state privacy remain part of the broader
+Owner-state privacy and legacy backup permissions remain part of the broader
 #198 audit. Owner migration and retention behavior are described below.
 
 ## Revocation and workspace removal
@@ -220,9 +220,15 @@ users, grants, provider policy, modes, upgrades, reboot, global files/units,
 or unrestricted logs. Disablement stops all workspace units immediately;
 removal requires prior disablement and archives rather than deletes its home.
 
-`grave backup` includes registry-backed workspace state and dirty work but
-excludes credentials by default. `--include-secrets` is an explicit sensitive
-choice. `grave restore <timestamp> workspaces` validates and stages archived
+`grave backup` streams every registered home through a process running as that
+workspace UID, including disabled workspaces. Its scoped root helper accepts no
+output pathname, holds the registry lock, and embeds that snapshot in the archive;
+the appliance owner writes the private result. No home permissions are relaxed.
+Unreadable or missing data fails the run without advancing freshness. Doctor
+requires coverage of the current registry, so run a fresh backup after lifecycle
+or grant changes. Known credentials (including both GitHub config locations) are
+excluded by default; `--include-secrets` is an explicit sensitive choice. Root
+service capabilities are regenerated and never archived. `grave restore <timestamp> workspaces` validates and stages archived
 registry records and workspace files, then publishes fresh homes without
 replacing existing IDs, slugs, ports, accounts or service configuration. Existing
 unrelated workspaces remain intact. Service capabilities are regenerated and

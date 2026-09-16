@@ -7,6 +7,7 @@ from pathlib import Path, PurePosixPath
 import re
 import stat
 import sys
+import tarfile
 
 
 def regular(path):
@@ -60,6 +61,16 @@ def run(action, root):
         if manifest["version"] != 1:
             raise ValueError("only a newly created backup can be sealed")
         files = inventory(root)
+        workspace = files.get("configs/workspaces.tar.gz")
+        if workspace is not None:
+            with tarfile.open(workspace, "r|gz") as archive:
+                first = archive.next()
+                if first is None or first.name != "config/workspaces.json" or not first.isreg() or not 0 < first.size <= 16*1024*1024:
+                    raise ValueError("workspace backup is missing its registry snapshot")
+                snapshot = archive.extractfile(first).read()
+                registry = json.loads(snapshot)
+                manifest["workspace_coverage"] = {"registry_sha256": hashlib.sha256(snapshot).hexdigest(),
+                                                   "workspaces": [{"id": w["id"], "slug": w["slug"]} for w in registry["workspaces"]]}
         manifest.update(version=2, artifacts={
             name: {"size": path.stat().st_size, "sha256": digest(path)}
             for name, path in sorted(files.items())
@@ -100,7 +111,7 @@ def main():
         return 2
     try:
         run(sys.argv[1], Path(sys.argv[2]))
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, tarfile.TarError) as error:
         print(f"backup integrity failed: {error}", file=sys.stderr)
         return 1
     return 0

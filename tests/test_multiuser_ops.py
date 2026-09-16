@@ -41,6 +41,6 @@ class MultiUserEndToEnd(unittest.TestCase):
         self.assertIn("Tailscale LocalAPI hidden from workspaces",grave)
         self.assertIn("chmod 0660 /run/tailscale/tailscaled.sock",(ROOT/"raise.sh").read_text())
         self.assertIn("grave restore <ts> workspaces",recovery)
-        self.assertIn("Secrets are excluded by default",recovery)
+        self.assertIn("Known credential locations are excluded by default",recovery)
 
 if __name__ == "__main__": unittest.main()

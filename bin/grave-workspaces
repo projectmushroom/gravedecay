@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Appliance-owned multi-user workspace registry and lifecycle helper."""
-import argparse, fcntl, ipaddress, json, os, pwd, re, secrets, shutil, stat, subprocess, sys, tempfile, time
+import argparse, fcntl, ipaddress, json, os, pwd, re, secrets, shutil, stat, subprocess, sys, tarfile, tempfile, time
 from pathlib import Path
 
 ROOT = Path(os.environ.get("GRAVE_ROOT", "/srv/dev"))
@@ -574,24 +574,38 @@ def extract_workspace_backup(content, inputs, payload):
             if not isinstance(expected,dict) or expected.get('sha256')!=digest or expected.get('size')!=os.fstat(fd).st_size:
                 die('workspace restore checksum mismatch')
     else: print('WARNING: legacy backup has no checksums; archive paths will still be validated',file=sys.stderr)
-    with os.fdopen(os.dup(inputs[1]),'rb') as stream, tarfile.open(fileobj=stream,mode='r:gz') as archive:
-        records=[m for m in archive if archive_path(m.name)==['config','workspaces.json']]
-        if len(records)!=1 or not records[0].isreg() or not 0<records[0].size<=16*1024*1024:
-            die('backup requires exactly one regular workspace registry')
-        data=restore_registry(json.load(archive.extractfile(records[0])))
-    slugs={w['slug'] for w in data['workspaces']}
     with os.fdopen(os.dup(inputs[2]),'rb') as stream, tarfile.open(fileobj=stream,mode='r:gz') as archive:
-        members={}
+        members={}; embedded=None
         for member in archive:
             parts=archive_path(member.name)
-            if parts[0]!='workspaces' or (len(parts)>1 and parts[1] not in slugs):
-                die('archive contains an unregistered workspace or outside path')
-            if len(parts)<=2 and not member.isdir(): die('workspace archive roots must be directories')
-            if not (member.isdir() or member.isreg() or member.issym() or member.islnk()):
-                die('special files are not allowed in workspace archives')
             name='/'.join(parts)
             if name in members: die('duplicate workspace archive path')
             members[name]=member
+            if name=='config/workspaces.json':
+                if not member.isreg() or not 0<member.size<=16*1024*1024: die('invalid embedded registry')
+                embedded=restore_registry(json.load(archive.extractfile(member)))
+            elif name=='config/secrets/provider.env':
+                if not member.isreg() or member.size>16384 or manifest.get('secrets_included') is not True:
+                    die('invalid archived provider credentials')
+            elif parts[0]!='workspaces': die('archive contains an outside path')
+        if embedded is None:
+            # Older backups kept the registry only in the platform archive.
+            with os.fdopen(os.dup(inputs[1]),'rb') as platform_stream, tarfile.open(fileobj=platform_stream,mode='r:gz') as platform:
+                records=[m for m in platform if archive_path(m.name)==['config','workspaces.json']]
+                if len(records)!=1 or not records[0].isreg() or not 0<records[0].size<=16*1024*1024:
+                    die('backup requires exactly one regular workspace registry')
+                data=restore_registry(json.load(platform.extractfile(records[0])))
+        else: data=embedded
+        slugs={w['slug'] for w in data['workspaces']}
+        # Provider material is an explicit backup-only recovery artifact. It is
+        # never installed or granted by workspace restore; controls regenerate.
+        members={name:member for name,member in members.items() if name.startswith('workspaces/') or name=='workspaces'}
+        for name,member in members.items():
+            parts=name.split('/')
+            if len(parts)>1 and parts[1] not in slugs: die('archive contains an unregistered workspace')
+            if len(parts)<=2 and not member.isdir(): die('workspace archive roots must be directories')
+            if not (member.isdir() or member.isreg() or member.issym() or member.islnk()):
+                die('special files are not allowed in workspace archives')
         for slug in slugs:
             if 'workspaces/'+slug not in members: die('backup is missing a registered workspace home')
         for name,member in members.items():
@@ -718,6 +732,106 @@ def cmd_restore(a):
             os.rmdir('content',dir_fd=parent); os.fsync(parent)
         os.rmdir(stage,dir_fd=stages); os.fsync(stages)
     audit('workspaces_restored'); print(f"restored {len(recovered['workspaces'])} workspace(s); services remain stopped until reapply")
+
+
+# Backups use inherited stdout only: root never accepts a caller-selected output
+# pathname, and every workspace traversal happens after exec as that workspace.
+WORKSPACE_BACKUP_SECRETS={('config','secrets'),('config','gh'),('.config','gh'),
+                          ('.codex','auth.json'),('.claude','.credentials.json'),('.claude.json',)}
+
+def backup_tree(home, slug, include_secrets):
+    import tarfile
+    if os.geteuid()==0: die('workspace backup traversal must not run as root')
+    tree=WorkspaceTree(home); tree.check(allow_missing=False)
+    def header(name,info,kind):
+        item=tarfile.TarInfo(name); item.type=kind; item.mtime=int(info.st_mtime)
+        item.mode=0o700 if kind==tarfile.DIRTYPE or info.st_mode&0o111 else 0o600
+        return item
+    with tree.directory() as home_fd, tarfile.open(fileobj=sys.stdout.buffer,mode='w|') as archive:
+        def walk(fd,parts):
+            info=os.fstat(fd)
+            archive.addfile(header('/'.join(('workspaces',slug,*parts)),info,tarfile.DIRTYPE))
+            for name in sorted(os.listdir(fd)):
+                relative=(*parts,name)
+                if not include_secrets and relative in WORKSPACE_BACKUP_SECRETS: continue
+                info=os.stat(name,dir_fd=fd,follow_symlinks=False)
+                archived='/'.join(('workspaces',slug,*relative))
+                if stat.S_ISLNK(info.st_mode):
+                    item=header(archived,info,tarfile.SYMTYPE); item.linkname=os.readlink(name,dir_fd=fd)
+                    archive.addfile(item)
+                elif stat.S_ISDIR(info.st_mode):
+                    with directory_at(fd,name) as (child,_): walk(child,relative)
+                elif stat.S_ISREG(info.st_mode):
+                    source=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=fd)
+                    with os.fdopen(source,'rb') as stream:
+                        before=os.fstat(stream.fileno())
+                        if not stat.S_ISREG(before.st_mode): die('workspace backup file changed type')
+                        item=header(archived,before,tarfile.REGTYPE); item.size=before.st_size
+                        archive.addfile(item,stream)
+                        after=os.fstat(stream.fileno())
+                        if (before.st_size,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_size,after.st_mtime_ns,after.st_ctime_ns):
+                            die('workspace file changed during backup; pause writers and retry')
+                elif stat.S_ISSOCK(info.st_mode): continue  # Live Unix sockets contain no recoverable file data.
+                else: die('unsupported special file in workspace backup')
+        walk(home_fd,())
+
+def cmd_backup_export(a):
+    import io, tarfile
+    data=load(); validate(data); check_restore_staging(); check_migration_staging()
+    if any(w.get('removal') for w in data['workspaces']): die('finish pending workspace removal before backup')
+    registered={w['slug'] for w in data['workspaces']}
+    with absolute_directory(HOME_ROOT,trusted=True,create=True) as homes:
+        if set(os.listdir(homes))!=registered: die('workspace homes differ from registry; refusing incomplete backup')
+    def add_bytes(archive,name,value):
+        item=tarfile.TarInfo(name); item.mode=0o600; item.size=len(value)
+        archive.addfile(item,io.BytesIO(value))
+    with tarfile.open(fileobj=sys.stdout.buffer,mode='w|gz') as archive:
+        # Kept first for cheap coverage inspection. The registry lock spans all
+        # workers, so restored grants and the covered set describe this export.
+        add_bytes(archive,'config/workspaces.json',(json.dumps(data,sort_keys=True)+'\n').encode())
+        if a.include_secrets and (PROVIDER_SECRET.exists() or PROVIDER_SECRET.is_symlink()):
+            check_manager_file(PROVIDER_SECRET)
+            with absolute_directory(PROVIDER_SECRET.parent,trusted=True) as parent:
+                fd=os.open(PROVIDER_SECRET.name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent)
+                with os.fdopen(fd,'rb') as stream:
+                    info=os.fstat(stream.fileno())
+                    if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or info.st_mode&0o077 or info.st_nlink!=1 or info.st_size>16384:
+                        die('unsafe shared provider backup source')
+                    add_bytes(archive,'config/secrets/provider.env',stream.read(16385))
+        for w in data['workspaces']:
+            account=workspace_account(w); home=HOME_ROOT/w['slug']
+            options={} if os.environ.get('GRAVE_WORKSPACE_TEST')=='1' else {'user':account.pw_uid,'group':account.pw_gid,'extra_groups':[]}
+            process=subprocess.Popen([sys.executable,str(Path(__file__).absolute()),'__backup_tree',str(home),w['slug'],str(int(a.include_secrets))],
+                                     stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,
+                                     env={'PATH':'/usr/local/bin:/usr/bin:/bin','HOME':str(home)},**options)
+            try:
+                with tarfile.open(fileobj=process.stdout,mode='r|') as source:
+                    for item in source:
+                        parts=archive_path(item.name)
+                        if parts[:2]!=['workspaces',w['slug']] or not (item.isdir() or item.isreg() or item.issym()):
+                            die('invalid workspace backup stream')
+                        archive.addfile(item,source.extractfile(item) if item.isreg() else None)
+                if process.wait()!=0: die(f"workspace backup failed: {w['slug']}; inspect private paths and pause writers")
+            finally:
+                process.stdout.close()
+                if process.poll() is None: process.terminate(); process.wait()
+    audit('workspaces_backed_up')
+
+def cmd_backup_check(a):
+    import hashlib
+    data=load(); validate(data)
+    with absolute_directory(a.backup,trusted=True) as parent:
+        fd=os.open('manifest.json',os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent)
+        with os.fdopen(fd,'r') as source:
+            info=os.fstat(source.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size>16*1024*1024: die('unsafe backup manifest')
+            manifest=json.load(source)
+    coverage=manifest.get('workspace_coverage')
+    digest=hashlib.sha256((json.dumps(data,sort_keys=True)+'\n').encode()).hexdigest()
+    if not isinstance(coverage,dict) or coverage.get('registry_sha256')!=digest:
+        die('latest backup does not cover the current workspace registry; run grave backup')
+    if 'configs/workspaces.tar.gz' not in manifest.get('artifacts',{}): die('workspace backup artifact missing')
+    print(f"verified backup covers {len(data['workspaces'])} workspace(s)")
 
 
 def cmd_list(a):
@@ -1071,6 +1185,8 @@ def main():
     q=s.add_parser("status"); q.set_defaults(fn=cmd_status)
     q=s.add_parser("add"); q.add_argument("identity"); q.add_argument("login"); q.add_argument("slug"); q.add_argument("--role",choices=sorted(ROLES),default="developer"); q.add_argument("--no-llm",dest="llm",action="store_false",default=True); q.set_defaults(fn=cmd_add)
     q=s.add_parser("migrate-owner"); q.add_argument("identity"); q.add_argument("login"); q.add_argument("slug"); q.add_argument("--owner",required=True); q.add_argument("--no-llm",dest="llm",action="store_false",default=True); q.set_defaults(fn=cmd_migrate_owner)
+    q=s.add_parser("backup-export"); q.add_argument("--include-secrets",action="store_true"); q.set_defaults(fn=cmd_backup_export)
+    q=s.add_parser("backup-check"); q.add_argument("backup",type=Path); q.set_defaults(fn=cmd_backup_check)
     q=s.add_parser("restore"); q.add_argument("backup",type=Path); q.set_defaults(fn=cmd_restore)
     q=s.add_parser("inspect"); q.add_argument("workspace"); q.set_defaults(fn=cmd_inspect)
     q=s.add_parser("disable"); q.add_argument("workspace"); q.set_defaults(fn=cmd_disable)
@@ -1095,7 +1211,9 @@ def main():
     with lock.open("a") as f: fcntl.flock(f,fcntl.LOCK_EX); a.fn(a)
 if __name__ == "__main__":
     try:
-        if len(sys.argv)>1 and sys.argv[1]=='__restore_extract':
+        if len(sys.argv)>1 and sys.argv[1]=='__backup_tree':
+            backup_tree(sys.argv[2],sys.argv[3],sys.argv[4]=='1')
+        elif len(sys.argv)>1 and sys.argv[1]=='__restore_extract':
             print(json.dumps(extract_workspace_backup(int(sys.argv[2]),list(map(int,sys.argv[3:])),json.load(sys.stdin))))
         elif len(sys.argv)>1 and sys.argv[1]=='__migration_copy':
             print(json.dumps(copy_owner_state(int(sys.argv[2]),json.load(sys.stdin))))
@@ -1108,5 +1226,5 @@ if __name__ == "__main__":
             elif action=='revoke': print(tree.revoke(payload['name']) or '')
             else: die("invalid workspace tree operation")
         else: main()
-    except (OSError,UnicodeError) as exc:
+    except (OSError,UnicodeError,tarfile.TarError) as exc:
         die(f"workspace path unavailable or unsafe ({type(exc).__name__}); inspect ownership and symlinks")
