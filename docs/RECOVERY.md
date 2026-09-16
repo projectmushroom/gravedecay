@@ -146,3 +146,15 @@ home or copy an archive over an existing workspace to bypass the receipt. The
 command checks directory identity on retry and refuses conflicting data. Removal
 requires a same-filesystem rename and never falls back to recursively copying
 collaborator-controlled contents as root.
+
+### Interrupted owner migration
+
+`grave multiuser enable` leaves original single-user data intact. Failed owner
+copy/publication leaves a root-private receipt under
+`$GRAVE_ROOT/config/workspace-migrations`; `grave doctor` reports it even if no
+workspace registry was published. Inspect that staging directory as root and
+retain its contents before clearing the receipt. Check the registry, Unix
+account, and workspace home together: later failures may have published some
+of them. Retry only with a fresh identity/slug/account/home, never by overlaying
+a retained workspace. See [migration](MULTIUSER.md#migration) for the boundary
+and same-filesystem requirement.

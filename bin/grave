@@ -1862,7 +1862,7 @@ cmd_doctor() { # grave doctor [--no-page]
     check "Claude notify hooks installed" claude_notify_hook_present
     check "Codex notify hook installed"   codex_notify_hook_present
   fi
-  if [[ -e "$GRAVE_ROOT/config/workspaces.json" ]]; then
+  if [[ -e "$GRAVE_ROOT/config/workspaces.json" || -e "$GRAVE_ROOT/config/workspace-migrations" || -L "$GRAVE_ROOT/config/workspace-migrations" ]]; then
     # Route through the root helper: the workspace doctor stats root-owned 0700
     # service-env files and grave-<slug>-owned homes, which the invoking owner
     # can't traverse — run unprivileged it raises PermissionError and fails on a
@@ -2260,22 +2260,8 @@ cmd_multiuser() {
       local provider_lines provider_arg=()
       provider_lines=$(grep -E '^(OPENAI_API_KEY|ANTHROPIC_API_KEY)=' "$GRAVE_ROOT/config/secrets/t3.env" 2>/dev/null || true)
       [[ -n "$provider_lines" ]] || provider_arg=(--no-llm)
-      GRAVE_ROOT="$GRAVE_ROOT" GRAVE_WORKSPACE_START=0 "$helper" add "$identity" "$login" "$slug" --role admin "${provider_arg[@]}"
-      local target="$GRAVE_ROOT/workspaces/$slug"
-      [[ -d "$GRAVE_ROOT/agents/t3code" ]] && cp -a --reflink=auto "$GRAVE_ROOT/agents/t3code/." "$target/state/t3/"
-      # The appliance checkout itself is commonly a top-level repos symlink.
-      # Never copy a link into a workspace: it escapes that workspace's home
-      # and makes adoption/doctor either follow or reject an unsafe checkout.
-      if [[ -d "$GRAVE_ROOT/repos" ]]; then
-        for repo in "$GRAVE_ROOT"/repos/*; do
-          [[ -d "$repo" && ! -L "$repo" ]] || continue
-          cp -a --reflink=auto "$repo" "$target/repos/"
-        done
-      fi
-      for d in .config/gh .codex .claude; do [[ -e "$owner_home/$d" ]] && { mkdir -p "$target/$(dirname "$d")"; cp -a "$owner_home/$d" "$target/$d"; }; done
-      [[ -f "$owner_home/.gitconfig" ]] && cp -a "$owner_home/.gitconfig" "$target/.gitconfig"
-      [[ -f "$GRAVE_ROOT/config/secrets/linear.env" ]] && cp -a "$GRAVE_ROOT/config/secrets/linear.env" "$target/config/secrets/linear.env"
-      [[ -f "$GRAVE_ROOT/config/gravedecay-settings.json" ]] && cp -a "$GRAVE_ROOT/config/gravedecay-settings.json" "$target/config/gravedecay-settings.json"
+      [[ -n "$provider_lines" && ! -e "$GRAVE_ROOT/config/secrets/provider.env" ]] && { printf '%s\n' "$provider_lines" >"$GRAVE_ROOT/config/secrets/provider.env"; chmod 600 "$GRAVE_ROOT/config/secrets/provider.env"; }
+      GRAVE_ROOT="$GRAVE_ROOT" GRAVE_WORKSPACE_START=0 "$helper" migrate-owner "$identity" "$login" "$slug" --owner "$owner" "${provider_arg[@]}"
       # These capabilities are consumed by root gateway/systemd only.  Create
       # them while this migration helper is root so the owner never races a
       # readable initial value before the re-raise installs the boundary.
@@ -2288,14 +2274,6 @@ cmd_multiuser() {
       # create a new directory there, so create this root-owned drop-in
       # directory while the migration helper still has root authority.
       install -d -m 755 -o root -g root /etc/systemd/system/gravedecay.service.d
-      [[ -n "$provider_lines" && ! -e "$GRAVE_ROOT/config/secrets/provider.env" ]] && { printf '%s\n' "$provider_lines" >"$GRAVE_ROOT/config/secrets/provider.env"; chmod 600 "$GRAVE_ROOT/config/secrets/provider.env"; }
-      chown -R "grave-$slug:grave-$slug" "$target"
-      chown root:root "$GRAVE_ROOT/config/workspace-services/$slug.env"; chmod 600 "$GRAVE_ROOT/config/workspace-services/$slug.env"
-      local repo name url
-      for repo in "$target"/repos/*; do
-        [[ -d "$repo/.git" && ! -L "$repo" ]] || continue; name=$(basename "$repo"); url=$(git -C "$repo" remote get-url origin 2>/dev/null || true)
-        [[ -n "$url" ]] && GRAVE_ROOT="$GRAVE_ROOT" "$helper" adopt "$slug" "$name" "$url"
-      done
       if grep -q '^MULTI_USER=' "$CONF"; then sed -i 's/^MULTI_USER=.*/MULTI_USER=1/' "$CONF"; else printf '\nMULTI_USER=1\nGATEWAY_PORT=4710\n' >>"$CONF"; fi
       if sudo -u "$owner" -H env -u SUDO_USER -u SUDO_UID -u SUDO_GID USER="$owner" "$REPO_DIR/raise.sh" --profile "$profile"; then
         systemctl disable --now t3code gravedecay-term >/dev/null 2>&1 || true

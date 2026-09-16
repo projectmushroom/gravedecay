@@ -254,7 +254,12 @@ rename. Workspace removal uses verified administrator-controlled parent director
 handles, records restartable intent, and renames the whole home into private
 root-owned archive parents without traversing its contents. Doctor checks archive
 privacy and unfinished removals. See [retention behavior](MULTIUSER.md#revocation-and-workspace-removal).
-Owner migration/restore and private workspace backup work remain tracked in #198.
+Owner migration copies state and reads Git metadata in a fresh process running
+as the appliance owner, behind a root-private staging parent. Only this
+unpublished copy receives the new workspace UID; publication uses no-replace
+rename and refuses existing registry identities, homes, or Unix accounts.
+Doctor rejects unfinished staging. See [migration](MULTIUSER.md#migration).
+Restore and private workspace backup work remain tracked in #198.
 See [SECRETS.md](SECRETS.md#multi-user-workspaces) for rollout and file formats.
 
 ## The web terminal

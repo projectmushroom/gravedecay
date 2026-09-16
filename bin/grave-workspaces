@@ -12,6 +12,7 @@ ROLES = {"admin", "developer"}
 PORT_BASE = {"t3": 4810, "term": 4910, "dash": 5010}
 PROVIDER_SECRET=ROOT/"config/secrets/provider.env"
 SERVICE_ROOT=ROOT/"config/workspace-services"
+MIGRATION_ROOT=ROOT/"config/workspace-migrations"
 PROVIDER_NAMES={"OPENAI_API_KEY","ANTHROPIC_API_KEY"}
 
 def die(message): raise SystemExit(f"grave users: {message}")
@@ -200,10 +201,18 @@ def rename_exclusive(source, name, destination, retained):
 class WorkspaceTree:
     directories=('repos','state','state/t3','config','config/secrets','runtime','logs','.claude','.codex')
     files=('.claude/settings.json','.codex/config.toml')
-    def __init__(self, home): self.home=Path(home)
+    def __init__(self, home, home_fd=None): self.home=Path(home); self.home_fd=home_fd
+    @contextmanager
+    def root_directory(self):
+        if self.home_fd is None:
+            with absolute_directory(self.home) as fd: yield fd
+        else:
+            fd=os.dup(self.home_fd)
+            try: yield fd
+            finally: os.close(fd)
     @contextmanager
     def directory(self, relative='', create=False):
-        with absolute_directory(self.home) as home:
+        with self.root_directory() as home:
             info=os.fstat(home)
             if info.st_uid != os.geteuid() or info.st_mode & 0o077:
                 die("unsafe workspace home ownership or mode")
@@ -375,6 +384,133 @@ def cmd_add(a):
        "ports":{kind:allocate(data,kind) for kind in PORT_BASE},"provider":{"llm":a.llm}}
     data["workspaces"].append(w); validate(data); provision(w); save(data); audit("workspace_added",w["slug"]); print(f"added {w['slug']}")
 
+@contextmanager
+def migration_directory(create=False):
+    with absolute_directory(MIGRATION_ROOT.parent,trusted=True) as parent:
+        with directory_at(parent,MIGRATION_ROOT.name,os.geteuid(),private=True,create=create) as (fd,_):
+            yield fd
+
+def check_migration_staging():
+    try:
+        with migration_directory() as fd:
+            if os.listdir(fd): die('owner migration staging is incomplete; inspect config/workspace-migrations before retrying')
+    except FileNotFoundError: pass
+
+def copy_owner_state(content, payload):
+    # A fresh exec runs this entire operation as the appliance owner. The
+    # inherited directory handle permits entry without opening the root-only
+    # staging parent to any unprivileged account.
+    if os.geteuid()==0: die('owner state must not be copied as root')
+    os.fchdir(content)
+    root=Path(payload['root']); owner=Path(payload['owner_home'])
+    def copy(source,destination):
+        try: info=source.lstat()
+        except FileNotFoundError: return
+        if stat.S_ISLNK(info.st_mode): die('owner migration source must not be a symlink')
+        Path(destination).parent.mkdir(parents=True,exist_ok=True)
+        if stat.S_ISDIR(info.st_mode): shutil.copytree(source,destination,symlinks=True)
+        elif stat.S_ISREG(info.st_mode): shutil.copy2(source,destination)
+        else: die('owner migration source must be a file or directory')
+    copy(root/'agents/t3code','state/t3')
+    repos=root/'repos'
+    if repos.is_symlink(): die('owner repos directory must not be a symlink')
+    if repos.exists():
+        for repo in sorted(repos.iterdir()):
+            if repo.is_dir() and not repo.is_symlink(): copy(repo,Path('repos')/repo.name)
+    for relative in ('.config/gh','.codex','.claude','.gitconfig'):
+        copy(owner/relative,relative)
+    copy(root/'config/secrets/linear.env','config/secrets/linear.env')
+    copy(root/'config/gravedecay-settings.json','config/gravedecay-settings.json')
+    # Private copies retain executable bits and repository symlinks. Never
+    # follow a copied link when adjusting modes or later assigning ownership.
+    for _,directories,files,fd in os.fwalk('.',follow_symlinks=False):
+        os.fchmod(fd,0o700)
+        for name in files:
+            info=os.stat(name,dir_fd=fd,follow_symlinks=False)
+            if stat.S_ISLNK(info.st_mode): continue
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1: die('unsafe staged file')
+            child=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=fd)
+            try: os.fchmod(child,0o700 if info.st_mode & 0o111 else 0o600)
+            finally: os.close(child)
+    projects=[]
+    if Path('repos').exists():
+        for repo in sorted(Path('repos').iterdir()):
+            if not PROJECT.fullmatch(repo.name) or not (repo/'.git').is_dir(): continue
+            result=subprocess.run(['git','-C',str(repo),'remote','get-url','origin'],capture_output=True,text=True)
+            url=result.stdout.strip()
+            if result.returncode==0 and valid_remote(url): projects.append({'name':repo.name,'url':url})
+    tree=WorkspaceTree('.',home_fd=content)
+    tree.provision(payload['helper'],[p['name'] for p in projects])
+    tree.check([p['name'] for p in projects])
+    return projects
+
+def assign_staged_owner(content, account):
+    # Only unpublished content behind a root-private parent is traversed by
+    # root. Hardlinks and special files are refused; symlink targets are never
+    # opened or chowned. There is no recursive repair of a live workspace.
+    for _,directories,files,fd in os.fwalk('.',dir_fd=content,follow_symlinks=False):
+        for name in directories+files:
+            info=os.stat(name,dir_fd=fd,follow_symlinks=False)
+            if stat.S_ISLNK(info.st_mode):
+                os.chown(name,account.pw_uid,account.pw_gid,dir_fd=fd,follow_symlinks=False)
+            elif stat.S_ISREG(info.st_mode):
+                child=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=fd)
+                try:
+                    info=os.fstat(child)
+                    if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1: die('unsafe staged file')
+                    os.fchown(child,account.pw_uid,account.pw_gid); os.fsync(child)
+                finally: os.close(child)
+            elif not stat.S_ISDIR(info.st_mode): die('unsafe staged file')
+        os.fchown(fd,account.pw_uid,account.pw_gid); os.fsync(fd)
+
+def cmd_migrate_owner(a):
+    if not SLUG.fullmatch(a.slug) or not a.identity.isdigit(): die('unsafe owner identity or slug')
+    data=load(); validate(data)
+    if any(w['id']==f'ts:{a.identity}' or w['slug']==a.slug for w in data['workspaces']):
+        die('owner migration requires a fresh identity and slug; existing workspaces are never overwritten')
+    owner=pwd.getpwnam(a.owner)
+    if owner.pw_uid==0 or owner.pw_uid!=ROOT.lstat().st_uid: die('migration owner must be the non-root appliance owner')
+    check_migration_staging()
+    with absolute_directory(HOME_ROOT,trusted=True,create=True) as homes:
+        try: os.stat(a.slug,dir_fd=homes,follow_symlinks=False)
+        except FileNotFoundError: pass
+        else: die('owner migration target already exists')
+        if os.environ.get('GRAVE_WORKSPACE_TEST')!='1':
+            try: pwd.getpwnam(unix_name(a.slug))
+            except KeyError: pass
+            else: die('owner migration Unix account already exists')
+        with migration_directory(create=True) as stages:
+            stage=a.slug+'-'+secrets.token_hex(16)
+            with directory_at(stages,stage,os.geteuid(),private=True,create=True) as (parent,_):
+                os.fsync(stages)
+                write_control(parent,'record.json',json.dumps({'slug':a.slug,'identity':a.identity,'owner':a.owner})+'\n')
+                with directory_at(parent,'content',create=True) as (content,_):
+                    os.fchown(content,owner.pw_uid,owner.pw_gid); os.fsync(parent)
+                    payload={'root':str(ROOT),'owner_home':owner.pw_dir,
+                             'helper':str(Path(os.environ.get('GRAVE_AGENT_NOTIFY',ROOT/'scripts/grave-agent-notify')))}
+                    options={} if os.environ.get('GRAVE_WORKSPACE_TEST')=='1' else {'user':owner.pw_uid,'group':owner.pw_gid,'extra_groups':[]}
+                    result=subprocess.run([sys.executable,str(Path(__file__).absolute()),'__migration_copy',str(content)],
+                                          pass_fds=(content,),input=json.dumps(payload),text=True,capture_output=True,
+                                          env={'PATH':'/usr/local/bin:/usr/bin:/bin','HOME':owner.pw_dir},**options)
+                    if result.returncode: die('owner state copy failed; originals unchanged, inspect private migration staging')
+                    projects=json.loads(result.stdout)
+                    w={'id':f'ts:{a.identity}','login':a.login,'slug':a.slug,'role':'admin','enabled':True,
+                       'projects':projects,'ports':{kind:allocate(data,kind) for kind in PORT_BASE},'provider':{'llm':a.llm}}
+                    data['workspaces'].append(w); validate(data)
+                    run('useradd','--system','--no-create-home','--home-dir',str(HOME_ROOT/a.slug),'--shell','/bin/bash',unix_name(a.slug))
+                    account=workspace_account(w)
+                    assign_staged_owner(content,account)
+                    rename_exclusive(parent,'content',homes,a.slug)
+                    os.fsync(parent); os.fsync(homes)
+                # Save before provisioning so a failed service setup leaves an
+                # inspectable registry record; the staging receipt stays pending.
+                save(data)
+                os.environ['GRAVE_WORKSPACE_START']='0'
+                provision(w)
+                os.unlink('record.json',dir_fd=parent); os.fsync(parent)
+            os.rmdir(stage,dir_fd=stages); os.fsync(stages)
+    audit('owner_migrated',a.slug); print(f'migrated {a.slug}')
+
 def cmd_list(a):
     data=load(); validate(data)
     if a.json: print(json.dumps(data["workspaces"], indent=2)); return
@@ -402,6 +538,7 @@ def cmd_doctor(a):
     pending=[w['slug'] for w in data['workspaces'] if w.get('removal')]
     if pending: die('workspace removal pending; retry confirmed remove for: '+', '.join(pending))
     check_removal_archives()
+    check_migration_staging()
     checkout_paths=set()
     if os.environ.get("GRAVE_WORKSPACE_TEST") != "1" and (not SERVICE_ROOT.is_dir() or SERVICE_ROOT.stat().st_uid!=0 or SERVICE_ROOT.stat().st_mode&0o077): die("workspace service directory ownership drift")
     registered={w["slug"] for w in data["workspaces"]}
@@ -722,6 +859,7 @@ def main():
     q=s.add_parser("list"); q.add_argument("--json",action="store_true"); q.set_defaults(fn=cmd_list)
     q=s.add_parser("status"); q.set_defaults(fn=cmd_status)
     q=s.add_parser("add"); q.add_argument("identity"); q.add_argument("login"); q.add_argument("slug"); q.add_argument("--role",choices=sorted(ROLES),default="developer"); q.add_argument("--no-llm",dest="llm",action="store_false",default=True); q.set_defaults(fn=cmd_add)
+    q=s.add_parser("migrate-owner"); q.add_argument("identity"); q.add_argument("login"); q.add_argument("slug"); q.add_argument("--owner",required=True); q.add_argument("--no-llm",dest="llm",action="store_false",default=True); q.set_defaults(fn=cmd_migrate_owner)
     q=s.add_parser("inspect"); q.add_argument("workspace"); q.set_defaults(fn=cmd_inspect)
     q=s.add_parser("disable"); q.add_argument("workspace"); q.set_defaults(fn=cmd_disable)
     q=s.add_parser("doctor"); q.set_defaults(fn=cmd_doctor)
@@ -745,7 +883,9 @@ def main():
     with lock.open("a") as f: fcntl.flock(f,fcntl.LOCK_EX); a.fn(a)
 if __name__ == "__main__":
     try:
-        if len(sys.argv)>1 and sys.argv[1]=='__tree':
+        if len(sys.argv)>1 and sys.argv[1]=='__migration_copy':
+            print(json.dumps(copy_owner_state(int(sys.argv[2]),json.load(sys.stdin))))
+        elif len(sys.argv)>1 and sys.argv[1]=='__tree':
             if os.geteuid()==0: die("workspace content operations must not run as root")
             _,_,action,home=sys.argv
             tree=WorkspaceTree(home); payload=json.load(sys.stdin)
