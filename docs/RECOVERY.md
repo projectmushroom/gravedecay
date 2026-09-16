@@ -27,8 +27,9 @@ workspace `config/secrets`, GitHub CLI credentials in both `config/gh` and
 `.config/gh`, Codex auth, and Claude credential files. Project-local credentials
 and unrecognized copies remain ordinary project files; this is not a content
 scanner. Gateway/admin capabilities and root workspace service environments are
-never archived, even with `--include-secrets`; provisioning regenerates them. Use `grave backup --include-secrets` only for
-an encrypted/off-box destination you control. `manifest.json` records the
+never archived, even with `--include-secrets`; provisioning regenerates them.
+Use `grave backup --include-secrets` only for an encrypted/off-box destination
+you control. `manifest.json` records the
 choice. Without secrets, restored users reauthenticate; grants, MCP config,
 state, and dirty work remain recoverable.
 
