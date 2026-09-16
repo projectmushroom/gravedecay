@@ -115,7 +115,9 @@ provider keys. Reauthenticate omitted credentials and configure any required
 shared provider before requiring doctor to pass.
 
 Failures retain the input snapshots, remaining staged homes, and a private
-receipt. Publication of several homes is not one atomic transaction: an
+receipt. Normal backups exclude restore and migration staging, even with
+`--include-secrets`; retain those failed-operation copies separately during
+administrator recovery. Publication of several homes is not one atomic transaction: an
 interruption may leave some new accounts/homes published before the registry is
 saved. Doctor reports pending restore even without a registry; add, migration,
 reapply and another restore refuse to continue. Inspect the receipt, registry,

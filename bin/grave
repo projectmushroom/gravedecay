@@ -2091,7 +2091,8 @@ cmd_backup() (
   local excludes=(--exclude='config/secrets' --exclude='workspaces/*/config/secrets' --exclude='workspaces/*/.config/gh' --exclude='workspaces/*/.codex/auth.json' --exclude='workspaces/*/.claude/.credentials.json' --exclude='workspaces/*/.claude.json')
   (( include_secrets )) && excludes=()
   backup_tar "platform config" "$dest/configs/grave-platform.tar.gz" \
-    "${excludes[@]}" -C "$GRAVE_ROOT" config docker docs scripts
+    "${excludes[@]}" --exclude='config/workspace-restores' --exclude='config/workspace-migrations' \
+    -C "$GRAVE_ROOT" config docker docs scripts
   if [[ -d "$GRAVE_ROOT/workspaces" ]]; then
     backup_tar "workspace homes, state, and dirty worktrees" "$dest/configs/workspaces.tar.gz" \
       "${excludes[@]}" -C "$GRAVE_ROOT" workspaces

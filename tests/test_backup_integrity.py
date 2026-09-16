@@ -7,6 +7,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import tarfile
 import unittest
 
 
@@ -82,6 +83,18 @@ class BackupRecoveryTests(unittest.TestCase):
         self.grave("restore", backup.name, "repo", self.repo.name)
         self.assertEqual((self.root / "repos/project with spaces-restored/example").read_text(), "recover me\n")
         self.assertEqual((self.backups / ".last-verified").stat().st_mtime_ns, marker)
+
+    def test_private_restore_and_migration_staging_are_not_rearchived(self):
+        for name in ('workspace-restores','workspace-migrations'):
+            stage=self.root/'config'/name/'pending'; stage.mkdir(parents=True)
+            (stage/'credentials').write_text('private retained state')
+        (self.root/'config/ordinary').write_text('keep config')
+        backup=self.backup()
+        with tarfile.open(backup/'configs/grave-platform.tar.gz','r:gz') as archive:
+            names=archive.getnames()
+        self.assertIn('config/ordinary',names)
+        self.assertFalse(any('workspace-restores' in name or 'workspace-migrations' in name for name in names))
+        self.assertTrue((self.root/'config/workspace-restores/pending/credentials').exists())
 
     def test_same_size_corruption_blocks_restore_before_clone(self):
         backup = self.backup()
