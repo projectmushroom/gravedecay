@@ -5,11 +5,15 @@
 `grave backup` → `$GRAVE_ROOT/backups/<timestamp>/`:
 
 - `repos/*.bundle` — full git bundles (all refs) of every repo
-- `configs/grave-platform.tar.gz` — `$GRAVE_ROOT/{config,docker,docs,scripts}`
+- `configs/grave-platform.tar.gz` — `$GRAVE_ROOT/{config,docker,docs,scripts}`,
+  excluding regenerated service capabilities, private recovery staging, and the
+  workspace registry (captured with the workspace data below)
 - `configs/claude|codex|gemini.tar.gz` — agent CLI configs from `$HOME`
 - `configs/t3code-state.tar.gz` — T3 server state (projects, pairings)
 - `configs/workspaces.tar.gz` — workspace homes, T3 state, private checkouts
-  including dirty/untracked work, and integration configuration
+  including dirty/untracked work, integration configuration, and the registry
+  snapshot as its first member, `config/workspaces.json`. With `--include-secrets`,
+  this archive also carries `config/secrets/provider.env` when configured
 - `configs/agent-worktrees.tar.gz` — managed agent checkout files (including
   staged, dirty, untracked, and ignored files) and session `meta.json` records;
   `recovery/<session>/` contains a verified commit bundle, HEAD/branch record,
@@ -18,8 +22,12 @@
   project files and may include project-local credentials.
 - `volumes/*.tar.gz` — every named docker volume (postgres data, etc.)
 
-Secrets are excluded by default, including provider keys, Linear keys, GitHub
-CLI credentials, and Codex auth. Use `grave backup --include-secrets` only for
+Known credential locations are excluded by default, including provider keys,
+workspace `config/secrets`, GitHub CLI credentials in both `config/gh` and
+`.config/gh`, Codex auth, and Claude credential files. Project-local credentials
+and unrecognized copies remain ordinary project files; this is not a content
+scanner. Gateway/admin capabilities and root workspace service environments are
+never archived, even with `--include-secrets`; provisioning regenerates them. Use `grave backup --include-secrets` only for
 an encrypted/off-box destination you control. `manifest.json` records the
 choice. Without secrets, restored users reauthenticate; grants, MCP config,
 state, and dirty work remain recoverable.
@@ -53,6 +61,27 @@ creates a backup (including during multi-user migration), completed artifacts,
 freshness markers, and the run lock belong to the appliance owner, determined
 by `$GRAVE_ROOT` ownership. Doctor and the next owner-run backup retain access;
 workspace collaborators do not gain access.
+
+The nightly service continues to run as the appliance owner. For workspace data,
+it opens the private destination and invokes the existing scoped root helper
+`grave __users backup-export`. That helper accepts no destination pathname and
+streams one archive on stdout. It holds the registry lock and launches a fresh
+process for each home under that workspace's UID, with no supplementary groups
+or inherited administrator environment. Traversal uses directory handles and
+never follows symlinks. Ordinary links are preserved as links, regular files
+(including hardlinks) are copied independently, and live Unix sockets are omitted.
+Other special files, unreadable files, missing/unregistered homes, detected file
+changes, or an unfinished lifecycle operation fail the backup. A failed export
+cannot publish a backup or refresh freshness markers. Pause writers for a
+consistent checkpoint; this is not a filesystem snapshot.
+
+The manifest records the covered workspace IDs/slugs and a digest of the exact
+registry snapshot. Doctor compares that digest with the current registry, in
+addition to checking artifact inventory and backup age. A missing workspace
+archive, an older backup without coverage, or a registry change requires a new
+`grave backup`. Disabled workspaces are included too. Existing private home
+permissions and group memberships are unchanged; collaborators cannot access
+the owner's backup directory.
 
 After copying a backup, or before relying on it for recovery, run:
 
@@ -93,9 +122,11 @@ Legacy version 1 backups remain restorable with a warning; explicit
 `grave backup verify` fails for them because they have no checksum inventory.
 Listing backup contents does not verify or restore them.
 
-Workspace restore uses the existing `configs/grave-platform.tar.gz` registry and
-`configs/workspaces.tar.gz` files, but never extracts over live homes or installs
-archived scripts/service credentials. The root helper snapshots these inputs
+Workspace restore uses the registry embedded in `configs/workspaces.tar.gz`.
+For older backups it falls back to the registry in `configs/grave-platform.tar.gz`.
+It never extracts over live homes or installs archived scripts/service
+credentials. An explicitly archived shared-provider file remains a manual
+administrator recovery artifact; workspace restore does not install or grant it. The root helper snapshots these inputs
 under `config/workspace-restores/<random>/`, then a fresh process running as the
 appliance owner verifies the captured checksums, validates all archive paths,
 and extracts into private staging. Version 1 archives get the same path checks

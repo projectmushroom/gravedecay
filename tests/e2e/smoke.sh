@@ -194,11 +194,13 @@ if docker exec "$CTR" systemctl is-active --quiet gravedecay-term; then
   echo "FATAL: multi-user re-raise left legacy terminal active"
   exit 1
 fi
+docker exec "$CTR" python3 /repo/tests/e2e/workspace-backup.py
 as_mole grave doctor
 
 docker exec "$CTR" python3 /repo/tests/e2e/workspace-credentials.py
 docker exec "$CTR" python3 /repo/tests/e2e/workspace-provisioning.py
 docker exec "$CTR" python3 /repo/tests/e2e/workspace-retention.py
+as_mole grave backup
 
 echo "=== phase 7: single-user restoration removes multi-user boundary ==="
 docker exec "$CTR" sed -i 's/^MULTI_USER=.*/MULTI_USER=0/' /etc/gravedecay/grave.conf
