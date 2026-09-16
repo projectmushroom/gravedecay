@@ -93,7 +93,39 @@ Legacy version 1 backups remain restorable with a warning; explicit
 `grave backup verify` fails for them because they have no checksum inventory.
 Listing backup contents does not verify or restore them.
 
-Publication is atomic; capturing live source files is not. Stop database writers
+Workspace restore uses the existing `configs/grave-platform.tar.gz` registry and
+`configs/workspaces.tar.gz` files, but never extracts over live homes or installs
+archived scripts/service credentials. The root helper snapshots these inputs
+under `config/workspace-restores/<random>/`, then a fresh process running as the
+appliance owner verifies the captured checksums, validates all archive paths,
+and extracts into private staging. Version 1 archives get the same path checks
+with an integrity warning. Missing registries/homes, duplicate paths, traversal,
+special files, and children beneath a link are rejected. Repository symlinks are
+preserved without following them; hardlinks within a workspace become independent
+regular copies. Archived UIDs, GIDs, privileged modes and metadata are ignored;
+new files/directories are private, with ordinary executable bits retained.
+
+All restored IDs, slugs and service ports must be disjoint from the live registry.
+Their homes, Unix accounts and service configuration must not already exist.
+The helper creates new Unix identities, publishes each home by no-replace rename,
+merges the records without replacing existing ones, and generates fresh service
+capabilities. Staging and homes must share a filesystem. Services stay stopped
+until reapply; restore does not enable multi-user routing or install shared
+provider keys. Reauthenticate omitted credentials and configure any required
+shared provider before requiring doctor to pass.
+
+Failures retain the input snapshots, remaining staged homes, and a private
+receipt. Normal backups exclude restore and migration staging, even with
+`--include-secrets`; retain those failed-operation copies separately during
+administrator recovery. Publication of several homes is not one atomic transaction: an
+interruption may leave some new accounts/homes published before the registry is
+saved. Doctor reports pending restore even without a registry; add, migration,
+reapply and another restore refuse to continue. Inspect the receipt, registry,
+accounts and homes together as administrator, and retain the recovery data before
+clearing its staging entry. Retrying never overlays a published home. Existing
+workspace data and records are not rolled back or deleted automatically.
+
+Backup publication is atomic; capturing live source files is not. Stop database writers
 and pause agents when you need a consistent checkpoint. Checksums prove the
 captured bytes survived storage and copying, not application-level consistency.
 
@@ -117,11 +149,17 @@ of a running agent. Pause writing agents when a consistent checkpoint matters.
 
 1. Fresh install, clone gravedecay, `./raise.sh --profile <profile>`.
 2. Copy the latest backup dir onto the new box.
-3. Untar `configs/*` into place (`$GRAVE_ROOT`, `$HOME`), restore volumes,
-   clone repo bundles.
-4. Run `raise.sh`, then `grave restore <ts> workspaces` when applicable.
-5. Run `raise.sh` again to reapply users/units, reauthenticate omitted secrets,
-   and require `grave doctor` to pass before changing Serve routing.
+3. Verify the backup, restore volumes and clone repo bundles. Inspect other
+   configuration archives in scratch storage before selectively restoring them;
+   do not unpack a saved workspace registry, service credentials, migration/restore
+   receipts, or workspace homes over the fresh installation.
+4. Run `grave restore <ts> workspaces` when applicable, before creating replacement
+   users or running owner migration. The restore merges only nonconflicting
+   identities/ports into the live registry and creates fresh homes/accounts.
+5. Reauthenticate omitted secrets and configure shared provider access if needed.
+   For a recovered multi-user appliance, set `MULTI_USER=1` in
+   `/etc/gravedecay/grave.conf` and rerun `raise.sh` to install the boundary and
+   start the restored services. Require `grave doctor` to pass before use.
 6. Re-pair devices with T3; `tailscale up --ssh` with the same account.
 
 ## Btrfs snapshots (if configured)

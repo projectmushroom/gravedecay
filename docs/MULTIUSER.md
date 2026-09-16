@@ -60,8 +60,8 @@ directory/file with the correct UID and private directory permissions before
 reapplying. Reapply deliberately does not repair ownership drift automatically.
 `raise.sh` installs the updated CLI; no new daemon or port is required.
 
-Restore paths and private backup coverage remain part of the broader #198
-audit. Owner migration and retention behavior are described below.
+Private backup coverage and owner-state privacy remain part of the broader
+#198 audit. Owner migration and retention behavior are described below.
 
 ## Revocation and workspace removal
 
@@ -222,6 +222,12 @@ removal requires prior disablement and archives rather than deletes its home.
 
 `grave backup` includes registry-backed workspace state and dirty work but
 excludes credentials by default. `--include-secrets` is an explicit sensitive
-choice. `grave restore <timestamp> workspaces`, followed by re-raise and doctor,
-reproduces grants, service config, checkouts and state; omitted credentials
-require reauthentication.
+choice. `grave restore <timestamp> workspaces` validates and stages archived
+registry records and workspace files, then publishes fresh homes without
+replacing existing IDs, slugs, ports, accounts or service configuration. Existing
+unrelated workspaces remain intact. Service capabilities are regenerated and
+restored services remain stopped until reapply. Omitted credentials require
+reauthentication. Doctor rejects interrupted restore receipts, and reapply is
+blocked until administrator inspection resolves them. See
+[workspace recovery](RECOVERY.md#restore-pieces) for archive restrictions,
+partial publication handling and the replacement-box sequence.

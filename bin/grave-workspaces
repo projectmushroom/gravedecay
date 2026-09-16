@@ -13,6 +13,7 @@ PORT_BASE = {"t3": 4810, "term": 4910, "dash": 5010}
 PROVIDER_SECRET=ROOT/"config/secrets/provider.env"
 SERVICE_ROOT=ROOT/"config/workspace-services"
 MIGRATION_ROOT=ROOT/"config/workspace-migrations"
+RESTORE_ROOT=ROOT/"config/workspace-restores"
 PROVIDER_NAMES={"OPENAI_API_KEY","ANTHROPIC_API_KEY"}
 
 def die(message): raise SystemExit(f"grave users: {message}")
@@ -372,6 +373,7 @@ def provision(w):
         if w["enabled"] and os.environ.get("GRAVE_WORKSPACE_START","1")=="1": run("systemctl","enable","--now",f"gravedecay-t3@{w['slug']}.service",f"gravedecay-term@{w['slug']}.service",f"gravedecay-dashboard@{w['slug']}.service")
 
 def cmd_add(a):
+    check_restore_staging()
     if not SLUG.fullmatch(a.slug): die("slug must match ^[a-z][a-z0-9-]{2,30}$")
     if not a.identity.isdigit(): die("identity must be the numeric stable Tailscale user ID")
     data=load(); identity=f"ts:{a.identity}"
@@ -464,6 +466,7 @@ def assign_staged_owner(content, account):
         os.fchown(fd,account.pw_uid,account.pw_gid); os.fsync(fd)
 
 def cmd_migrate_owner(a):
+    check_restore_staging()
     if not SLUG.fullmatch(a.slug) or not a.identity.isdigit(): die('unsafe owner identity or slug')
     data=load(); validate(data)
     if any(w['id']==f'ts:{a.identity}' or w['slug']==a.slug for w in data['workspaces']):
@@ -511,6 +514,212 @@ def cmd_migrate_owner(a):
             os.rmdir(stage,dir_fd=stages); os.fsync(stages)
     audit('owner_migrated',a.slug); print(f'migrated {a.slug}')
 
+# Restore never feeds an archive to root tar or overlays a live workspace.
+@contextmanager
+def restore_directory(create=False):
+    with absolute_directory(RESTORE_ROOT.parent,trusted=True) as parent:
+        with directory_at(parent,RESTORE_ROOT.name,os.geteuid(),private=True,create=create) as (fd,_):
+            yield fd
+
+def check_restore_staging():
+    try:
+        with restore_directory() as fd:
+            if os.listdir(fd): die('workspace restore is incomplete; inspect config/workspace-restores before continuing')
+    except FileNotFoundError: pass
+
+def restore_registry(data):
+    if not isinstance(data,dict) or type(data.get('version')) is not int or data['version']!=1 or not isinstance(data.get('workspaces'),list) or not data['workspaces']:
+        die('invalid or empty restore registry')
+    for w in data['workspaces']:
+        if (not isinstance(w,dict) or set(w)!={'id','login','slug','role','enabled','projects','ports','provider'}
+                or not isinstance(w['id'],str) or not re.fullmatch(r'ts:[0-9]+',w['id'])
+                or not isinstance(w['slug'],str) or not isinstance(w['role'],str)
+                or not isinstance(w['login'],str) or not w['login'] or any(ord(c)<32 for c in w['login'])
+                or not isinstance(w['ports'],dict) or not isinstance(w['provider'],dict)
+                or set(w['provider'])!={'llm'} or type(w['provider']['llm']) is not bool):
+            die('invalid restore workspace record (pending removals cannot be restored)')
+        if not isinstance(w['projects'],list) or any(
+                not isinstance(p,dict) or not isinstance(p.get('name'),str) or not isinstance(p.get('url'),str)
+                for p in w['projects']):
+            die('invalid restored project grants')
+    validate(data)
+    return data
+
+def archive_path(name):
+    # GNU tar directory entries have a trailing slash; ./ prefixes are harmless.
+    while name.startswith('./'): name=name[2:]
+    name=name.rstrip('/')
+    parts=name.split('/')
+    if not name or any(p in ('','.','..') for p in parts) or '\x00' in name:
+        die('unsafe workspace archive path')
+    return parts
+
+def extract_workspace_backup(content, inputs, payload):
+    import hashlib, tarfile
+    if os.geteuid()==0: die('workspace archives must not be extracted as root')
+    # Inputs are root-owned snapshots behind the private stage. Reverify these
+    # exact bytes rather than trusting a preflight of mutable source paths.
+    with os.fdopen(os.dup(inputs[0]),'rb') as stream:
+        manifest=json.loads(stream.read(16*1024*1024+1))
+    if not isinstance(manifest,dict) or type(manifest.get('version')) is not int or manifest['version'] not in (1,2):
+        die('invalid restore manifest')
+    if manifest['version']==2:
+        for fd,name in zip(inputs[1:],('configs/grave-platform.tar.gz','configs/workspaces.tar.gz')):
+            expected=manifest.get('artifacts',{}).get(name)
+            with os.fdopen(os.dup(fd),'rb') as stream:
+                checksum=hashlib.sha256()
+                for block in iter(lambda: stream.read(1024*1024),b''): checksum.update(block)
+                digest=checksum.hexdigest()
+            os.lseek(fd,0,os.SEEK_SET)
+            if not isinstance(expected,dict) or expected.get('sha256')!=digest or expected.get('size')!=os.fstat(fd).st_size:
+                die('workspace restore checksum mismatch')
+    else: print('WARNING: legacy backup has no checksums; archive paths will still be validated',file=sys.stderr)
+    with os.fdopen(os.dup(inputs[1]),'rb') as stream, tarfile.open(fileobj=stream,mode='r:gz') as archive:
+        records=[m for m in archive if archive_path(m.name)==['config','workspaces.json']]
+        if len(records)!=1 or not records[0].isreg() or not 0<records[0].size<=16*1024*1024:
+            die('backup requires exactly one regular workspace registry')
+        data=restore_registry(json.load(archive.extractfile(records[0])))
+    slugs={w['slug'] for w in data['workspaces']}
+    with os.fdopen(os.dup(inputs[2]),'rb') as stream, tarfile.open(fileobj=stream,mode='r:gz') as archive:
+        members={}
+        for member in archive:
+            parts=archive_path(member.name)
+            if parts[0]!='workspaces' or (len(parts)>1 and parts[1] not in slugs):
+                die('archive contains an unregistered workspace or outside path')
+            if len(parts)<=2 and not member.isdir(): die('workspace archive roots must be directories')
+            if not (member.isdir() or member.isreg() or member.issym() or member.islnk()):
+                die('special files are not allowed in workspace archives')
+            name='/'.join(parts)
+            if name in members: die('duplicate workspace archive path')
+            members[name]=member
+        for slug in slugs:
+            if 'workspaces/'+slug not in members: die('backup is missing a registered workspace home')
+        for name,member in members.items():
+            parts=name.split('/')
+            for end in range(1,len(parts)):
+                parent=members.get('/'.join(parts[:end]))
+                if parent is not None and not parent.isdir(): die('archive entry descends through a file or link')
+        def regular_target(name):
+            visited=set(); current=name
+            while True:
+                if current in visited or current not in members: die('invalid archive hardlink')
+                visited.add(current); member=members[current]
+                if member.isreg(): return member
+                if not member.islnk(): die('archive hardlink must resolve to a regular file')
+                parts=archive_path(member.linkname)
+                if len(parts)<3 or parts[:2]!=name.split('/')[:2]: die('archive hardlink crosses workspace boundary')
+                current='/'.join(parts)
+        for name,member in members.items():
+            if member.islnk(): regular_target(name)
+        tree=WorkspaceTree('.',home_fd=content)
+        # Directories/files first, links last. All traversal uses verified
+        # directory handles. Archive owners, modes and privileged metadata are
+        # ignored; only ordinary executable bits survive.
+        for name,member in members.items():
+            relative='/'.join(name.split('/')[1:])
+            if not relative: continue
+            if member.isdir():
+                with tree.directory(relative,create=True): pass
+            elif member.isreg() or member.islnk():
+                target=regular_target(name)
+                path=Path(relative)
+                with tree.directory(str(path.parent),create=True) as parent:
+                    fd=os.open(path.name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o700 if target.mode&0o111 else 0o600,dir_fd=parent)
+                    with os.fdopen(fd,'wb') as output, archive.extractfile(target) as source:
+                        shutil.copyfileobj(source,output); output.flush(); os.fsync(output.fileno())
+            elif member.issym():
+                # Preserve repository links as data, never use their targets.
+                if '\x00' in member.linkname: die('invalid archive symlink')
+        for name,member in members.items():
+            if member.issym():
+                path=Path('/'.join(name.split('/')[1:]))
+                with tree.directory(str(path.parent),create=True) as parent:
+                    os.symlink(member.linkname,path.name,dir_fd=parent)
+        for w in data['workspaces']:
+            with tree.directory(w['slug']) as home:
+                workspace=WorkspaceTree('.',home_fd=home)
+                workspace.provision(payload['helper'],[p['name'] for p in w['projects']])
+                workspace.check([p['name'] for p in w['projects']])
+    return data
+
+@contextmanager
+def restore_input_snapshot(backup, parent):
+    from contextlib import ExitStack
+    with ExitStack() as stack:
+        source=stack.enter_context(absolute_directory(backup,trusted=True))
+        configs,_=stack.enter_context(directory_at(source,'configs'))
+        outputs=[]
+        for directory,name in ((source,'manifest.json'),(configs,'grave-platform.tar.gz'),(configs,'workspaces.tar.gz')):
+            fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=directory)
+            with os.fdopen(fd,'rb') as stream:
+                info=os.fstat(stream.fileno())
+                if (not stat.S_ISREG(info.st_mode) or info.st_nlink!=1 or info.st_mode&0o022
+                        or info.st_uid not in (0,ROOT.lstat().st_uid)):
+                    die('unsafe restore input ownership, type or permissions')
+                if name=='manifest.json' and info.st_size>16*1024*1024: die('backup manifest too large')
+                out=os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=parent)
+                with os.fdopen(out,'wb') as output:
+                    shutil.copyfileobj(stream,output); output.flush(); os.fsync(output.fileno())
+            reader=os.open(name,os.O_RDONLY|os.O_NOFOLLOW,dir_fd=parent)
+            stack.callback(os.close,reader); outputs.append(reader)
+        os.fsync(parent)
+        yield outputs
+
+def cmd_restore(a):
+    data=load(); validate(data); check_migration_staging(); check_restore_staging()
+    if any(w.get('removal') for w in data['workspaces']): die('finish pending workspace removals before restoring')
+    owner=pwd.getpwuid(ROOT.lstat().st_uid)
+    if owner.pw_uid==0: die('restore requires a non-root appliance owner')
+    with restore_directory(create=True) as stages:
+        stage='restore-'+secrets.token_hex(16)
+        with directory_at(stages,stage,os.geteuid(),private=True,create=True) as (parent,_):
+            os.fsync(stages)
+            write_control(parent,'record.json',json.dumps({'backup':str(a.backup),'state':'validating'})+'\n')
+            with restore_input_snapshot(a.backup,parent) as inputs, directory_at(parent,'content',create=True) as (content,_):
+                os.fchown(content,owner.pw_uid,owner.pw_gid); os.fsync(parent)
+                payload={'helper':str(Path(os.environ.get('GRAVE_AGENT_NOTIFY',ROOT/'scripts/grave-agent-notify')))}
+                options={} if os.environ.get('GRAVE_WORKSPACE_TEST')=='1' else {'user':owner.pw_uid,'group':owner.pw_gid,'extra_groups':[]}
+                result=subprocess.run([sys.executable,str(Path(__file__).absolute()),'__restore_extract',str(content),*map(str,inputs)],
+                                      pass_fds=(content,*inputs),input=json.dumps(payload),text=True,capture_output=True,
+                                      env={'PATH':'/usr/local/bin:/usr/bin:/bin','HOME':owner.pw_dir},**options)
+                if result.returncode: die('workspace archive validation/extraction failed; inspect private restore staging (no homes published)')
+                if result.stderr.startswith('WARNING: legacy backup has no checksums;'):
+                    print('WARNING: legacy backup has no checksums; archive paths were validated',file=sys.stderr)
+                recovered=restore_registry(json.loads(result.stdout))
+                combined={'version':1,'workspaces':data['workspaces']+recovered['workspaces']}
+                validate(combined)  # Reject identity/slug/port conflicts before creating any accounts.
+                with absolute_directory(HOME_ROOT,trusted=True,create=True) as homes:
+                    for w in recovered['workspaces']:
+                        try: os.stat(w['slug'],dir_fd=homes,follow_symlinks=False)
+                        except FileNotFoundError: pass
+                        else: die('restore target already exists; existing homes are never overwritten')
+                        if os.environ.get('GRAVE_WORKSPACE_TEST')!='1':
+                            try: pwd.getpwnam(unix_name(w['slug']))
+                            except KeyError: pass
+                            else: die('restore Unix account already exists')
+                    with service_directory() as services:
+                        for w in recovered['workspaces']:
+                            for name in (service_env(w).name,provider_link(w).name):
+                                try: os.stat(name,dir_fd=services,follow_symlinks=False)
+                                except FileNotFoundError: pass
+                                else: die('restore service configuration already exists')
+                    write_control(parent,'record.json',json.dumps({'backup':str(a.backup),'state':'publishing','workspaces':[w['slug'] for w in recovered['workspaces']]})+'\n')
+                    for w in recovered['workspaces']:
+                        run('useradd','--system','--no-create-home','--home-dir',str(HOME_ROOT/w['slug']),'--shell','/bin/bash',unix_name(w['slug']))
+                        with directory_at(content,w['slug'],owner.pw_uid,private=True) as (home,_):
+                            assign_staged_owner(home,workspace_account(w))
+                        rename_exclusive(content,w['slug'],homes,w['slug']); os.fsync(content); os.fsync(homes)
+                    save(combined)
+                    os.environ['GRAVE_WORKSPACE_START']='0'
+                    for w in recovered['workspaces']: provision(w)
+            # Successful publication leaves only known private input snapshots.
+            for name in ('manifest.json','grave-platform.tar.gz','workspaces.tar.gz','record.json'):
+                os.unlink(name,dir_fd=parent)
+            os.rmdir('content',dir_fd=parent); os.fsync(parent)
+        os.rmdir(stage,dir_fd=stages); os.fsync(stages)
+    audit('workspaces_restored'); print(f"restored {len(recovered['workspaces'])} workspace(s); services remain stopped until reapply")
+
+
 def cmd_list(a):
     data=load(); validate(data)
     if a.json: print(json.dumps(data["workspaces"], indent=2)); return
@@ -538,6 +747,7 @@ def cmd_doctor(a):
     pending=[w['slug'] for w in data['workspaces'] if w.get('removal')]
     if pending: die('workspace removal pending; retry confirmed remove for: '+', '.join(pending))
     check_removal_archives()
+    check_restore_staging()
     check_migration_staging()
     checkout_paths=set()
     if os.environ.get("GRAVE_WORKSPACE_TEST") != "1" and (not SERVICE_ROOT.is_dir() or SERVICE_ROOT.stat().st_uid!=0 or SERVICE_ROOT.stat().st_mode&0o077): die("workspace service directory ownership drift")
@@ -842,6 +1052,7 @@ def cmd_provider_policy(a):
     if os.environ.get("GRAVE_WORKSPACE_TEST") != "1": run("systemctl","restart",f"gravedecay-t3@{w['slug']}")
     audit("provider_policy_changed",w["slug"],result=a.policy); print(f"shared provider {'granted to' if enabled else 'revoked from'} {w['slug']}")
 def cmd_reapply(a):
+    check_restore_staging()
     if a.t3_bin: os.environ["GRAVE_T3_BIN"]=a.t3_bin
     if a.ttyd_bin: os.environ["GRAVE_TTYD_BIN"]=a.ttyd_bin
     if a.tool_path is not None: os.environ["GRAVE_TOOL_PATH"]=a.tool_path
@@ -860,6 +1071,7 @@ def main():
     q=s.add_parser("status"); q.set_defaults(fn=cmd_status)
     q=s.add_parser("add"); q.add_argument("identity"); q.add_argument("login"); q.add_argument("slug"); q.add_argument("--role",choices=sorted(ROLES),default="developer"); q.add_argument("--no-llm",dest="llm",action="store_false",default=True); q.set_defaults(fn=cmd_add)
     q=s.add_parser("migrate-owner"); q.add_argument("identity"); q.add_argument("login"); q.add_argument("slug"); q.add_argument("--owner",required=True); q.add_argument("--no-llm",dest="llm",action="store_false",default=True); q.set_defaults(fn=cmd_migrate_owner)
+    q=s.add_parser("restore"); q.add_argument("backup",type=Path); q.set_defaults(fn=cmd_restore)
     q=s.add_parser("inspect"); q.add_argument("workspace"); q.set_defaults(fn=cmd_inspect)
     q=s.add_parser("disable"); q.add_argument("workspace"); q.set_defaults(fn=cmd_disable)
     q=s.add_parser("doctor"); q.set_defaults(fn=cmd_doctor)
@@ -883,7 +1095,9 @@ def main():
     with lock.open("a") as f: fcntl.flock(f,fcntl.LOCK_EX); a.fn(a)
 if __name__ == "__main__":
     try:
-        if len(sys.argv)>1 and sys.argv[1]=='__migration_copy':
+        if len(sys.argv)>1 and sys.argv[1]=='__restore_extract':
+            print(json.dumps(extract_workspace_backup(int(sys.argv[2]),list(map(int,sys.argv[3:])),json.load(sys.stdin))))
+        elif len(sys.argv)>1 and sys.argv[1]=='__migration_copy':
             print(json.dumps(copy_owner_state(int(sys.argv[2]),json.load(sys.stdin))))
         elif len(sys.argv)>1 and sys.argv[1]=='__tree':
             if os.geteuid()==0: die("workspace content operations must not run as root")
