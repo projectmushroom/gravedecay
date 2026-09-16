@@ -166,14 +166,15 @@ class WorkspaceRestore(unittest.TestCase):
 
     def test_interrupted_publish_keeps_receipt_and_blocks_reapply(self):
         attrs={'ROOT':self.root,'REGISTRY':self.root/'config/workspaces.json','HOME_ROOT':self.root/'workspaces',
-               'RESTORE_ROOT':self.root/'config/workspace-restores','MIGRATION_ROOT':self.root/'config/workspace-migrations'}
+               'RESTORE_ROOT':self.root/'config/workspace-restores','MIGRATION_ROOT':self.root/'config/workspace-migrations',
+               'SERVICE_ROOT':self.root/'config/workspace-services','PROVIDER_SECRET':self.root/'config/secrets/provider.env'}
         make_backup(self.backup,records=[workspace(),workspace('bobby','200',1)],entries=[entry('workspaces/alice',kind=tarfile.DIRTYPE),entry('workspaces/alice/dirty',b'keep'),entry('workspaces/bobby',kind=tarfile.DIRTYPE)])
         rename=module.rename_exclusive
         def interrupted(source,name,destination,retained):
             if name=='bobby': raise OSError('interrupted')
             rename(source,name,destination,retained)
         with patch.multiple(module,**attrs),patch.dict(os.environ,self.env),patch.object(module,'rename_exclusive',side_effect=interrupted):
-            with self.assertRaises(OSError),contextlib.redirect_stdout(io.StringIO()): module.cmd_restore(argparse.Namespace(backup=self.backup))
+            with self.assertRaisesRegex(OSError,'^interrupted$'),contextlib.redirect_stdout(io.StringIO()): module.cmd_restore(argparse.Namespace(backup=self.backup))
         self.assertEqual((self.home/'dirty').read_text(),'keep'); self.assertFalse((self.root/'config/workspaces.json').exists())
         self.assertIn('restore is incomplete',self.cli('doctor',ok=False).stderr)
         self.assertIn('restore is incomplete',self.cli('reapply',ok=False).stderr)
