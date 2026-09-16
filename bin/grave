@@ -1862,7 +1862,7 @@ cmd_doctor() { # grave doctor [--no-page]
     check "Claude notify hooks installed" claude_notify_hook_present
     check "Codex notify hook installed"   codex_notify_hook_present
   fi
-  if [[ -e "$GRAVE_ROOT/config/workspaces.json" || -e "$GRAVE_ROOT/config/workspace-migrations" || -L "$GRAVE_ROOT/config/workspace-migrations" ]]; then
+  if [[ -e "$GRAVE_ROOT/config/workspaces.json" || -e "$GRAVE_ROOT/config/workspace-migrations" || -L "$GRAVE_ROOT/config/workspace-migrations" || -e "$GRAVE_ROOT/config/workspace-restores" || -L "$GRAVE_ROOT/config/workspace-restores" ]]; then
     # Route through the root helper: the workspace doctor stats root-owned 0700
     # service-env files and grave-<slug>-owned homes, which the invoking owner
     # can't traverse — run unprivileged it raises PermissionError and fails on a
@@ -2222,8 +2222,11 @@ cmd_restore() {
       ok "repo restored to $GRAVE_ROOT/repos/$name-restored" ;;
     workspaces)
       [[ -f "$dest/configs/workspaces.tar.gz" ]] || { bad "backup has no workspace archive"; exit 1; }
-      tar -C "$GRAVE_ROOT" -xzf "$dest/configs/grave-platform.tar.gz" config/workspaces.json 2>/dev/null || true
-      tar -C "$GRAVE_ROOT" -xzf "$dest/configs/workspaces.tar.gz"
+      if (( EUID == 0 )); then
+        "$0" __users restore "$dest"
+      else
+        sudo -n "$0" __users restore "$dest"
+      fi
       ok "workspace data restored; run raise.sh then grave doctor" ;;
     *)
       say "Backup contents of $ts:"; find "$dest" -type f | sed "s|$dest/|  |"
@@ -2860,6 +2863,7 @@ case "${1:-help}" in
               # the appliance's resolved toolchain into workspace unit envs.
               # This keeps later additions correct on /usr/local and immutable
               # Homebrew hosts where the old /usr/bin defaults do not exist.
+              export GRAVE_ROOT
               export GRAVE_T3_BIN="$(command -v t3 2>/dev/null || true)"
               export GRAVE_TTYD_BIN="$(command -v ttyd 2>/dev/null || true)"
               export GRAVE_TOOL_PATH="${TOOL_PATH:-}"

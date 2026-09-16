@@ -259,7 +259,15 @@ as the appliance owner, behind a root-private staging parent. Only this
 unpublished copy receives the new workspace UID; publication uses no-replace
 rename and refuses existing registry identities, homes, or Unix accounts.
 Doctor rejects unfinished staging. See [migration](MULTIUSER.md#migration).
-Restore and private workspace backup work remain tracked in #198.
+Workspace restore likewise uses root-private input snapshots and staging.
+Archive verification and extraction execute as the appliance owner, with
+component-checked directory handles and no archive-provided ownership/modes.
+It rejects path traversal, link descendants, special files and live identity,
+port, home, account or service-config conflicts. Only validated unpublished
+copies receive fresh workspace UIDs; no-replace rename publishes them and
+service capabilities are regenerated. Failed restores retain receipts that
+block reapply and fail doctor. See [recovery](RECOVERY.md#restore-pieces).
+Owner privacy and private workspace backup work remain tracked in #198.
 See [SECRETS.md](SECRETS.md#multi-user-workspaces) for rollout and file formats.
 
 ## The web terminal

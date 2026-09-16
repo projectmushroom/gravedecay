@@ -121,6 +121,7 @@ as_mole bash /repo/tests/e2e/jobs.sh
 
 echo "=== phase 6: multi-user loopback boundary ==="
 docker exec "$CTR" python3 /repo/tests/e2e/workspace-migration.py
+docker exec "$CTR" python3 /repo/tests/e2e/workspace-restore.py
 as_mole grave multiuser enable 100 mole@example.com mole --profile generic
 docker exec "$CTR" grave __users doctor
 # Migration backed up as root. Private artifacts and metadata must still be
