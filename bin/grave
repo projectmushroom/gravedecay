@@ -2278,10 +2278,12 @@ cmd_multiuser() {
       local owner="${SUDO_USER:-$(stat -c %U "$GRAVE_ROOT")}" owner_home helper migration conf_backup
       owner_home=$(getent passwd "$owner" | cut -d: -f6); helper="$(dirname "$0")/grave-workspaces"
       "$0" __users owner-privacy
-      umask 077
-      migration="$GRAVE_ROOT/backups/migration-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$migration"
-      conf_backup="$migration/grave.conf"; cp "$CONF" "$conf_backup"
-      tailscale serve get-config "$migration/serve.json" >/dev/null 2>&1 || true
+      migration="$GRAVE_ROOT/backups/migration-$(date +%Y%m%d-%H%M%S)"
+      conf_backup="$migration/grave.conf"
+      # Keep rollback snapshots private without changing the umask inherited
+      # by migration/re-raise, which also create shared workspace parents.
+      (umask 077; mkdir -p "$migration"; cp "$CONF" "$conf_backup"
+        tailscale serve get-config "$migration/serve.json" >/dev/null 2>&1 || true)
       HOME="$owner_home" cmd_backup
       # Provider access is opt-in per workspace.  Preserve an existing shared
       # provider only when this appliance actually has a provider credential;
