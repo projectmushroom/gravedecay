@@ -98,7 +98,8 @@ class OwnerMigration(unittest.TestCase):
         (self.owner/'.claude').mkdir(); (self.owner/'.claude/settings.json').symlink_to(sentinel)
         before=sentinel.stat()
         with self.assertRaisesRegex(SystemExit,'copy failed'): self.migrate()
-        self.assertEqual(sentinel.read_text(),'secret'); self.assertEqual(sentinel.stat(),before)
+        # Reading the sentinel can advance atime; compare metadata first.
+        self.assertEqual(sentinel.stat(),before); self.assertEqual(sentinel.read_text(),'secret')
         self.assertFalse(self.home.exists())
 
     def test_publish_race_does_not_replace_target(self):
