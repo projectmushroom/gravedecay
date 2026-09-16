@@ -166,6 +166,9 @@ def owner_privacy(check=False, backup_dir=None):
     for path in paths:
         if not path.is_absolute() or '..' in path.parts or path==ROOT or path in ROOT.parents:
             die('unsafe owner backup directory')
+        retained=ROOT/'backups/removed-workspaces'
+        if path==retained or retained in path.parents:
+            die('backup directory overlaps retained workspace homes')
         for name in (*OWNER_TREES,'scripts','web','docs','workspaces'):
             protected=ROOT/name
             if path==protected or protected in path.parents or path in protected.parents:

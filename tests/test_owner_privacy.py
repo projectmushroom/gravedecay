@@ -104,7 +104,8 @@ class OwnerPrivacy(unittest.TestCase):
         file=external/'archive'; file.write_text('backup'); file.chmod(0o644)
         self.apply(backup_dir=external); self.apply(check=True,backup_dir=external)
         self.assertEqual(file.stat().st_mode&0o777,0o600)
-        for path in (self.root,self.base,self.root/'workspaces',self.root/'scripts/backup',self.root/'config'):
+        for path in (self.root,self.base,self.root/'workspaces',self.root/'scripts/backup',self.root/'config',
+                     self.root/'backups/removed-workspaces',self.root/'backups/removed-workspaces/alice/home'):
             with self.assertRaises(SystemExit): self.apply(backup_dir=path)
         alias=self.base/'alias'; alias.symlink_to(external)
         with self.assertRaises(OSError): self.apply(backup_dir=alias)
