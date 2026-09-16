@@ -2169,8 +2169,10 @@ cmd_backup() (
   if dkctl is-active --quiet docker; then
     local vol
     for vol in $(dk volume ls -q | grep -vE '^[0-9a-f]{64}$'); do
-      if dk run --rm -v "$vol":/data:ro -v "$dest/volumes":/backup alpine \
-           tar -czf "/backup/$vol.tar.gz" -C /data . \
+      # The owner opens the destination under the private backup umask.
+      # Docker only streams stdout; its root UID/umask must not own the file.
+      if dk run --rm -v "$vol":/data:ro alpine \
+           tar -czf - -C /data . >"$dest/volumes/$vol.tar.gz" \
          && tar -tzf "$dest/volumes/$vol.tar.gz" >/dev/null 2>&1; then
         ok "volume $vol (verified)"
       else

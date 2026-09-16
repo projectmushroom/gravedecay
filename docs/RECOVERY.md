@@ -63,7 +63,9 @@ freshness markers, and the run lock belong to the appliance owner, determined
 by `$GRAVE_ROOT` ownership. Doctor and the next owner-run backup retain access;
 workspace collaborators do not gain access.
 
-The nightly service continues to run as the appliance owner. For workspace data,
+The nightly service continues to run as the appliance owner. Docker volume
+archives stream from the container into a file opened by that owner with mode
+600, so container root ownership or umask cannot leak into backup artifacts. For workspace data,
 it opens the private destination and invokes the existing scoped root helper
 `grave __users backup-export`. That helper accepts no destination pathname and
 streams one archive on stdout. It holds the registry lock and launches a fresh
