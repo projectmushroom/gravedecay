@@ -121,6 +121,25 @@ Doctor requires private root-owned removal archive parents. Legacy archives with
 different ownership/modes are reported for administrator inspection; this change
 does not silently rewrite their contents or permissions.
 
+## Network monitor access
+
+In multi-user mode `/net`, `/net/`, and the `/net/events` stream require an
+enabled administrator workspace. Developers, disabled identities and unknown
+users cannot read appliance-wide network telemetry. The root identity gateway
+routes approved requests to gravenet; it does not grant workspace processes
+access to the host service. Direct connections from non-root Unix users to the
+network monitor port are blocked by the multi-user nftables boundary. The network
+service requires that boundary at boot; owner health probes use a fixed root helper.
+
+Migration and re-raise remove legacy `/grave`, `/term`, and `/net` Serve mounts,
+including trailing-slash variants, then verify port 443 has exactly one handler:
+the root gateway capability URL. Doctor verifies the same JSON configuration,
+including the HTTPS listener, capability URL, absence of extra mounts and Funnel,
+and absence of competing foreground/service configurations on port 443. A stale
+route is an error even when the gateway is also present. Re-raise repairs the known
+legacy routes; inspect unexpected custom port-443 mounts before removing them.
+Independent preview ports remain unchanged. Single-user `/net` access is unchanged.
+
 ## Request flow and failures
 
 1. Tailscale Serve terminates HTTPS and supplies its authenticated identity

@@ -25,7 +25,7 @@ class GatewayTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(); self.root=Path(self.temp.name); self.servers=[]
         ports=[]
-        for label in ("alice-t3","alice-term","alice-dash","bob-t3","bob-term","bob-dash"):
+        for label in ("alice-t3","alice-term","alice-dash","bob-t3","bob-term","bob-dash","network"):
             server=socketserver.ThreadingTCPServer(("127.0.0.1",0),Echo); server.label=label
             threading.Thread(target=server.serve_forever,daemon=True).start(); self.servers.append(server); ports.append(server.server_address[1])
         workspaces=[]
@@ -40,7 +40,7 @@ class GatewayTests(unittest.TestCase):
         for workspace in workspaces:
             (self.root/"config/workspace-services"/(workspace["slug"]+".env")).write_text("GRAVEDECAY_BACKEND_TOKEN="+("b" if workspace["slug"]=="alice" else "d")*64+"\n")
         probe=socket.socket(); probe.bind(("127.0.0.1",0)); self.port=probe.getsockname()[1]; probe.close(); self.prefix=f"/_grave_proxy/{token}"
-        env={**os.environ,"GRAVE_ROOT":str(self.root),"GRAVE_GATEWAY_PORT":str(self.port),"GRAVE_ADMIN_DASH_PORT":str(ports[2]),"GRAVE_TAILSCALE_STATUS":str(status)}
+        env={**os.environ,"GRAVE_ROOT":str(self.root),"GRAVE_GATEWAY_PORT":str(self.port),"GRAVE_ADMIN_DASH_PORT":str(ports[2]),"GRAVE_NET_PORT":str(ports[6]),"GRAVE_TAILSCALE_STATUS":str(status)}
         self.proc=subprocess.Popen([GATEWAY],env=env)
         for _ in range(100):
             try:
@@ -102,6 +102,29 @@ class GatewayTests(unittest.TestCase):
         # developer-allowed action), which the old POST-body check never saw.
         self.request("/grave/api/action-stream?action=t3-pair","b@example.com")
         self.assertIn("pairing_created",(self.root/"logs/audit.jsonl").read_text())
+
+    def test_network_routes_require_enabled_admin_and_preserve_paths_and_queries(self):
+        for path,upstream in (('/net','/'),('/net?view=all','/?view=all'),
+                              ('/net/','/'),('/net/events?since=1','/events?since=1')):
+            with self.subTest(path=path):
+                self.assertIn(b'network',self.request(path,'a@example.com'))
+                self.assertTrue(self.servers[6].last_request.startswith(f'GET {upstream} HTTP/1.1'.encode()))
+                self.assertNotIn(b'X-Grave-Backend-Token:',self.servers[6].last_request)
+                before=self.servers[6].last_request
+                self.assertIn(b'403',self.request(path,'b@example.com',extra='X-Grave-Role: admin\r\n'))
+                self.assertIn(b'401',self.request(path,'unknown@example.com'))
+                self.assertIn(b'401',self.request(path))
+                self.assertEqual(self.servers[6].last_request,before)
+        registry=self.root/'config/workspaces.json'; data=json.loads(registry.read_text())
+        data['workspaces'][0]['enabled']=False; registry.write_text(json.dumps(data))
+        self.assertIn(b'403',self.request('/net/events','a@example.com'))
+        self.assertIn(b'bob-t3',self.request('/network','b@example.com'))
+
+    def test_network_rejects_direct_requests_even_with_spoofed_identity(self):
+        with socket.create_connection(('127.0.0.1',self.port)) as client:
+            client.sendall(b'GET /net/events HTTP/1.1\r\nHost: box\r\nTailscale-User-Login: a@example.com\r\nX-Grave-Role: admin\r\n\r\n')
+            self.assertIn(b'401',client.recv(4096))
+        self.assertFalse(hasattr(self.servers[6],'last_request'))
 
     def test_large_body_streams_through_without_being_buffered(self):
         # #49: a body larger than the gateway's inspection peek (64 KiB) must

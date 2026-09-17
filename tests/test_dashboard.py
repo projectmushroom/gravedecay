@@ -345,8 +345,9 @@ class DashboardContractTests(unittest.TestCase):
         # identity gateway; the multi-user branch must remove them.
         self.assertIn("__multiuser-serve", ritual)
         serve = (ROOT / "bin/grave").read_text()
-        self.assertIn("--set-path=/grave off", serve)
-        self.assertIn("--set-path=/term off", serve)
+        self.assertIn("for mount in /grave /grave/ /term /term/ /net /net/", serve)
+        self.assertIn('--set-path="$mount" off', serve)
+        self.assertIn("cmd_multiuser_serve_check", serve)
         # Regression #51: the gateway reads workspaces.json, created by
         # `__users reapply`, so it must start AFTER reapply.
         reapply = ritual.find("__users reapply")
@@ -378,7 +379,8 @@ class DashboardContractTests(unittest.TestCase):
 
     def test_multi_user_migration_prepares_dropin_before_headless_owner_raise(self):
         grave = (ROOT / "bin/grave").read_text()
-        prepare = grave.index('install -d -m 755 -o root -g root /etc/systemd/system/gravedecay.service.d')
+        prepare = grave.index('      cmd_multiuser_prepare')
+        self.assertIn('install -d -m 755 -o root -g root /etc/systemd/system/gravedecay.service.d /etc/systemd/system/gravedecay-net.service.d', grave)
         owner_raise = grave.index('sudo -u "$owner" -H env -u SUDO_USER')
         self.assertLess(prepare, owner_raise)
 

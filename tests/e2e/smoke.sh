@@ -122,9 +122,16 @@ as_mole bash /repo/tests/e2e/jobs.sh
 echo "=== phase 6: multi-user loopback boundary ==="
 docker exec "$CTR" python3 /repo/tests/e2e/workspace-migration.py
 docker exec "$CTR" python3 /repo/tests/e2e/workspace-restore.py
+docker exec "$CTR" python3 /repo/tests/e2e/network-route.py prepare
 docker exec "$CTR" python3 /repo/tests/e2e/owner-privacy.py prepare
 as_mole grave multiuser enable 100 mole@example.com mole --profile generic
 docker exec "$CTR" grave __users doctor
+# An existing multi-user appliance upgrading to this release has no network
+# drop-in directory. Re-raise must create it under the scoped sudo grant.
+docker exec "$CTR" rm /etc/systemd/system/gravedecay-net.service.d/multiuser-boundary.conf
+docker exec "$CTR" rmdir /etc/systemd/system/gravedecay-net.service.d
+as_mole bash -c './raise.sh --profile generic </dev/null'
+docker exec "$CTR" test -f /etc/systemd/system/gravedecay-net.service.d/multiuser-boundary.conf
 # Migration backed up as root. Private artifacts and metadata must still be
 # usable by the appliance owner, including the lock for the next nightly run.
 as_mole bash -c '
@@ -153,7 +160,7 @@ if docker exec "$CTR" runuser -u grave-bob -- cat /srv/dev/backups/.last-backup;
 fi
 # A second workspace identity cannot dial any owner workspace backend or legacy
 # service, even with a forged capability. The root gateway still routes it.
-for port in 4810 4910 5010 4711 4712 4713; do
+for port in 4810 4910 5010 4711 4712 4713 4714; do
   if docker exec "$CTR" runuser -u grave-bob -- curl -sf --max-time 2 \
     -H 'X-Grave-Backend-Token: forged' "http://127.0.0.1:$port/" >/dev/null; then
     echo "FATAL: grave-bob reached protected backend :$port"
@@ -197,6 +204,7 @@ if docker exec "$CTR" systemctl is-active --quiet gravedecay-term; then
   exit 1
 fi
 docker exec "$CTR" python3 /repo/tests/e2e/workspace-backup.py
+docker exec "$CTR" python3 /repo/tests/e2e/network-route.py verify
 as_mole grave doctor
 
 docker exec "$CTR" python3 /repo/tests/e2e/workspace-credentials.py
@@ -211,7 +219,7 @@ if docker exec "$CTR" systemctl is-active --quiet gravedecay-boundary.service; t
   echo "FATAL: single-user restoration left boundary active"
   exit 1
 fi
-if docker exec "$CTR" test -e /etc/systemd/system/gravedecay.service.d/multiuser-boundary.conf; then
+if docker exec "$CTR" sh -c 'test -e /etc/systemd/system/gravedecay.service.d/multiuser-boundary.conf || test -e /etc/systemd/system/gravedecay-net.service.d/multiuser-boundary.conf'; then
   echo "FATAL: single-user restoration left dashboard boundary drop-in"
   exit 1
 fi

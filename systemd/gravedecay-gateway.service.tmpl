@@ -14,7 +14,8 @@ User=root
 Group=root
 ExecStart=@PYTHON@ @GRAVE_ROOT@/scripts/gateway.py
 Environment=GRAVE_ROOT=@GRAVE_ROOT@
-Environment=GRAVE_GATEWAY_PORT=4710
+Environment=GRAVE_GATEWAY_PORT=@GATEWAY_PORT@
+Environment=GRAVE_NET_PORT=@NET_PORT@
 Restart=always
 RestartSec=2
 NoNewPrivileges=yes

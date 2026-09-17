@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Identity-aware gateway for Tailscale Serve."""
-import json, os, selectors, socket, socketserver, subprocess, threading, time
+import json, os, selectors, socket, socketserver, subprocess, sys, threading, time
 from pathlib import Path
 
 ROOT=Path(os.environ.get("GRAVE_ROOT","/srv/dev"))
 REGISTRY=Path(os.environ.get("GRAVE_WORKSPACE_REGISTRY",ROOT/"config/workspaces.json"))
 HOST="127.0.0.1"; PORT=int(os.environ.get("GRAVE_GATEWAY_PORT","4710"))
 ADMIN_DASH_PORT=int(os.environ.get("GRAVE_ADMIN_DASH_PORT","4712"))
+NET_PORT=int(os.environ.get("GRAVE_NET_PORT","4714"))
 TOKEN_FILE=Path(os.environ.get("GRAVE_GATEWAY_TOKEN_FILE",ROOT/"config/secrets/gateway-token"))
 ADMIN_TOKEN_FILE=Path(os.environ.get("GRAVE_ADMIN_TOKEN_FILE",ROOT/"config/secrets/admin-dashboard.env"))
 AUDIT=Path(os.environ.get("GRAVE_AUDIT_LOG",ROOT/"logs/audit.jsonl"))
@@ -108,9 +109,13 @@ def action_of(path,rest):
         except Exception: pass
     return action
 
+def network_request(path):
+    clean=path.split("?",1)[0]
+    return clean=="/net" or clean.startswith("/net/")
+
 def admin_request(method,path,rest):
     clean=path.split("?",1)[0]
-    if any(clean.startswith(p) for p in ADMIN_PREFIXES): return True
+    if network_request(path) or any(clean.startswith(p) for p in ADMIN_PREFIXES): return True
     return action_of(path,rest) in ADMIN_ACTIONS
 
 def relay(a,b):
@@ -158,7 +163,10 @@ class Handler(socketserver.BaseRequestHandler):
         if action_of(path,rest)=="t3-pair": audit("pairing_created",w["id"],w["slug"])
         clean=path
         if path == "/grave": clean="/grave/"
-        if clean.startswith("/grave/"): kind="dash"; upstream_path=clean[len("/grave"):]
+        if network_request(clean):
+            kind="net"; upstream_path=clean[len("/net"):]
+            if not upstream_path.startswith("/"): upstream_path="/"+upstream_path
+        elif clean.startswith("/grave/"): kind="dash"; upstream_path=clean[len("/grave"):]
         elif clean.startswith("/term/") or clean == "/term": kind="term"; upstream_path=clean[len("/term"):] or "/"
         else: kind="t3"; upstream_path=clean
         if kind=="term" or headers.get("upgrade","").lower()=="websocket": audit("session_created",w["id"],w["slug"])
@@ -166,13 +174,14 @@ class Handler(socketserver.BaseRequestHandler):
         # whose Unix account alone has the scoped sudoers grant. Developers
         # are denied above; the admin workspace otherwise keeps private state.
         owner_admin=kind=="dash" and admin_request(method,path,rest) and w["role"]=="admin"
-        port=ADMIN_DASH_PORT if owner_admin else w["ports"][kind]
-        capability=admin_token() if owner_admin else backend_token(w)
-        if not capability:
+        port=NET_PORT if kind=="net" else ADMIN_DASH_PORT if owner_admin else w["ports"][kind]
+        capability="" if kind=="net" else admin_token() if owner_admin else backend_token(w)
+        if kind!="net" and not capability:
             audit("backend_unavailable",w["id"],w["slug"],"missing_capability"); self.request.sendall(response(502,"workspace service unavailable")); return
         stripped={"tailscale-user-login","tailscale-user-id","x-grave-workspace","x-grave-role","x-forwarded-host","x-forwarded-user","x-grave-backend-token"}
         forwarded=[line for line in raw_headers if line.partition(":")[0].strip().lower() not in stripped]
-        forwarded += [f"X-Grave-Workspace: {w['slug']}",f"X-Grave-Role: {w['role']}",f"X-Forwarded-User: {w['id']}",f"X-Grave-Backend-Token: {capability}"]
+        forwarded += [f"X-Grave-Workspace: {w['slug']}",f"X-Grave-Role: {w['role']}",f"X-Forwarded-User: {w['id']}"]
+        if capability: forwarded.append(f"X-Grave-Backend-Token: {capability}")
         request=(f"{method} {upstream_path} {version}\r\n"+"\r\n".join(forwarded)+"\r\n\r\n").encode("iso-8859-1")+rest
         try:
             with socket.create_connection(("127.0.0.1",port),timeout=5) as backend:
@@ -183,6 +192,44 @@ class Handler(socketserver.BaseRequestHandler):
 class Server(socketserver.ThreadingTCPServer):
     daemon_threads=True; allow_reuse_address=True
 
+def check_serve(config,dns,port,token):
+    """Verify the appliance origin using Tailscale's ServeConfig JSON schema.
+
+    Other HTTPS ports (grave preview) are independent and left untouched.
+    https://github.com/tailscale/tailscale/blob/main/ipn/serve.go
+    """
+    origin=dns.rstrip('.')+':443'
+    if not dns or len(token)<32 or not 1024<=port<=65535:
+        raise ValueError('missing appliance identity or gateway capability')
+    expected={'/':{'Proxy':f'http://127.0.0.1:{port}/_grave_proxy/{token}'}}
+    if config.get('TCP',{}).get('443')!={'HTTPS':True}:
+        raise ValueError('Serve HTTPS listener on port 443 differs from the gateway policy')
+    origins={key:value for key,value in config.get('Web',{}).items() if key.endswith(':443')}
+    if origins!={origin:{'Handlers':expected}}:
+        raise ValueError('Serve port 443 must have only the exact gateway root mount; remove stale direct routes')
+    if any(value for key,value in config.get('AllowFunnel',{}).items() if key.endswith(':443')):
+        raise ValueError('the appliance origin must remain tailnet-only')
+    # Foreground configs can override persistent mounts. Services have separate
+    # identities and must not be allowed to alias this appliance origin either.
+    for alternate in (*config.get('Foreground',{}).values(),*config.get('Services',{}).values()):
+        if (alternate.get('TCP',{}).get('443') or
+                any(key.endswith(':443') for key in alternate.get('Web',{}))):
+            raise ValueError('alternate Serve configuration uses port 443')
+
+
+def verify_live_serve():
+    try:
+        config=json.loads(subprocess.check_output(['tailscale','serve','status','--json'],text=True,timeout=10))
+        status=json.loads(subprocess.check_output(['tailscale','status','--json'],text=True,timeout=10))
+        check_serve(config,status.get('Self',{}).get('DNSName',''),PORT,TOKEN_FILE.read_text().strip())
+    except (OSError,ValueError,TypeError,AttributeError,subprocess.SubprocessError):
+        # Never dump the configuration: the gateway URL contains a capability.
+        print('Serve configuration differs from the multi-user gateway policy; rerun raise.sh and inspect port 443 mounts',file=sys.stderr)
+        return 1
+    print('ok: exact multi-user Serve origin; preview ports preserved')
+    return 0
+
 def main():
+    if sys.argv[1:]==['--check-serve']: return verify_live_serve()
     with Server((HOST,PORT),Handler) as server: server.serve_forever()
-if __name__ == "__main__": main()
+if __name__ == "__main__": sys.exit(main())

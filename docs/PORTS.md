@@ -10,7 +10,7 @@ listening — add a row in the same commit that adds a listener.
 | 4711 | 127.0.0.1 | t3code (Linux systemd, or macOS `io.gravedecay.t3` LaunchAgent in opt-in agents mode) | `tailscale serve` → https `/` (disabled in multi-user mode) |
 | 4712 | 127.0.0.1 | gravedecay (Linux systemd, macOS legacy user LaunchAgent, or explicitly enabled native Mac app-owned backend) | `tailscale serve` → https `/grave`; native app does not change Serve and refuses collisions; multi-user admin actions only via root gateway |
 | 4713 | 127.0.0.1 | gravedecay-term (ttyd, custom clipboard-capable frontend — see TERMINAL.md; Linux systemd, or macOS `io.gravedecay.term` LaunchAgent in opt-in agents mode) | `tailscale serve` → https `/term` (disabled in multi-user mode) |
-| 4714 | 127.0.0.1 | gravedecay-net (gravenet — Linux systemd, macOS user LaunchAgent, or native Mac app-owned backend) | `tailscale serve` → https `/net` (widen bind via `GRAVENET_BIND` drop-in only if LAN clients should load it directly) |
+| 4714 | 127.0.0.1 | gravedecay-net (gravenet — Linux systemd, macOS user LaunchAgent, or native Mac app-owned backend) | single-user `tailscale serve` → https `/net`; multi-user enabled admins only through the root identity gateway |
 | `${PORT:-4711}` | 127.0.0.1 | portable Compose nginx gateway (optional) | same-origin `/`, `/grave/`, `/term/`; choose a distinct `PORT` per Compose project |
 | 5432 | 127.0.0.1 | core-postgres | loopback only |
 | 6379 | 127.0.0.1 | core-redis | loopback only |
@@ -24,9 +24,11 @@ Multi-user mode points Serve at a root-only, randomly generated capability
 path on port 4710. The gateway strips that path and selects one of the fixed
 loopback ports from the workspace registry; callers cannot select a backend.
 Its root-owned nftables boundary rejects any non-root local TCP connection to
-4711–4713 and 4810–5109 (for both IPv4 and IPv6), leaving the root gateway as
+4711–4714 and 4810–5109 (for both IPv4 and IPv6; the network rule follows `NET_PORT`), leaving the root gateway as
 the only backend caller. `grave doctor` verifies the persistent boundary and
-that legacy T3/terminal remain disabled.
+that legacy T3/terminal remain disabled. It also verifies the exact gateway-only
+Serve configuration on port 443. Multi-user `/net` and its event stream require
+an enabled administrator; old direct `/net` mounts are removed on re-raise.
 
 The 3000–3999 range is the sandbox for `grave preview` (config: `PREVIEW_RANGE`).
 Dev servers still bind loopback; `grave preview <port>` runs `tailscale serve
