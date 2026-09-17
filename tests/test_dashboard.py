@@ -379,7 +379,8 @@ class DashboardContractTests(unittest.TestCase):
 
     def test_multi_user_migration_prepares_dropin_before_headless_owner_raise(self):
         grave = (ROOT / "bin/grave").read_text()
-        prepare = grave.index('install -d -m 755 -o root -g root /etc/systemd/system/gravedecay.service.d')
+        prepare = grave.index('      cmd_multiuser_prepare')
+        self.assertIn('install -d -m 755 -o root -g root /etc/systemd/system/gravedecay.service.d /etc/systemd/system/gravedecay-net.service.d', grave)
         owner_raise = grave.index('sudo -u "$owner" -H env -u SUDO_USER')
         self.assertLess(prepare, owner_raise)
 
