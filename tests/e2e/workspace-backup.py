@@ -44,6 +44,8 @@ run('systemctl','reset-failed','gravedecay-backup.service')
 run('systemctl','start','gravedecay-backup.service')
 assert run('systemctl','show','-p','User','--value','gravedecay-backup.service').stdout.strip()=='mole'
 latest=(root/'backups/.last-backup').read_text().strip(); backup=root/'backups'/latest
+for archive in (backup/'volumes').glob('*.tar.gz'):
+    assert archive.stat().st_uid==owner.pw_uid and archive.stat().st_mode&0o777==0o600
 as_user('mole','grave','backup','verify',latest)
 run('grave','__users','backup-check',backup)
 manifest=json.loads((backup/'manifest.json').read_text())

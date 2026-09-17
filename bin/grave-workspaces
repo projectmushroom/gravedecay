@@ -156,6 +156,113 @@ def absolute_directory(path, trusted=False, create=False):
         yield fd
     finally: os.close(fd)
 
+# The boundary is the exact owner-data directory, not all of GRAVE_ROOT:
+# workspace processes still need the installed scripts, web assets and docs.
+OWNER_TREES=('repos','agents','worktrees','logs','config','docker')
+
+def owner_privacy(check=False, backup_dir=None):
+    backup=Path(backup_dir or os.environ.get('GRAVE_BACKUP_DIR',ROOT/'backups'))
+    paths=list(dict.fromkeys((ROOT/'backups',backup)))
+    for path in paths:
+        if not path.is_absolute() or '..' in path.parts or path==ROOT or path in ROOT.parents:
+            die('unsafe owner backup directory')
+        retained=ROOT/'backups/removed-workspaces'
+        if path==retained or retained in path.parents:
+            die('backup directory overlaps retained workspace homes')
+        for name in (*OWNER_TREES,'scripts','web','docs','workspaces'):
+            protected=ROOT/name
+            if path==protected or protected in path.parents or path in protected.parents:
+                die('backup directory overlaps a managed data or runtime tree')
+    with absolute_directory(ROOT,trusted=True) as root:
+        owner=os.fstat(root)
+        if owner.st_uid==0: die('owner privacy requires a non-root appliance owner')
+        uid,gid=owner.st_uid,owner.st_gid
+
+        def secure(fd, label, directory=False):
+            info=os.fstat(fd)
+            if (info.st_uid not in (0,uid) or (directory and info.st_mode & 0o022)
+                    or (not directory and (not stat.S_ISREG(info.st_mode) or info.st_nlink!=1))):
+                die(f'unsafe owner privacy ownership, type or links: {label}')
+            mode=0o700 if directory else 0o600 | (info.st_mode & 0o100)
+            if check:
+                if info.st_uid!=uid or stat.S_IMODE(info.st_mode)!=mode:
+                    die(f'owner privacy drift: {label}; run grave users owner-privacy')
+            else:
+                if info.st_uid!=uid or info.st_gid!=gid: os.fchown(fd,uid,gid)
+                if stat.S_IMODE(info.st_mode)!=mode: os.fchmod(fd,mode)
+
+        # Never traverse owner repositories/configuration as root. Closing their
+        # top-level gates protects old readable files without touching contents.
+        for name in OWNER_TREES:
+            with directory_at(root,name,create=not check) as (fd,_):
+                secure(fd,name,directory=True)
+
+        def walk(directory, label, retained=False):
+            for name in os.listdir(directory):
+                if retained and name=='removed-workspaces':
+                    # Retained collaborator homes deliberately keep their UIDs.
+                    # Their root-private gate belongs to the removal contract.
+                    with directory_at(directory,name,os.geteuid(),private=True): pass
+                    continue
+                info=os.stat(name,dir_fd=directory,follow_symlinks=False)
+                if stat.S_ISDIR(info.st_mode):
+                    with directory_at(directory,name) as (child,_):
+                        secure(child,label+'/'+name,directory=True)
+                        walk(child,label+'/'+name)
+                else:
+                    if not stat.S_ISREG(info.st_mode): die(f'unsafe legacy backup type: {label}/{name}')
+                    fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=directory)
+                    try: secure(fd,label+'/'+name)
+                    finally: os.close(fd)
+
+        for path in paths:
+            with absolute_directory(path.parent,trusted=True) as parent:
+                with directory_at(parent,path.name,create=not check) as (directory,_):
+                    secure(directory,str(path),directory=True)
+                    # Registry lock is already held. Never wait on a backup that
+                    # may itself be waiting to export the workspace registry.
+                    try:
+                        lock=os.open('.backup.lock',os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,
+                                     dir_fd=directory)
+                    except FileNotFoundError:
+                        if check: lock=None
+                        else:
+                            lock=os.open('.backup.lock',os.O_RDWR|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,
+                                         0o600,dir_fd=directory)
+                    try:
+                        if lock is not None:
+                            info=os.fstat(lock)
+                            if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1 or info.st_uid not in (0,uid):
+                                die('unsafe backup lock')
+                            try: fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                            except BlockingIOError: die('backup is running; retry owner privacy after it finishes')
+                        walk(directory,str(path),retained=path==ROOT/'backups')
+                    finally:
+                        if lock is not None: os.close(lock)
+    print('ok: owner data and legacy backups are private')
+
+def cmd_owner_privacy(a): owner_privacy(a.check,a.backup_dir)
+
+@contextmanager
+def owner_privacy_lock(check=False):
+    # This repair must be safe even before a registry exists. A check creates
+    # nothing; apply creates only a no-follow lock beneath a trusted config dir.
+    with absolute_directory(REGISTRY.parent,trusted=True,create=not check) as parent:
+        flags=os.O_RDONLY if check else os.O_RDWR|os.O_CREAT
+        try: fd=os.open(REGISTRY.with_suffix('.lock').name,flags|os.O_NOFOLLOW|os.O_NONBLOCK,0o600,dir_fd=parent)
+        except FileNotFoundError:
+            if not check: raise
+            yield
+            return
+        try:
+            info=os.fstat(fd)
+            if (not stat.S_ISREG(info.st_mode) or info.st_nlink!=1
+                    or info.st_uid not in (0,ROOT.lstat().st_uid)):
+                die('unsafe owner privacy registry lock')
+            fcntl.flock(fd,fcntl.LOCK_EX)
+            yield
+        finally: os.close(fd)
+
 @contextmanager
 def service_directory():
     with absolute_directory(SERVICE_ROOT.parent,trusted=True) as parent:
@@ -857,6 +964,7 @@ def cmd_disable(a):
     run("systemctl","disable","--now",f"gravedecay-t3@{w['slug']}.service",f"gravedecay-term@{w['slug']}.service",f"gravedecay-dashboard@{w['slug']}.service")
     audit("workspace_disabled",w["slug"]); print(f"disabled {w['slug']}")
 def cmd_doctor(a):
+    if os.environ.get('GRAVE_MULTI_USER')=='1': owner_privacy(check=True)
     data=load(); validate(data)
     pending=[w['slug'] for w in data['workspaces'] if w.get('removal')]
     if pending: die('workspace removal pending; retry confirmed remove for: '+', '.join(pending))
@@ -1166,6 +1274,7 @@ def cmd_provider_policy(a):
     if os.environ.get("GRAVE_WORKSPACE_TEST") != "1": run("systemctl","restart",f"gravedecay-t3@{w['slug']}")
     audit("provider_policy_changed",w["slug"],result=a.policy); print(f"shared provider {'granted to' if enabled else 'revoked from'} {w['slug']}")
 def cmd_reapply(a):
+    if os.environ.get('GRAVE_MULTI_USER')=='1': owner_privacy()
     check_restore_staging()
     if a.t3_bin: os.environ["GRAVE_T3_BIN"]=a.t3_bin
     if a.ttyd_bin: os.environ["GRAVE_TTYD_BIN"]=a.ttyd_bin
@@ -1190,6 +1299,7 @@ def main():
     q=s.add_parser("restore"); q.add_argument("backup",type=Path); q.set_defaults(fn=cmd_restore)
     q=s.add_parser("inspect"); q.add_argument("workspace"); q.set_defaults(fn=cmd_inspect)
     q=s.add_parser("disable"); q.add_argument("workspace"); q.set_defaults(fn=cmd_disable)
+    q=s.add_parser("owner-privacy"); q.add_argument("--check",action="store_true"); q.add_argument("--backup-dir",type=Path); q.set_defaults(fn=cmd_owner_privacy)
     q=s.add_parser("doctor"); q.set_defaults(fn=cmd_doctor)
     q=s.add_parser("remove"); q.add_argument("workspace"); q.add_argument("--confirm",required=True); q.set_defaults(fn=cmd_remove)
     q=s.add_parser("grant"); q.add_argument("workspace"); q.add_argument("name"); q.add_argument("url"); q.set_defaults(fn=cmd_grant)
@@ -1206,7 +1316,11 @@ def main():
     q=s.add_parser("provider-policy"); q.add_argument("policy",choices=("grant","revoke")); q.add_argument("workspace"); q.set_defaults(fn=cmd_provider_policy)
     q=s.add_parser("provider-status"); q.set_defaults(fn=cmd_provider_status)
     q=s.add_parser("reapply"); q.add_argument("--t3-bin"); q.add_argument("--ttyd-bin"); q.add_argument("--tool-path"); q.add_argument("--grave-bin"); q.set_defaults(fn=cmd_reapply)
-    a=p.parse_args(); REGISTRY.parent.mkdir(parents=True,exist_ok=True)
+    a=p.parse_args()
+    if a.fn is cmd_owner_privacy:
+        with owner_privacy_lock(a.check): a.fn(a)
+        return
+    REGISTRY.parent.mkdir(parents=True,exist_ok=True)
     lock=REGISTRY.with_suffix(".lock")
     with lock.open("a") as f: fcntl.flock(f,fcntl.LOCK_EX); a.fn(a)
 if __name__ == "__main__":

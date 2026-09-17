@@ -2169,8 +2169,10 @@ cmd_backup() (
   if dkctl is-active --quiet docker; then
     local vol
     for vol in $(dk volume ls -q | grep -vE '^[0-9a-f]{64}$'); do
-      if dk run --rm -v "$vol":/data:ro -v "$dest/volumes":/backup alpine \
-           tar -czf "/backup/$vol.tar.gz" -C /data . \
+      # The owner opens the destination under the private backup umask.
+      # Docker only streams stdout; its root UID/umask must not own the file.
+      if dk run --rm -v "$vol":/data:ro alpine \
+           tar -czf - -C /data . >"$dest/volumes/$vol.tar.gz" \
          && tar -tzf "$dest/volumes/$vol.tar.gz" >/dev/null 2>&1; then
         ok "volume $vol (verified)"
       else
@@ -2277,9 +2279,13 @@ cmd_multiuser() {
       [[ "${1:-}" == --profile ]] && { profile="${2:?profile}"; shift 2; }
       local owner="${SUDO_USER:-$(stat -c %U "$GRAVE_ROOT")}" owner_home helper migration conf_backup
       owner_home=$(getent passwd "$owner" | cut -d: -f6); helper="$(dirname "$0")/grave-workspaces"
-      migration="$GRAVE_ROOT/backups/migration-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$migration"
-      conf_backup="$migration/grave.conf"; cp "$CONF" "$conf_backup"
-      tailscale serve get-config "$migration/serve.json" >/dev/null 2>&1 || true
+      "$0" __users owner-privacy
+      migration="$GRAVE_ROOT/backups/migration-$(date +%Y%m%d-%H%M%S)"
+      conf_backup="$migration/grave.conf"
+      # Keep rollback snapshots private without changing the umask inherited
+      # by migration/re-raise, which also create shared workspace parents.
+      (umask 077; mkdir -p "$migration"; cp "$CONF" "$conf_backup"
+        tailscale serve get-config "$migration/serve.json" >/dev/null 2>&1 || true)
       HOME="$owner_home" cmd_backup
       # Provider access is opt-in per workspace.  Preserve an existing shared
       # provider only when this appliance actually has a provider credential;
@@ -2888,6 +2894,7 @@ case "${1:-help}" in
               # This keeps later additions correct on /usr/local and immutable
               # Homebrew hosts where the old /usr/bin defaults do not exist.
               export GRAVE_ROOT
+              export GRAVE_MULTI_USER="$MULTI_USER" GRAVE_BACKUP_DIR="$BACKUP_DIR"
               export GRAVE_T3_BIN="$(command -v t3 2>/dev/null || true)"
               export GRAVE_TTYD_BIN="$(command -v ttyd 2>/dev/null || true)"
               export GRAVE_TOOL_PATH="${TOOL_PATH:-}"

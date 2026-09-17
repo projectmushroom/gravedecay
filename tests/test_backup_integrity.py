@@ -70,6 +70,30 @@ class BackupRecoveryTests(unittest.TestCase):
         self.assertEqual(result.returncode == 0, success, result.stdout + result.stderr)
         return result
 
+    def test_volume_stream_is_private_and_failed_producer_cannot_publish(self):
+        data=self.root/'volume-source'; data.mkdir(); (data/'dirty').write_text('database fixture')
+        self.env['TEST_VOLUME_SOURCE']=str(data)
+        (self.root/'tools/systemctl').write_text('#!/bin/sh\nexit 0\n')
+        docker=self.root/'tools/docker'
+        producer='''#!/bin/sh
+if [ "$*" = "volume ls -q" ]; then echo fixture-volume; exit 0; fi
+if [ "$1" != run ]; then exit 99; fi
+tar -czf - -C "$TEST_VOLUME_SOURCE" .
+'''
+        docker.write_text(producer)
+        backup=self.backup(); archive=backup/'volumes/fixture-volume.tar.gz'
+        self.assertEqual(archive.stat().st_uid,os.geteuid())
+        self.assertEqual(archive.stat().st_mode&0o777,0o600)
+        with tarfile.open(archive) as saved:
+            self.assertEqual(saved.extractfile('./dirty').read(),b'database fixture')
+        before=(self.backups/'.last-verified').read_bytes()
+        self.env['TEST_BACKUP_TS']='20260914-010101'
+        docker.write_text(producer+'exit 13\n')
+        self.grave('backup',success=False)
+        self.assertFalse((self.backups/self.env['TEST_BACKUP_TS']).exists())
+        self.assertEqual((self.backups/'.last-verified').read_bytes(),before)
+        self.assertTrue(backup.exists())
+
     def test_backup_roundtrip_verifies_without_original_repo(self):
         backup = self.backup()
         manifest = json.loads((backup / "manifest.json").read_text())

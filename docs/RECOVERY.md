@@ -63,7 +63,9 @@ freshness markers, and the run lock belong to the appliance owner, determined
 by `$GRAVE_ROOT` ownership. Doctor and the next owner-run backup retain access;
 workspace collaborators do not gain access.
 
-The nightly service continues to run as the appliance owner. For workspace data,
+The nightly service continues to run as the appliance owner. Docker volume
+archives stream from the container into a file opened by that owner with mode
+600, so container root ownership or umask cannot leak into backup artifacts. For workspace data,
 it opens the private destination and invokes the existing scoped root helper
 `grave __users backup-export`. That helper accepts no destination pathname and
 streams one archive on stdout. It holds the registry lock and launches a fresh
@@ -83,6 +85,16 @@ archive, an older backup without coverage, or a registry change requires a new
 `grave backup`. Disabled workspaces are included too. Existing private home
 permissions and group memberships are unchanged; collaborators cannot access
 the owner's backup directory.
+
+In multi-user mode, migration and reapply also repair existing backup directory
+and artifact permissions/ownership, including a custom `BACKUP_DIR`. To repair
+again, run `grave users owner-privacy`; `grave users owner-privacy --check` verifies
+without changes. Artifacts remain byte-for-byte unchanged, and the repair does
+not claim checksum verification or advance backup freshness. Unsafe links,
+foreign owners, or shared-writable directories require inspection; an active
+backup requires retrying after it finishes. Retained workspace homes under
+`backups/removed-workspaces` keep their root-private archive boundary and original
+UIDs. See [MULTIUSER.md](MULTIUSER.md#owner-data-and-existing-backups).
 
 After copying a backup, or before relying on it for recovery, run:
 

@@ -275,7 +275,17 @@ refreshing freshness. The locked registry snapshot travels with the data, and
 doctor checks current-registry coverage. Known credentials are excluded by default;
 explicit shared-provider recovery material is the only root-read secret in this
 export. Service capabilities are always excluded. See [recovery](RECOVERY.md).
-Owner privacy and legacy backup permissions remain tracked in #198.
+Multi-user migration and reapply close the exact owner-data directory gates:
+`repos`, `agents`, `worktrees`, `logs`, `config`, `docker`, and `backups` under
+`$GRAVE_ROOT` become owner-owned mode 700. Shared scripts, web assets and docs
+stay accessible. Original owner data is protected even when migration leaves it
+in place. Legacy backup artifacts (including a configured external `BACKUP_DIR`)
+are repaired through directory handles, rejecting symlinks, hardlinks, special
+files, unexpected owners and shared-writable directories. Retained collaborator
+homes stay behind their separate root-private gate and are never traversed or
+reowned. Doctor checks the same policy read-only; see
+[MULTIUSER.md](MULTIUSER.md#owner-data-and-existing-backups) for repair commands
+and scope. The remaining privileged-operation audit is tracked in #198.
 See [SECRETS.md](SECRETS.md#multi-user-workspaces) for rollout and file formats.
 
 ## The web terminal
