@@ -1796,7 +1796,11 @@ cmd_doctor() { # grave doctor [--no-page]
   fi
   if systemctl cat gravedecay-net.service >/dev/null 2>&1; then
     if systemctl is-active --quiet gravedecay-net; then
-      check "gravenet answering"         curl -sf -o /dev/null "http://127.0.0.1:${NET_PORT:-4714}/healthz"
+      if [[ "$MULTI_USER" == 1 ]]; then
+        check "gravenet answering through root probe" sudo -n "$0" __net-health
+      else
+        check "gravenet answering" curl -sf -o /dev/null "http://127.0.0.1:${NET_PORT:-4714}/healthz"
+      fi
     else
       say "  ${YLW}– gravenet stopped${RST}"
     fi
@@ -1877,12 +1881,13 @@ cmd_doctor() { # grave doctor [--no-page]
   if [[ "${MULTI_USER:-0}" == 1 ]]; then
     check "identity gateway loopback health" curl -sf -o /dev/null "http://127.0.0.1:${GATEWAY_PORT:-4710}/healthz"
     check "gateway capability is private" bash -c "[[ \$(stat -c %a '$GRAVE_ROOT/config/secrets/gateway-token') == 600 ]]"
-    check "gateway is the Serve origin" bash -c "tailscale serve status | grep -q '127.0.0.1:${GATEWAY_PORT:-4710}'"
+    check "gateway is the sole Serve origin" sudo -n "$0" __multiuser-serve-check
     check "Tailscale LocalAPI hidden from workspaces" bash -c "[[ \$(stat -c %a /run/tailscale/tailscaled.sock) == 660 ]]"
     check "multi-user loopback boundary active" systemctl is-active --quiet gravedecay-boundary.service
     check "multi-user loopback boundary enabled" systemctl is-enabled --quiet gravedecay-boundary.service
     check "identity gateway enabled" systemctl is-enabled --quiet gravedecay-gateway.service
     check "multi-user loopback boundary rules" sudo -n "$0" __boundary-status
+    check "network monitor requires multi-user boundary" bash -c "systemctl show -p Requires --value gravedecay-net.service | grep -qw gravedecay-boundary.service"
     check "legacy T3 disabled" legacy_t3_disabled
     check "legacy terminal disabled" legacy_terminal_disabled
   fi
@@ -1978,6 +1983,8 @@ cmd_boundary_apply() {
   [[ $EUID == 0 ]] || { bad "internal boundary helper requires root"; exit 1; }
   command -v nft >/dev/null || { bad "multi-user mode requires nftables; install nftables and rerun raise.sh"; exit 1; }
   nft list ruleset >/dev/null || { bad "nftables kernel enforcement is unavailable"; exit 1; }
+  [[ "${NET_PORT:-4714}" =~ ^[0-9]+$ ]] && (( ${NET_PORT:-4714} >= 1024 && ${NET_PORT:-4714} <= 65535 )) \
+    || { bad "unsafe network port"; exit 1; }
   local delete=""
   nft list table inet gravedecay >/dev/null 2>&1 && delete='delete table inet gravedecay'
   {
@@ -1987,6 +1994,7 @@ add table inet gravedecay
 add chain inet gravedecay output { type filter hook output priority filter; policy accept; }
 add rule inet gravedecay output meta skuid != 0 tcp dport { 4711-4713, 4810-5109 } reject
 EOF
+    printf 'add rule inet gravedecay output meta skuid != 0 tcp dport %s reject\n' "${NET_PORT:-4714}"
   } | nft -f -
   cmd_boundary_status
 }
@@ -1997,6 +2005,7 @@ cmd_boundary_status() {
   chain=$(nft list chain inet gravedecay output)
   grep -Fq 'type filter hook output priority filter; policy accept;' <<<"$chain"
   grep -Eq 'meta skuid != 0 tcp dport \{ 4711-4713, 4810-5109 \} reject' <<<"$chain"
+  grep -Eq "meta skuid != 0 tcp dport ${NET_PORT:-4714} reject" <<<"$chain"
 }
 
 cmd_boundary_remove() {
@@ -2306,7 +2315,7 @@ cmd_multiuser() {
       # sudo grant.  It may tee files under /etc/systemd/system, but cannot
       # create a new directory there, so create this root-owned drop-in
       # directory while the migration helper still has root authority.
-      install -d -m 755 -o root -g root /etc/systemd/system/gravedecay.service.d
+      cmd_multiuser_prepare
       if grep -q '^MULTI_USER=' "$CONF"; then sed -i 's/^MULTI_USER=.*/MULTI_USER=1/' "$CONF"; else printf '\nMULTI_USER=1\nGATEWAY_PORT=4710\n' >>"$CONF"; fi
       if sudo -u "$owner" -H env -u SUDO_USER -u SUDO_UID -u SUDO_GID USER="$owner" "$REPO_DIR/raise.sh" --profile "$profile"; then
         systemctl disable --now t3code gravedecay-term >/dev/null 2>&1 || true
@@ -2323,6 +2332,22 @@ cmd_multiuser() {
   esac
 }
 
+cmd_multiuser_prepare() {
+  [[ $EUID == 0 ]] || { bad "internal multi-user preparation requires root"; exit 1; }
+  install -d -m 755 -o root -g root /etc/systemd/system/gravedecay.service.d /etc/systemd/system/gravedecay-net.service.d
+}
+
+cmd_net_health() {
+  [[ $EUID == 0 ]] || { bad "internal network probe requires root"; exit 1; }
+  curl --max-time 5 -sf -o /dev/null "http://127.0.0.1:${NET_PORT:-4714}/healthz"
+}
+
+cmd_multiuser_serve_check() {
+  [[ $EUID == 0 && "$MULTI_USER" == 1 ]] || { bad "internal Serve check requires root and MULTI_USER=1"; exit 1; }
+  GRAVE_ROOT="$GRAVE_ROOT" GRAVE_GATEWAY_PORT="${GATEWAY_PORT:-4710}" \
+    python3 "$GRAVE_ROOT/scripts/gateway.py" --check-serve
+}
+
 cmd_multiuser_serve() {
   [[ $EUID == 0 && "${MULTI_USER:-0}" == 1 ]] || { bad "internal multi-user Serve helper requires root and MULTI_USER=1"; exit 1; }
   [[ "${GATEWAY_PORT:-}" =~ ^[0-9]+$ ]] && (( GATEWAY_PORT >= 1024 && GATEWAY_PORT <= 65535 )) \
@@ -2332,17 +2357,20 @@ cmd_multiuser_serve() {
   [[ ${#token} -ge 32 ]] || { bad "gateway capability missing"; exit 1; }
   # Serve paths are persistent: remove legacy mounts in the same root-owned
   # operation that reads the private capability and installs the sole origin.
-  tailscale serve --https=443 --set-path=/grave off >/dev/null 2>&1 || true
-  tailscale serve --https=443 --set-path=/term off  >/dev/null 2>&1 || true
+  local mount
+  for mount in /grave /grave/ /term /term/ /net /net/; do
+    tailscale serve --https=443 --set-path="$mount" off >/dev/null 2>&1 || true
+  done
   tailscale serve --bg --https=443 "http://127.0.0.1:$GATEWAY_PORT/_grave_proxy/$token" >/dev/null
+  cmd_multiuser_serve_check
 }
 
 cmd_multiuser_cleanup() {
   [[ $EUID == 0 ]] || { bad "internal multi-user cleanup requires root"; exit 1; }
   systemctl disable --now gravedecay-boundary.service >/dev/null 2>&1 || true
   cmd_boundary_remove
-  rm -f /etc/systemd/system/gravedecay.service.d/multiuser-boundary.conf
-  rmdir /etc/systemd/system/gravedecay.service.d 2>/dev/null || true
+  rm -f /etc/systemd/system/gravedecay.service.d/multiuser-boundary.conf /etc/systemd/system/gravedecay-net.service.d/multiuser-boundary.conf
+  rmdir /etc/systemd/system/gravedecay.service.d /etc/systemd/system/gravedecay-net.service.d 2>/dev/null || true
   systemctl daemon-reload
 }
 
@@ -2618,11 +2646,14 @@ cmd_uninstall() { # grave uninstall [--purge] [--yes] [--dry-run]
     && files+=(/etc/systemd/system/tailscaled.service.d/gravedecay-localapi.conf)
   [[ -e /etc/systemd/system/gravedecay.service.d/multiuser-boundary.conf ]] \
     && files+=(/etc/systemd/system/gravedecay.service.d/multiuser-boundary.conf)
+  [[ -e /etc/systemd/system/gravedecay-net.service.d/multiuser-boundary.conf ]] \
+    && files+=(/etc/systemd/system/gravedecay-net.service.d/multiuser-boundary.conf)
   ((${#files[@]})) && uninst_do "${#files[@]} unit file(s) removed from /etc/systemd/system" \
     sudo rm -f "${files[@]}"
   # The drop-in dir is ours only when empty — tailscaled may carry others.
   (( UNINSTALL_DRY )) || sudo rmdir /etc/systemd/system/tailscaled.service.d 2>/dev/null || true
   (( UNINSTALL_DRY )) || sudo rmdir /etc/systemd/system/gravedecay.service.d 2>/dev/null || true
+  (( UNINSTALL_DRY )) || sudo rmdir /etc/systemd/system/gravedecay-net.service.d 2>/dev/null || true
   uninst_do "systemd daemon reloaded" sudo systemctl daemon-reload
   (( UNINSTALL_DRY )) || sudo systemctl reset-failed 2>/dev/null || true
 
@@ -2838,7 +2869,10 @@ case "${1:-help}" in
   __boundary-apply) cmd_boundary_apply ;;
   __boundary-status) cmd_boundary_status ;;
   __boundary-remove) cmd_boundary_remove ;;
+  __multiuser-prepare) cmd_multiuser_prepare ;;
   __multiuser-serve) cmd_multiuser_serve ;;
+  __multiuser-serve-check) cmd_multiuser_serve_check ;;
+  __net-health) cmd_net_health ;;
   __multiuser-cleanup) cmd_multiuser_cleanup ;;
   __auto-thaw) shift || true; cmd_auto_thaw_root "$@" ;;
   status)     cmd_status ;;

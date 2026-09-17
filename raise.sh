@@ -555,6 +555,7 @@ fi
 if [[ -f /etc/gravedecay/grave.conf ]]; then
   MULTI_USER=$(. /etc/gravedecay/grave.conf >/dev/null 2>&1; printf '%s' "${MULTI_USER:-0}")
   GATEWAY_PORT=$(. /etc/gravedecay/grave.conf >/dev/null 2>&1; printf '%s' "${GATEWAY_PORT:-4710}")
+  NET_PORT=$(. /etc/gravedecay/grave.conf >/dev/null 2>&1; printf '%s' "${NET_PORT:-4714}")
 fi
 
 # In multi-user mode loopback is a shared network.  Establish this root-owned
@@ -576,9 +577,10 @@ if [[ "${MULTI_USER:-0}" == 1 ]]; then
   done
   sed -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" -e "s|@GRAVE_BIN@|$GRAVE_BIN|g" \
     "$REPO_DIR/systemd/gravedecay-boundary.service.tmpl" | install_unit gravedecay-boundary.service
-  [[ -d /etc/systemd/system/gravedecay.service.d ]] || sudo mkdir -p /etc/systemd/system/gravedecay.service.d
+  sudo -n "$GRAVE_BIN" __multiuser-prepare
   sed -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" "$REPO_DIR/systemd/gravedecay-multiuser-boundary.conf.tmpl" \
     | install_unit gravedecay.service.d/multiuser-boundary.conf
+  install_unit gravedecay-net.service.d/multiuser-boundary.conf <"$REPO_DIR/systemd/gravedecay-net-boundary.conf.tmpl"
   sudo systemctl daemon-reload
   sudo systemctl enable gravedecay-boundary.service >/dev/null
   sudo systemctl restart gravedecay-boundary.service
@@ -720,6 +722,7 @@ fi
 # Multi-user front door is installed only when explicitly enabled in grave.conf.
 if [[ "${MULTI_USER:-0}" == 1 ]]; then
   sed -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" -e "s|@PYTHON@|$PYTHON_BIN|g" \
+      -e "s|@NET_PORT@|$NET_PORT|g" -e "s|@GATEWAY_PORT@|$GATEWAY_PORT|g" \
       "$REPO_DIR/systemd/gravedecay-gateway.service.tmpl" \
     | install_unit gravedecay-gateway.service
   for template in gravedecay-t3@ gravedecay-term@ gravedecay-dashboard@; do
@@ -871,7 +874,16 @@ sed -e "s|@PYTHON@|$PYTHON_BIN|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
     "$REPO_DIR/systemd/gravedecay-net.service.tmpl" | install_unit gravedecay-net.service
 sudo systemctl daemon-reload
 enable_restart gravedecay-net
-wait_http "http://127.0.0.1:$NET_PORT/healthz" "gravenet answering on :$NET_PORT"
+if [[ "${MULTI_USER:-0}" == 1 ]]; then
+  net_ready=0
+  for _ in {1..40}; do
+    sudo -n "$GRAVE_BIN" __net-health && { net_ready=1; break; }
+    sleep 1
+  done
+  (( net_ready )) || { echo "gravenet root health probe failed" >&2; exit 1; }
+else
+  wait_http "http://127.0.0.1:$NET_PORT/healthz" "gravenet answering on :$NET_PORT"
+fi
 
 # Nightly verified backup (#112). Installed and enabled on every box: an
 # always-on appliance holding the repos must not depend on a human remembering
@@ -1082,7 +1094,7 @@ EOF
   sudo systemctl daemon-reload
   if [[ "${MULTI_USER:-0}" == 1 ]]; then
     # Serve config is persistent and per-path. A box migrated single-user→multi-user
-    # still has /grave→owner-dashboard and /term→owner-ttyd mounts from the earlier
+    # still has /grave, /term and /net direct mounts from the earlier
     # raise; remove them so the identity gateway (root mount below) is the ONLY
     # origin — otherwise workspace users reach owner-level backends unproxied. Only
     # touches :443 paths, so `grave preview` tunnels on their own ports survive.

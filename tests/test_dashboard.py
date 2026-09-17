@@ -345,8 +345,9 @@ class DashboardContractTests(unittest.TestCase):
         # identity gateway; the multi-user branch must remove them.
         self.assertIn("__multiuser-serve", ritual)
         serve = (ROOT / "bin/grave").read_text()
-        self.assertIn("--set-path=/grave off", serve)
-        self.assertIn("--set-path=/term off", serve)
+        self.assertIn("for mount in /grave /grave/ /term /term/ /net /net/", serve)
+        self.assertIn('--set-path="$mount" off', serve)
+        self.assertIn("cmd_multiuser_serve_check", serve)
         # Regression #51: the gateway reads workspaces.json, created by
         # `__users reapply`, so it must start AFTER reapply.
         reapply = ritual.find("__users reapply")

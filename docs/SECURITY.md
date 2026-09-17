@@ -288,6 +288,14 @@ reowned. Doctor checks the same policy read-only; see
 and scope. The remaining privileged-operation audit is tracked in #198.
 See [SECRETS.md](SECRETS.md#multi-user-workspaces) for rollout and file formats.
 
+In multi-user mode the network monitor is administrator-only. The gateway checks
+the enabled workspace identity and role for the entire `/net` path subtree,
+including its event stream. Port 4714 (or configured `NET_PORT`) joins the root-only
+nftables boundary, and the network service requires that boundary at boot. Migration
+removes stale direct Serve mounts; doctor checks the exact single gateway handler
+on port 443, not merely the presence of a gateway URL. Preview ports remain
+independent. See [MULTIUSER.md](MULTIUSER.md#network-monitor-access).
+
 ## The web terminal
 
 The following shared-terminal behavior applies only to default single-user
