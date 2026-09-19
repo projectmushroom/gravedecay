@@ -23,7 +23,7 @@ the bell (waiting on a prompt), platform units failing, a failing
 1. Install the PWA from `https://<box>.<tailnet>.ts.net/grave/` (iOS: Share →
    Add to Home Screen — push requires iOS 16.4+ and the *installed* app, not
    the Safari tab).
-2. In the app: ⚙️ settings → **Notifications** → **🔔 enable**, and accept the
+2. In the app: System → **Notifications** → **🔔 enable**, and accept the
    permission prompt.
 3. **📣 send test**. Repeat step 2 on each device (they all appear in the
    device list; ✕ removes one).
@@ -39,7 +39,7 @@ Web Push alone is a complete setup, and **nothing here needs an account**
 ntfy only if you want notifications on a device without the PWA, on a watch,
 or consumed by scripts. Pick a **random, unguessable topic** (the topic name
 *is* the capability — anyone who knows it can read and publish; see Security)
-and either paste it into ⚙️ settings → Notifications → **advanced: ntfy
+and either paste it into System → Notifications → **advanced: ntfy
 relay**, or put it in the secret store by hand:
 
 ```sh
@@ -67,7 +67,7 @@ The digest embeds a full doctor run with the doctor page suppressed
 (`grave doctor --no-page`), so a contract that broke overnight arrives as one
 notification, not two. Preview it any time with `grave digest --print`.
 
-Mute a class with the checkboxes in ⚙️ settings → Notifications (written to
+Mute a class with the checkboxes in System → Notifications (written to
 `$GRAVE_ROOT/config/notify-events`, which overrides `NOTIFY_EVENTS` in
 grave.conf — the dashboard runs unprivileged, so a preference flip must not
 need sudo). Muting all event classes leaves `grave notify` available for

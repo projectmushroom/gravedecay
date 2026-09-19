@@ -25,6 +25,7 @@ async function expectPanelsContainContent(page, label) {
         : [];
       const paintedPastEdge = [...panel.querySelectorAll('td, .tile, pre')]
         .filter(el => {
+          if (!el.getClientRects().length) return false;
           const rect = el.getBoundingClientRect();
           return rect.right > panelRect.right + 1 || rect.left < panelRect.left - 1;
         })
@@ -83,6 +84,7 @@ test.beforeEach(async ({ page }) => {
 
 test('work and system dashboards fit the installed-app viewport', async ({ page }) => {
   await renderLongMobileRecords(page);
+  await page.evaluate(()=>document.querySelectorAll('[data-panel]').forEach(p=>setPanelExpanded(p.dataset.panel,true)));
   await expectNoHorizontalOverflow(page, 'work tab');
   await expectPanelsContainContent(page, 'work panels clip their rendered records');
   await page.locator('[data-tab="system"]').click();
@@ -93,7 +95,8 @@ test('work and system dashboards fit the installed-app viewport', async ({ page 
 });
 
 test('settings and narrow data records remain usable', async ({ page }) => {
-  await page.locator('#gear').click();
+  await page.locator('[data-tab=system]').click();
+  await page.locator('[data-settings=connections]').click();
   await expect(page.locator('#settings-panel')).toBeVisible();
   await expectNoHorizontalOverflow(page, 'settings dialog');
   const close = page.locator('#settings-x');
@@ -121,13 +124,15 @@ test('macOS renders its local work tab and repository-root setting', async ({ pa
   });
   await page.locator('[data-tab="work"]').click();
   await expect(page.locator('[data-panel="prs"]')).toBeVisible();
+  await page.locator('[data-panel=prs] .panel-toggle').click();
   await expect(page.locator('#prs')).toContainText('An open pull request');
   await expect(page.locator('#prs')).toContainText('An open issue');
   await expect(page.locator('[data-panel="repos"]')).toContainText('a-private-repository');
   expect(await page.locator('[data-panel]').evaluateAll(panels => panels
     .filter(panel => getComputedStyle(panel).display !== 'none')
     .map(panel => panel.dataset.panel).sort())).toEqual(['ci', 'linear', 'prs', 'repos', 't3activity']);
-  await page.locator('#gear').click();
+  await page.locator('[data-tab=system]').click();
+  await page.locator('[data-settings=connections]').click();
   await expect(page.locator('#set-repo-root')).toBeVisible();
   await expect(page.locator('#set-linear')).toBeVisible();
 });
@@ -151,8 +156,9 @@ test('portable workspace stays on its work plane and preserves gateway URLs', as
     render(state);
   });
   await expect(page.locator('body')).toHaveClass(/portable/);
-  await expect(page.locator('[data-tab="work"]')).toHaveClass(/active/);
-  await expect(page.locator('[data-tab="system"]')).toBeHidden();
+  await expect(page.locator('[data-tab="system"]')).toHaveText('Preferences');
+  await expect(page.locator('[data-settings=dashboard]')).toBeVisible();
+  await page.locator('[data-tab=work]').click();
   for (const panel of ['stats', 'actions', 'services', 'docker', 'journal']) {
     await expect(page.locator(`[data-panel="${panel}"]`)).toBeHidden();
   }
@@ -161,7 +167,8 @@ test('portable workspace stays on its work plane and preserves gateway URLs', as
   await expect(page.locator('#apps a').filter({ hasText: 'Terminal' })).toHaveAttribute('href', '/term/?arg=shell');
   expect(await page.locator('#apps a').filter({ hasText: 'Terminal' }).evaluate(a =>
     new URL(a.href).port === location.port)).toBe(true);
-  await page.locator('#gear').click();
+  await page.locator('[data-tab=system]').click();
+  await page.locator('[data-settings=connections]').click();
   expect(await page.locator('.t3connect-only').evaluateAll(rows =>
     rows.every(row => getComputedStyle(row).display === 'none'))).toBe(true);
   await expect(page.locator('#notify-head')).toBeHidden();
@@ -180,14 +187,16 @@ test('gamewatch off presents a dev-only UI and can be opted back in', async ({ p
   await expect(page.locator('[data-act="gaming"]')).toBeHidden();
   await expect(page.locator('[data-act="developer"]')).toBeHidden();
 
-  await page.locator('#gear').click();
+  await page.locator('[data-tab=system]').click();
+  await page.locator('[data-settings=connections]').click();
+  await page.locator('#settings-x').click();
+  await page.locator('[data-settings=machine]').click();
   await expect(page.locator('#throttle-row')).toBeVisible();
   await expect(page.locator('#boot-mode-row')).toBeHidden();
 
   await page.evaluate(() => applyGamewatch({ installed: true, on: true, running: true }));
   await expect(page.locator('#mode')).toBeVisible();
   await expect(page.locator('#boot-mode-row')).toBeVisible();
-  await page.locator('#settings-x').click();
   await expect(page.locator('[data-act="gaming"]')).toBeVisible();
   await expect(page.locator('[data-act="developer"]')).toBeVisible();
 });
@@ -241,7 +250,7 @@ async function mockUpdater(page, {mac=false,native=false}={}) {
   return fixture;
 }
 
-test('main dashboard offers the latest release and Settings keeps release selection',async({page})=>{
+test('main dashboard offers the latest release and System keeps release selection',async({page})=>{
   const fixture=await mockUpdater(page);
   await page.locator('#update-close').click();
   await expect(page.locator('#update-notice')).toContainText('v0.5.0');
@@ -249,15 +258,16 @@ test('main dashboard offers the latest release and Settings keeps release select
   await expect.poll(()=>fixture.requests).toEqual([{tag:'v0.5.0'}]);
 });
 
-test('native Mac dashboard can update remotely and exposes other releases from Settings',async({page})=>{
+test('native Mac dashboard can update remotely and exposes other releases from System',async({page})=>{
   const fixture=await mockUpdater(page,{mac:true,native:true});
   await expect(page.locator('#native-release-help')).toContainText('Mac app');
   await page.locator('#update-close').click();
-  await page.locator('#gear').click();
-  await page.locator('#settings-update-open').click();
+  await page.locator('[data-tab=system]').click();
+  await page.locator('[data-settings=connections]').click();
+  await page.locator('#settings-x').click();
+  await page.locator('#update-open').click();
   await expect(page.locator('#grave-release')).toBeVisible();
   await page.locator('#update-close').click();
-  await page.locator('#settings-x').click();
   await page.locator('#quick-update').click();
   await expect.poll(()=>fixture.requests).toEqual([{tag:'v0.5.0'}]);
 });
@@ -396,6 +406,7 @@ test('Linear dispatch chooses a repository and opens the created session', async
   });
   await page.reload();
   await page.evaluate(async () => render(await (await fetch('api/state')).json()));
+  await page.locator('[data-panel=linear] .panel-toggle').click();
   await page.getByRole('button', { name: 'Work on this', exact: true }).click();
   await expect(page.locator('#dispatch-issue')).toHaveText('GRV-108 — <script>literal issue title</script>');
   await expect(page.locator('#dispatch-issue script')).toHaveCount(0);
@@ -428,9 +439,11 @@ test('dispatch failures remain actionable and PR links appear beside issue sessi
     json: { ok: false, output: 'Could not fetch this issue from Linear; nothing started.' } }));
   await page.reload();
   await page.evaluate(async () => render(await (await fetch('api/state')).json()));
+  await page.locator('[data-panel=tmux] .panel-toggle').click();
   await expect(page.locator('#tmux').getByRole('link', { name: /PR #19/ })).toBeVisible();
   await expect(page.locator('#tmux')).toContainText('exited (0)');
   await expectPanelsContainContent(page, 'dispatch session and PR fit');
+  await page.locator('[data-panel=linear] .panel-toggle').click();
   await page.getByRole('button', { name: 'Work on this', exact: true }).click();
   await page.locator('#dispatch-repo').selectOption('project');
   await page.locator('#dispatch-start').click();
@@ -452,6 +465,7 @@ test('overnight reports escape output and cancel a scheduled job', async ({ page
   await page.reload();
   await page.evaluate(async()=>render(await(await fetch('api/state')).json()));
   await expect(page.locator('[data-panel="scheduled"]')).toBeVisible();
+  await page.locator('[data-panel=scheduled] .panel-toggle').click();
   await page.locator('#scheduled summary').click();
   await expect(page.locator('#scheduled pre')).toHaveText('<script>literal output</script>');
   await expect(page.locator('#scheduled script')).toHaveCount(0);

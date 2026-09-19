@@ -1,6 +1,6 @@
 # Development benchmark
 
-Open the dashboard's **System → Development benchmark** panel and press
+Open the dashboard's **System → Development benchmark** summary, expand it, and press
 **Run benchmark**, or use the installed CLI:
 
 ```sh

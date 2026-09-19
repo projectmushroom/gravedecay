@@ -1746,6 +1746,7 @@ cmd_doctor() { # grave doctor [--no-page]
   fi
   if systemctl is-active --quiet gravedecay; then
     check "dashboard refuses framing" dashboard_frame_policy_ok
+    check "dashboard mobile navigation installed" dashboard_layout_ok
     if [[ "${MULTI_USER:-0}" == 1 ]]; then
       check "gravedecay maintenance health" sudo -n "$0" __dashboard-health
       check "dashboard summary API contract" dashboard_summary_ok
@@ -1961,6 +1962,14 @@ browsers_image_ok() {
 }
 dashboard_summary_ok() { dashboard_probe summary | jq -e '.product == "gravedecay" and .api_version == 1' >/dev/null; }
 dashboard_build_ok() { [[ "$(sha256sum "$GRAVE_ROOT/scripts/gravedecay.py" | cut -d' ' -f1)" == "$(dashboard_probe health | jq -r .build)" ]]; }
+# Navigation is required even for portable workspaces (Preferences replaces
+# System there). The shell hash check separately detects a stale running process.
+dashboard_layout_ok() {
+  local shell="$GRAVE_ROOT/scripts/dashboard-static/index.html"
+  grep -q 'data-dashboard-layout="2"' "$shell" &&
+    grep -q 'aria-label="Dashboard"' "$shell" &&
+    grep -q 'id="configuration"' "$shell"
+}
 dashboard_shell_ok() { [[ "$(sha256sum "$GRAVE_ROOT/scripts/dashboard-static/index.html" | cut -d' ' -f1)" == "$(dashboard_probe health | jq -r .shell)" ]]; }
 dashboard_manifest_ok() { dashboard_probe manifest | grep -q '"scope": "/"'; }
 dashboard_sw_ok() { dashboard_probe sw | grep -qi '^Service-Worker-Allowed: /'; }

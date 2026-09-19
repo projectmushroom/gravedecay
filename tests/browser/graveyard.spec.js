@@ -146,7 +146,7 @@ test('T3 setup opens pairing controls without minting a token', async ({ page })
   await expect(pair).toBeInViewport();
   await expect(pair).toBeFocused();
   await expect(page.locator('#t3-setup')).toContainText('Set up T3 ·');
-  await expect(page.locator('#settings-title')).toContainText('Settings ·');
+  await expect(page.locator('#settings-title')).toContainText('Connections & integrations ·');
   expect(actions).toBe(0);
   expect(new URL(page.url()).hash).toBe('');
   await pair.click();

@@ -371,7 +371,7 @@ permission model — it runs as your user and can touch anything your user owns
 
 ## Agent "skip-perms" (⚡) tiles
 
-⚙️ settings can flip the Claude/Codex launcher tiles into ⚡ **skip-perms**
+System → Dashboard preferences can flip the Claude/Codex launcher tiles into ⚡ **skip-perms**
 mode: they open a `*-yolo` web-terminal session that runs the agent with all
 gates off (`claude --dangerously-skip-permissions` /
 `codex --dangerously-bypass-approvals-and-sandbox`) — no per-command approval,

@@ -159,9 +159,9 @@ if MACOS and "GRAVEDECAY_APPS" not in os.environ:
 # exactly like actions). Stored beside the other appliance config.
 SETTINGS_PATH = os.path.join(GRAVE_ROOT, "config", "gravedecay-settings.json")
 DEFAULT_SETTINGS = {
-    "panel_order": ["prs", "linear", "ci", "t3activity", "tmux", "scheduled", "sessions", "usage",
-                    "inbox", "repos",
-                    "stats", "benchmark", "actions", "services", "docker", "journal"],
+    "panel_order": ["t3activity", "tmux", "prs", "linear", "ci", "repos", "usage",
+                    "scheduled", "sessions", "inbox", "stats", "services", "docker",
+                    "journal", "actions", "benchmark"],
     "hidden_panels": [],   # panel ids to hide
     "hidden_apps": [],     # launcher tile names to hide
     "newtab_apps": [],     # tile names that open in a new tab instead of in-PWA

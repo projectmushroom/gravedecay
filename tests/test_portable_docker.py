@@ -61,7 +61,7 @@ class PortableDockerContractTests(unittest.TestCase):
         self.assertEqual(state["docker"]["error"], "not managed by portable workspace")
         self.assertIsNone(dash.settings_response({})["notify"])
         shell = (ROOT / "dashboard/static/index.html").read_text()
-        self.assertIn("activeTab='work'", shell)
+        self.assertIn("portableCompanion?'Preferences':'📟 System'", shell)
         self.assertIn("!live&&!portableCompanion", shell)
         self.assertIn("body.portable .t3connect-only", shell)
         self.assertIn("body.portable #notify-head", shell)
