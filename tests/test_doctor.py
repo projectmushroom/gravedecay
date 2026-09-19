@@ -51,6 +51,20 @@ class DoctorContractTests(unittest.TestCase):
         self.assertIn("dashboard-static/index.html", GRAVE)
         self.assertIn("jq -r .shell", GRAVE)
 
+    def test_mobile_navigation_check_rejects_incomplete_installs(self):
+        function = re.search(r"dashboard_layout_ok\(\) \{.*?^\}", GRAVE, re.S | re.M).group(0)
+        current = (ROOT / "dashboard/static/index.html").read_text()
+        with tempfile.TemporaryDirectory() as directory:
+            shell = pathlib.Path(directory) / "scripts/dashboard-static/index.html"
+            shell.parent.mkdir(parents=True)
+            def check(content):
+                shell.write_text(content)
+                return subprocess.run(["bash", "-c", function + '\nGRAVE_ROOT="$1"; dashboard_layout_ok',
+                                       "check", directory], capture_output=True).returncode
+            self.assertEqual(check(current), 0)
+            self.assertNotEqual(check(current.replace('id="configuration"', 'id="legacy-settings"')), 0)
+            self.assertNotEqual(check(current.replace('aria-label="Dashboard"', 'aria-label="Legacy"')), 0)
+
     def test_doctor_compares_the_worker_stamp_to_the_installed_offline_page(self):
         # sw.js embeds a digest of offline.html in its cache name; a mismatch
         # means installed PWAs still pre-cache an outdated offline page.

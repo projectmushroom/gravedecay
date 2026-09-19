@@ -35,6 +35,7 @@ test('benchmark runs, reconnects, cancels and exports on mobile', async ({ page 
   });
   await page.goto('./?tab=system');
   await expect(page.locator('#bench-run')).toBeEnabled();
+  await page.locator('[data-panel=benchmark] .panel-toggle').click();
   await page.locator('#bench-mode').selectOption('capacity');
   await page.locator('#bench-run').click();
   await expect(page.locator('#bench-progress')).toBeVisible();

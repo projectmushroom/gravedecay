@@ -159,7 +159,7 @@ Two routes; most setups use both:
 account as the box, toggle the VPN on (the #1 "it's broken" cause is that
 it's off), then open `https://<box>.<tailnet>.ts.net/grave/` and add it to
 your Home Screen/Dock — everything on the box is one tap from that PWA. To
-use T3's web UI, mint a pairing token from ⚙️ settings on any paired device
+use T3's web UI, mint a pairing token from System → Connections & integrations on any paired device
 and open the printed `/pair` link on the new one.
 
 **Route B — the official T3 apps** ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824) ·
@@ -177,8 +177,9 @@ as a PWA. **Work tab:** PRs, Linear issues, CI status, agent token spend,
 live agent sessions, repo state. **System tab:** vitals, services, docker,
 journal errors, one-tap updates with a release picker. **Launcher tiles** for
 T3, terminal, Claude, Codex, GitHub, and a built-in file manager jailed to
-`$GRAVE_ROOT`. **⚙️ Settings:** widgets and tiles, pairing tokens, re-auth
-flows, T3 Connect, notifications.
+`$GRAVE_ROOT`. **System → Configuration:** widgets and tiles, pairing tokens, re-auth
+flows, T3 Connect, notifications. Sections show compact summaries with expandable
+details; see [Dashboard layout](docs/DASHBOARD.md).
 
 **Web terminal** (`/term/`) — ttyd + xterm.js attached to the same
 `tmux -L agents` socket as SSH: close the tab, the session lives on; browser,

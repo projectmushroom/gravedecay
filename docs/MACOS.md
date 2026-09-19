@@ -83,7 +83,7 @@ Still no `sudo`, ever: two more user LaunchAgents run T3 Code on
 `127.0.0.1:4711` (`io.gravedecay.t3`) and ttyd on `127.0.0.1:4713`
 (`io.gravedecay.term`), and Serve adds `/` and `/term` so the origin layout
 matches the appliance — the PWA, the native client, and pairing links work
-unchanged. Pairing works exactly like Linux: ⚙️ settings → "🔑 New T3 pairing
+unchanged. Pairing works exactly like Linux: System → Connections & integrations → "🔑 New T3 pairing
 token". The dashboard's sessions panel lists `tmux -L agents` sessions, ✕
 kills them, and the launcher grows T3/Terminal/Claude/Codex tiles; every
 reopened endpoint stays behind the exact-`LoginName` `ALLOWED_USERS` gate the
@@ -122,7 +122,7 @@ The web dashboard serves fresh Mac metrics, repository/GitHub/Linear work
 views, Graveyard discovery and benchmarks. Its private web settings live in
 `~/Library/Application Support/Gravedecay/NativeHost`; existing classic data
 and native UI Keychain preferences are not silently migrated. Configure web
-work integrations in the web dashboard's Settings.
+work integrations in the web dashboard's System → Connections & integrations.
 
 Sign into Tailscale, start the host, then run the commands provided by **Copy
 Publish Commands** once:
@@ -156,7 +156,7 @@ running the classic installer. Use one host implementation at a time.
 
 App updates use Sparkle to verify and replace the complete app bundle. The
 native sidebar and web dashboard show an **Update now** action when a newer
-compatible release is available. Settings retains release selection. After
+compatible release is available. System → Updates & restart retains web dashboard release selection. After
 confirmation, the update downloads, restarts the app, and restores hosting;
 phones briefly disconnect and then reload the new dashboard. A phone-triggered
 update does not wait for another confirmation on the host Mac. Only the owner

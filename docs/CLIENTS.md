@@ -13,7 +13,7 @@ over the same origins and never require new listening ports on the box.
   clients for the *T3 half* of the appliance and usually the nicest way to
   drive agents from a phone. Two ways to hook them up:
   1. **Pairing token over the tailnet** — Tailscale on the device, then
-     ⚙️ settings → 🔑 New T3 pairing token, same as any browser. No Connect
+     System → Connections & integrations → 🔑 New T3 pairing token, same as any browser. No Connect
      account needed.
   2. **T3 Connect** — `grave t3 connect publish` (notifications/Live
      Activities while transport stays the tailnet) or `full` (managed relay,
@@ -23,7 +23,7 @@ over the same origins and never require new listening ports on the box.
   files, terminal, gravenet) stays on the tailnet origin / PWA.
   A Mac raised with the agents layer (`macos/install.sh --agents`,
   docs/MACOS.md) serves the same origin layout (`/` → T3, `/term` →
-  terminal), so pairing tokens minted from its ⚙️ settings enroll phones and
+  terminal), so pairing tokens minted from System → Connections & integrations enroll phones and
   the official apps exactly like an appliance.
 
 - **iOS / macOS** — `clients/apple/`. iOS uses webview panes for T3 and the

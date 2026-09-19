@@ -345,11 +345,10 @@ body:not(.macos) .mac-only-setting{display:none!important}
 body.macos [data-panel="actions"] .actions{display:none!important}
 #update-notice{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px;margin:10px 0;border:1px solid var(--amber)}
 #update-notice[hidden]{display:none}
-body.portable #settings-update-open{display:none!important}
 /* Portable workspaces intentionally cannot observe or control their Docker host. */
 body.portable [data-panel="benchmark"],body.portable [data-panel="stats"],body.portable [data-panel="actions"],body.portable [data-panel="services"],
 body.portable [data-panel="docker"],body.portable [data-panel="journal"],body.portable #game-banner,
-body.portable #mode,body.portable .tabs,body.portable #keepalive-head,body.portable #keepalive-row,
+body.portable #mode,body.portable #keepalive-head,body.portable #keepalive-row,
 body.portable #boot-mode-head,body.portable #boot-mode-row,body.portable #throttle-head,
 body.portable #throttle-row,body.portable .t3connect-only,body.portable #notify-head,
 body.portable #sec-notify{display:none!important}
@@ -396,29 +395,77 @@ body.portable #sec-notify{display:none!important}
 }
 .os-logo{width:1.15em;height:1.15em;display:inline-block;vertical-align:-.18em;fill:currentColor;flex-shrink:0}
 body.public-view > :not(.topbar):not(#connection):not(#public-status):not(script){display:none!important}
-body.public-view #gear,body.public-view #mode{display:none!important}
+body.public-view #graveyard-toggle,body.public-view #mode{display:none!important}
 #public-status{max-width:640px;margin:24px auto;padding:20px;border:1px solid var(--ring);border-radius:12px}
 #public-status h2{margin-bottom:12px}
 #public-resources{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:20px 0}
 #public-resources dt{color:var(--dim)}
 #public-resources dd{margin:4px 0 0}
-</style></head><body>
+
+/* Mobile information hierarchy. Expansion belongs to this device and origin. */
+.topbar{gap:8px;padding-top:calc(8px + env(safe-area-inset-top));padding-bottom:8px;margin-bottom:12px}
+.topbar #graveyard-toggle{flex:1;min-width:0;width:auto;margin:0;border:0;padding:0;background:transparent;gap:8px}
+.topbar .meta{flex:0 1 auto;font-size:11px}.graveyard-label{font-size:10px}
+#launcher{display:flex;gap:8px;margin-bottom:16px;align-items:stretch;flex-wrap:wrap}
+#launcher .apps{flex:1 1 240px;margin:0;grid-template-columns:repeat(2,minmax(0,1fr))}
+#apps>[hidden],#apps-more[hidden],.panel-body[hidden],#configuration[hidden],.config-link[hidden],[data-settings-section][hidden]{display:none!important}
+#apps-more{flex:0 0 auto;font-size:12px;padding:8px}
+body[data-view="system"] #launcher,body[data-view="system"] #attention{display:none}
+#attention{border-left:3px solid var(--warn);padding:8px 10px;margin-bottom:16px;background:var(--surface)}
+#attention[hidden]{display:none}#attention h2{font-size:12px;color:var(--warn)}
+#attention button{border:0;text-align:left;display:block;width:100%;padding:8px 0;font-size:12px}
+#panels{gap:10px 12px;align-items:start}.group-heading{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin:12px 0 0}
+.panel{padding:0;scroll-margin-top:90px;overflow:hidden}
+.panel h2{position:static;max-width:none;background:transparent;white-space:normal;padding:0;overflow:visible;font-size:13px;letter-spacing:0;text-transform:none}
+.panel-toggle{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;width:100%;border:0;text-align:left;padding:12px;min-height:64px;font-size:13px;color:var(--ink)}
+.panel-toggle:hover{background:var(--inset);color:var(--ink)}
+.panel-summary{grid-column:1/-1;display:block;font-size:12px;font-weight:400;color:var(--muted);overflow-wrap:anywhere}
+.summary-warning{color:var(--warn)}.panel-chevron{color:var(--accent)}
+.panel.expanded .panel-chevron{transform:rotate(180deg)}
+.panel-body{padding:0 12px 12px}.panel-body .tiles{margin-top:8px}
+.benchmark-live:has(>[hidden]):not(:has(>:not([hidden]))){display:none}
+.benchmark-live{padding:0 12px}.benchmark-live p:empty{display:none}
+.benchmark-live button{margin:8px 0}.benchmark-live progress{margin-top:8px}
+.config-link{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 10px;text-align:left;width:100%;margin-top:8px;padding:12px}
+.config-link strong{font-size:13px}.config-link>span:first-of-type{grid-column:1;font-size:12px;color:var(--muted);font-weight:400}
+.config-link>span:last-child{grid-column:2;grid-row:1/3;align-self:center;color:var(--accent)}
+.config-link:hover{background:var(--inset);color:var(--ink)}
+#settings-title{padding-right:44px}#settings-scope{margin-bottom:18px}
+#settings-panel .dlg{max-width:620px}#settings-panel input:not([type="checkbox"]),#settings-panel select{font-size:16px;min-height:44px}
+#settings-panel .mini,.tab,.xbtn,.sec-toggle{min-height:44px}.xbtn{width:44px;height:44px}
+.sec-toggle{display:flex;align-items:center;text-align:left;width:100%;padding:8px 0}
+.settings-footer{padding-bottom:env(safe-area-inset-bottom)}
+.panel.preview .panel-body tr:nth-child(n+4){display:none!important}
+.panel-more{margin-top:8px}
+@media(pointer:coarse){.kill,.capture{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px}.panel-body .mini{min-height:44px}}
+body.portable [data-layout-group="Health"],body.portable [data-layout-group="Maintenance"]{display:none}
+body.gaming .tabs{display:flex}body.gaming[data-view="system"] #panels>#configuration{display:block!important}
+body.gaming[data-view="system"] #panels>[data-panel="actions"]{display:block!important}
+@media(max-width:760px){
+  body{padding-bottom:calc(80px + env(safe-area-inset-bottom))}
+  .tabs{position:fixed;bottom:0;left:0;right:0;z-index:105;background:var(--page);margin:0;border-top:1px solid var(--ring);padding:8px max(8px,env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) max(8px,env(safe-area-inset-left))}
+  .tab{min-height:44px}#panels{grid-template-columns:1fr}
+  #settings-panel{padding:0;padding-top:env(safe-area-inset-top);background:var(--page)}
+  #settings-panel .dlg{margin:0;border:0;min-height:100%;max-width:none;padding:16px max(12px,env(safe-area-inset-right)) 16px max(12px,env(safe-area-inset-left))}
+}
+@media(min-width:761px){#configuration{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}#configuration h2{grid-column:1/-1}}
+
+</style></head><body data-dashboard-layout="2">
 @OS_LOGOS@
 <div id="topcover"></div>
 <div class="topbar">
   <img id="toplogo" src="icon-180.png?v=@ICON@" alt="">
-  <h1>gravedecay</h1>
+<button id="graveyard-toggle" aria-haspopup="dialog" aria-controls="graveyard-dialog" aria-expanded="false">
+  <span class="graveyard-current"><span class="graveyard-label">gravedecay<span id="graveyard-count"></span></span>
+    <span id="plot-context" aria-label="Current appliance">@HOST@</span></span>
+  <span class="graveyard-switch" aria-hidden="true">▾</span>
+</button>
   <span class="meta" id="meta">connecting…</span>
   <span class="badge" id="mode" role="button" title="Tap to switch mode" style="display:none;cursor:pointer">…</span>
-  <button class="gear" id="gear" title="Settings" aria-label="Settings">⚙️</button>
+
 </div>
 <div id="connection" role="status" aria-live="polite"><span id="connection-text"></span>
   <button id="connection-retry">↻ retry</button></div>
-<button id="graveyard-toggle" aria-haspopup="dialog" aria-controls="graveyard-dialog" aria-expanded="false">
-  <span class="graveyard-current"><span class="graveyard-label">🪦 Graveyard<span id="graveyard-count"></span></span>
-    <span id="plot-context" aria-label="Current appliance">@HOST@</span></span>
-  <span class="graveyard-switch">Switch ▾</span>
-</button>
 <dialog class="dlg" id="graveyard-dialog" aria-labelledby="graveyard-title">
   <div class="graveyard-heading">
     <h2 id="graveyard-title">🪦 Graveyard</h2>
@@ -446,22 +493,24 @@ body.public-view #gear,body.public-view #mode{display:none!important}
   <dl id="public-resources"></dl>
   <p class="dim">Owner access is required for apps, projects, settings, and controls.</p>
 </section>
-<div class="apps" id="apps"></div>
+<section id="launcher" aria-label="Quick launch"><div class="apps" id="apps"></div><button id="apps-more" aria-expanded="false">More apps</button></section>
+<section id="attention" aria-label="Needs attention" hidden></section>
 <div id="game-banner">
   <h2>🎮 G A M E &nbsp; M O D E</h2>
   <div class="dim2" id="torpor-line"></div>
   <button id="wake">💻 Wake the dev stack</button>
 </div>
-<div class="tabs">
+<nav class="tabs" aria-label="Dashboard">
   <button class="tab" data-tab="work">🛠️ Work</button>
   <button class="tab" data-tab="system">📟 System</button>
-</div>
+</nav>
 <div class="overlay" id="settings-panel" style="display:none">
- <div class="dlg">
-  <button class="mini xbtn" id="settings-x" title="close (Esc)" aria-label="close"
-    style="position:absolute;top:10px;right:10px;z-index:2">✕</button>
+ <div class="dlg" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+  <button class="mini xbtn" id="settings-x" title="close (Esc)" aria-label="Back to dashboard"
+    style="position:absolute;top:10px;right:10px;z-index:2">←</button>
   <h2 id="settings-title" style="color:var(--ink);font-size:15px;margin-bottom:10px">⚙️ Settings</h2>
-  <button id="settings-update-open">⬆ Updates &amp; release selection…</button>
+  <p id="settings-scope" class="dim"></p>
+  <div data-settings-section="dashboard">
 
   <div class="sethead sec-toggle" data-sec="sec-apps">▸ Launcher tiles — 👁 show · ⚡ skip-perms · ▢ modal · ↗ new tab</div>
   <div id="sec-apps" style="display:none">
@@ -477,6 +526,12 @@ body.public-view #gear,body.public-view #mode{display:none!important}
   <div id="sec-widgets" style="display:none">
     <div id="set-widgets"></div>
   </div>
+
+  </div><div data-settings-section="machine">
+    <div class="actions">
+      <button data-act="gaming" data-gaming-control style="display:none">🎮 Gaming mode</button>
+      <button data-act="developer" data-gaming-control style="display:none">💻 Developer mode</button>
+    </div>
 
   <div class="sethead" id="boot-mode-head" style="display:none">Boot mode — what a reboot starts</div>
   <div class="setrow" id="boot-mode-row" style="display:none">
@@ -499,6 +554,7 @@ body.public-view #gear,body.public-view #mode{display:none!important}
     <span class="setlabel dim2" id="keepalive-state"></span>
   </div>
 
+  </div><div data-settings-section="connections">
   <div class="sethead mac-linux-setting macagents-setting" id="t3-setup">Set up T3 on this plot</div>
   <div class="setrow mac-linux-setting macagents-setting"><p class="dim">Create a pairing link, then open it in the official T3 app or paste it into Add environment. Repeat for each plot you want to code on. Keep Tailscale connected on both devices.</p></div>
   <div class="setrow mac-linux-setting macagents-setting">
@@ -530,7 +586,8 @@ body.public-view #gear,body.public-view #mode{display:none!important}
     <input id="set-repo-root" placeholder="/Users/you/Sites" size="32">
   </div>
 
-  <div class="sethead sec-toggle mac-linux-setting" id="notify-head" data-sec="sec-notify">▸ Notifications — 🔔 push &amp; ntfy</div>
+  </div><div data-settings-section="notifications">
+  <div class="sethead mac-linux-setting" id="notify-head" data-sec="sec-notify">Notifications — push &amp; ntfy</div>
   <div id="sec-notify" class="mac-linux-setting" style="display:none">
     <div class="setrow"><span class="setlabel">🔔 push to this device <span class="dim2" id="push-support"></span></span>
       <button class="mini" id="push-enable">enable</button>
@@ -555,6 +612,7 @@ body.public-view #gear,body.public-view #mode{display:none!important}
     </div>
   </div>
 
+  </div><div data-settings-section="dashboard">
   <div class="sethead">Refresh</div>
   <div class="setrow"><span class="setlabel">poll interval</span>
     <select id="set-poll">
@@ -563,9 +621,10 @@ body.public-view #gear,body.public-view #mode{display:none!important}
     </select>
   </div>
 
-  <div class="setrow" style="position:sticky;bottom:0;background:var(--inset);padding-top:8px">
+  </div>
+  <div class="setrow settings-footer" style="position:sticky;bottom:0;background:var(--inset);padding-top:8px">
     <button id="save-set">💾 Save</button>
-    <button id="close-set">Close</button><span id="set-msg" class="setlabel"></span></div>
+    <button id="close-set">Back</button><span id="set-msg" class="setlabel"></span></div>
  </div>
 </div>
 <div class="overlay" id="dispatch-dlg" style="display:none">
@@ -690,13 +749,13 @@ body.public-view #gear,body.public-view #mode{display:none!important}
       <button class="mini" id="add-linear">➕</button></div>
   </div>
   <div class="panel" data-panel="usage"><h2>🧾 Agent usage</h2><table id="usage"></table></div>
-  <div class="panel" data-panel="tmux"><h2>🤖 Agent sessions — tap to open</h2><table id="tmux"></table></div>
+  <div class="panel" data-panel="tmux"><h2>🤖 Terminal sessions</h2><table id="tmux"></table><button id="kill-open">End sessions…</button></div>
   <div class="panel" data-panel="t3activity"><h2>🛰️ T3 activity</h2><table id="t3activity"><tr><td class="dim">not configured</td></tr></table></div>
   <div class="panel" data-panel="scheduled"><h2>🌙 Overnight report</h2><div id="scheduled"></div></div>
   <div class="panel" data-panel="sessions"><h2>📜 Session history</h2><table id="sessions"></table></div>
   <div class="panel" data-panel="inbox"><h2>🔔 Inbox — pages this box sent</h2><div id="inbox"></div></div>
   <div class="panel" data-panel="repos"><h2>📦 Repos</h2><table id="repos"></table></div>
-  <div class="tiles w-full" data-panel="stats" id="tiles"></div>
+  <div class="panel w-full" data-panel="stats"><h2>Resources</h2><div class="tiles" id="tiles"></div></div>
   <div class="panel w-full" data-panel="benchmark">
     <h2>⏱ Development benchmark</h2>
     <p class="dim">Compare this grave’s local Git, build and test speed. Uses a disposable sample project; no downloads or AI calls.</p>
@@ -716,18 +775,19 @@ body.public-view #gear,body.public-view #mode{display:none!important}
     <p id="bench-state" role="status" aria-live="polite">Loading benchmark status…</p>
     <div id="bench-result"></div>
   </div>
-  <div class="panel w-full" data-panel="actions"><h2>🕹️ Actions</h2>
-    <div class="actions">
-      <button data-act="gaming" data-gaming-control style="display:none">🎮 Gaming mode</button>
-      <button data-act="developer" data-gaming-control style="display:none">💻 Developer mode</button>
-      <button data-act="doctor">🩺 Run doctor</button>
-      <button id="kill-open">🗡️ Kill sessions…</button>
-    </div>
+  <div class="panel w-full" data-panel="actions"><h2>Updates &amp; restart</h2>
     <button id="update-open">⬆ Updates &amp; restart…</button>
   </div>
   <div class="panel" data-panel="services"><h2>⚙️ Services</h2><table id="services"></table></div>
   <div class="panel" data-panel="docker"><h2>🐳 Docker</h2><table id="docker"></table></div>
-  <div class="panel w-full" data-panel="journal"><h2>📋 Journal errors (24 h)</h2><pre id="journal"></pre></div>
+  <div class="panel w-full" data-panel="journal"><h2>Diagnostics</h2><button data-act="doctor">🩺 Run doctor</button><p class="dim">Journal errors · past 24 hours</p><pre id="journal"></pre></div>
+  <section id="configuration" class="w-full" aria-label="Configuration">
+    <h2 class="group-heading">Configuration</h2>
+    <button class="config-link" data-settings="connections"><strong>Connections &amp; integrations</strong><span id="connections-summary">T3, providers &amp; Linear</span><span aria-hidden="true">›</span></button>
+    <button class="config-link" data-settings="notifications"><strong>Notifications</strong><span id="notifications-summary">Push to this device &amp; event delivery</span><span aria-hidden="true">›</span></button>
+    <button class="config-link" data-settings="machine"><strong>Machine behavior</strong><span id="machine-summary">Gaming, boot mode &amp; keepalive</span><span aria-hidden="true">›</span></button>
+    <button class="config-link" data-settings="dashboard"><strong>Dashboard preferences</strong><span>Launcher, widgets &amp; refresh</span><span aria-hidden="true">›</span></button>
+  </section>
 </div>
 <dialog class="dlg" id="update-dialog" aria-labelledby="update-title">
   <button class="mini xbtn" id="update-close" aria-label="Close updates">✕</button>
@@ -981,8 +1041,8 @@ const agentArg=u=>{const m=/[?&]arg=(claude|codex)(?=$|&)/.exec(u||'');return m?
 const PANEL_NAMES={scheduled:'Overnight report',prs:'Pull requests',ci:'CI status',
   linear:'Linear issues',usage:'Agent usage',tmux:'Agent sessions',t3activity:'T3 activity',repos:'Repos',
   sessions:'Session history',inbox:'Inbox',
-  stats:'Stats tiles',benchmark:'Development benchmark',actions:'Actions',services:'Services',docker:'Docker',
-  journal:'Journal errors'};
+  stats:'Resources',benchmark:'Development benchmark',actions:'Updates & restart',services:'Services',docker:'Docker',
+  journal:'Diagnostics'};
 const PANEL_TABS={scheduled:'work',prs:'work',ci:'work',linear:'work',usage:'work',
   tmux:'work',t3activity:'work',repos:'work',sessions:'work',inbox:'work',
   stats:'system',benchmark:'system',actions:'system',services:'system',docker:'system',journal:'system'};
@@ -1052,24 +1112,164 @@ let scrollInput=0;
 {const qp=new URLSearchParams(location.search).get('tab');
  if(qp==='work'||qp==='system')activeTab=qp;}
 function allApps(){return envApps.concat(cfg&&cfg.custom_apps||[])}
-function applyLayout(){
-  const c=$('panels'),order=(cfg.panel_order||[]).slice();
-  Object.keys(PANEL_NAMES).forEach(k=>{if(!order.includes(k))order.push(k)});
-  order.forEach(id=>{
-    const el=document.querySelector(`[data-panel="${id}"]`);
-    if(!el)return;
-    el.style.display=(cfg.hidden_panels.includes(id)||(PANEL_TABS[id]||'system')!==activeTab)
-      ?'none':'';
-    c.appendChild(el);
-  });
-  document.querySelectorAll('.tab').forEach(t=>
-    t.classList.toggle('active',t.dataset.tab===activeTab));
+const PANEL_GROUPS={t3activity:'Active work',tmux:'Active work',prs:'Work queue',linear:'Work queue',ci:'Work queue',
+  repos:'Repositories & usage',usage:'Repositories & usage',scheduled:'Recent activity',sessions:'Recent activity',inbox:'Recent activity',
+  stats:'Health',services:'Health',docker:'Health',journal:'Health',actions:'Maintenance',benchmark:'Maintenance'};
+const DEFAULT_PANEL_ORDER=['t3activity','tmux','prs','linear','ci','repos','usage','scheduled','sessions','inbox',
+  'stats','services','docker','journal','actions','benchmark'];
+const OLD_PANEL_ORDER=['prs','linear','ci','t3activity','tmux','scheduled','sessions','usage','inbox','repos',
+  'stats','benchmark','actions','services','docker','journal'];
+const panelStorageKey='grave-panels-v2:'+location.pathname;
+let expandedPanels={};
+try{const saved=JSON.parse(localStorage.getItem(panelStorageKey)||'{}');if(saved&&typeof saved==='object'&&!Array.isArray(saved))expandedPanels=saved;}catch(_){}
+const defaultExpanded=new Set(['t3activity','tmux']);
+const initialPanelData=new Set();
+function activePreview(id,count){
+  const panel=document.querySelector(`[data-panel="${id}"]`);
+  if(!initialPanelData.has(id)){
+    initialPanelData.add(id);
+    if(!Object.hasOwn(expandedPanels,id)){setPanelExpanded(id,count>0,false);panel.classList.add('preview');}
+  }
+  const more=panel.querySelector('.panel-more');
+  if(more){more.hidden=count<=3||!panel.classList.contains('preview');more.textContent=`Show all (${count})`;}
 }
-document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
-  activeTab=t.dataset.tab;localStorage.setItem('grave-tab',activeTab);
-  if(cfg)applyLayout();
+function setPanelExpanded(id,open,remember=true){
+  const panel=document.querySelector(`[data-panel="${id}"]`);if(!panel)return;
+  panel.classList.toggle('expanded',open);
+  panel.querySelector('.panel-toggle')?.setAttribute('aria-expanded',String(open));
+  const body=panel.querySelector('.panel-body');if(body)body.hidden=!open;
+  if(remember){panel.classList.remove('preview');panel.querySelector('.panel-more')?.setAttribute('hidden','');expandedPanels[id]=open;try{localStorage.setItem(panelStorageKey,JSON.stringify(expandedPanels));}catch(_){}}
+}
+const counted=(n,singular,plural=singular+'s')=>`${n} ${n===1?singular:plural}`;
+function panelSummary(id,text,warning=false){
+  const el=$('summary-'+id);if(!el)return;
+  el.textContent=text;el.classList.toggle('summary-warning',!!warning);
+}
+function initializePanels(){
+  document.querySelectorAll('#panels > [data-panel]').forEach(panel=>{
+    const id=panel.dataset.panel,title=panel.querySelector('h2');
+    const body=document.createElement('div');body.className='panel-body';body.id='detail-'+id;
+    while(title.nextSibling)body.appendChild(title.nextSibling);
+    const toggle=document.createElement('button');toggle.className='panel-toggle';
+    toggle.setAttribute('aria-controls',body.id);toggle.setAttribute('aria-expanded','false');
+    toggle.innerHTML=`<span>${title.innerHTML}</span><span class="panel-chevron" aria-hidden="true">▾</span><span class="panel-summary" id="summary-${id}">Loading…</span>`;
+    title.replaceChildren(toggle);panel.appendChild(body);
+    if(defaultExpanded.has(id)){const more=document.createElement('button');more.className='panel-more';more.hidden=true;more.onclick=()=>setPanelExpanded(id,true);body.appendChild(more);}
+    toggle.onclick=()=>setPanelExpanded(id,toggle.getAttribute('aria-expanded')!=='true');
+    setPanelExpanded(id,typeof expandedPanels[id]==='boolean'?expandedPanels[id]:defaultExpanded.has(id),false);
+  });
+  // A running benchmark remains controllable with its report closed.
+  const live=document.createElement('div');live.className='benchmark-live';
+  const benchmark=document.querySelector('[data-panel="benchmark"]');
+  ['bench-state','bench-progress','bench-cancel'].forEach(id=>live.appendChild($(id)));
+  benchmark.insertBefore(live,benchmark.querySelector('.panel-body'));
+  // Updates are a destination, not another accordion around a single button.
+  const updates=document.querySelector('[data-panel="actions"]');
+  updates.querySelector('.panel-toggle').onclick=()=>openUpdates();
+  updates.querySelector('.panel-toggle').removeAttribute('aria-expanded');
+  updates.querySelector('.panel-toggle').removeAttribute('aria-controls');
+  updates.querySelector('.panel-chevron').textContent='›';
+  $('update-open').remove();updates.querySelector('.panel-toggle').id='update-open';
+}
+let attentionPanel=null;
+function applyLayout(){
+  const c=$('panels');
+  let order=(cfg.panel_order||[]).slice();
+  if(JSON.stringify(order)===JSON.stringify(OLD_PANEL_ORDER))order=DEFAULT_PANEL_ORDER.slice();
+  DEFAULT_PANEL_ORDER.forEach(k=>{if(!order.includes(k))order.push(k)});
+  c.querySelectorAll('[data-layout-group]').forEach(el=>el.remove());
+  const groups=[...new Set(DEFAULT_PANEL_ORDER.map(id=>PANEL_GROUPS[id]))];
+  for(const group of groups){
+    let heading=null;
+    for(const id of order.filter(id=>PANEL_GROUPS[id]===group)){
+      const el=document.querySelector(`[data-panel="${id}"]`);if(!el)continue;
+      el.style.display=((cfg.hidden_panels.includes(id)&&id!==attentionPanel)||PANEL_TABS[id]!==activeTab)?'none':'';
+      c.appendChild(el);
+      if(getComputedStyle(el).display!=='none'){
+        if(!heading){heading=document.createElement('h2');heading.className='group-heading w-full';heading.dataset.layoutGroup=group;heading.textContent=group;c.insertBefore(heading,el);}
+      }
+    }
+  }
+  c.appendChild($('configuration'));
+  $('configuration').hidden=activeTab!=='system';
+  document.body.dataset.view=activeTab;
+  document.querySelectorAll('.tab').forEach(t=>{
+    const selected=t.dataset.tab===activeTab;t.classList.toggle('active',selected);
+    if(selected)t.setAttribute('aria-current','page');else t.removeAttribute('aria-current');
+  });
+}
+function selectTab(tab){
+  attentionPanel=null;activeTab=tab;
+  try{localStorage.setItem('grave-tab',activeTab);}catch(_){}
+  if(cfg){layoutKey='';applyLayout();}
+  const url=new URL(location.href);url.searchParams.set('tab',tab);history.replaceState(null,'',url);
+  window.scrollTo(0,0);
   if(activeTab==='system'&&!portableCompanion)pollBenchmark();
-});
+}
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>selectTab(t.dataset.tab));
+let appsExpanded=false;
+$('apps-more').onclick=()=>{appsExpanded=!appsExpanded;updateLauncher();};
+function updateLauncher(){
+  const apps=[...$('apps').children];
+  const preferred=apps.filter(a=>a.textContent.includes('T3 Code')||a.textContent.includes('Terminal'));
+  const quick=[...new Set([...preferred,...apps])].slice(0,2);
+  quick.forEach((a,i)=>a.style.order=i);
+  apps.forEach(a=>{a.hidden=!appsExpanded&&!quick.includes(a);if(!quick.includes(a))a.style.order=2;});
+  $('apps-more').hidden=apps.length<=2;
+  $('apps-more').textContent=appsExpanded?'Fewer apps':`More apps (${apps.length-2})`;
+  $('apps-more').setAttribute('aria-expanded',String(appsExpanded));
+}
+function renderOverview(s){
+  updateLauncher();
+  activePreview('tmux',(s.tmux||[]).length);
+  $('kill-open').hidden=!(s.tmux||[]).length;
+  const gh=s.github||{},prs=gh.prs||[],ci=s.ci||{},li=s.linear||{},scheduled=s.scheduled||{};
+  const failedCI=(ci.rows||[]).filter(r=>r.status==='completed'&&['failure','timed_out','action_required','startup_failure'].includes(r.conclusion));
+  const reviews=prs.filter(p=>p.mine);
+  const failedRuns=(scheduled.runs||[]).filter(r=>r.status==='failed');
+  const notices=[];
+  if(reviews.length)notices.push(['prs',`${counted(reviews.length,'review')} requested`]);
+  if(failedCI.length)notices.push(['ci',`${failedCI.length} failed CI runs`]);
+  if(failedRuns.length)notices.push(['scheduled',`${failedRuns.length} failed overnight runs`]);
+  const services=s.services||[],containers=s.docker?.containers||[];
+  const failedServices=services.filter(u=>u.active==='failed');
+  if(failedServices.length)notices.push(['services',`${failedServices.length} failed services`]);
+  $('attention').hidden=!notices.length;
+  $('attention').innerHTML=notices.length?'<h2>Needs attention</h2>'+notices.map(([id,label])=>`<button data-attention="${id}">${esc(label)} <span aria-hidden="true">›</span></button>`).join(''):'';
+  $('attention').querySelectorAll('button').forEach(b=>b.onclick=()=>{
+    selectTab(PANEL_TABS[b.dataset.attention]);
+    attentionPanel=b.dataset.attention;applyLayout();
+    const panel=document.querySelector(`[data-panel="${b.dataset.attention}"]`);
+    panel.style.display='';setPanelExpanded(b.dataset.attention,true);
+    panel.scrollIntoView({block:'start'});panel.querySelector('.panel-toggle').focus({preventScroll:true});
+  });
+  const prCount=macosCompanion?(gh.repos||[]).reduce((n,g)=>n+(g.prs||[]).length+(g.issues||[]).length,0):prs.length;
+  panelSummary('prs',gh.error||`${prCount} open ${macosCompanion?'PRs & issues':'pull requests'}${reviews.length?` · ${counted(reviews.length,'review')} requested`:''}`,!!gh.error||reviews.length);
+  panelSummary('linear',!li.configured?'Not connected':li.error||`${(li.issues||[]).length} assigned to you`,!!li.error);
+  panelSummary('ci',ci.error||`${counted((ci.rows||[]).length,'recent run')} · ${failedCI.length} failed`,!!ci.error||failedCI.length);
+  panelSummary('tmux',`${(s.tmux||[]).length} terminal sessions · tap a session to resume`);
+  panelSummary('repos',s.repo_scan?.error||`${counted((s.repos||[]).length,'repository','repositories')} · ${(s.repos||[]).filter(r=>r.dirty).length} with local changes`,!!s.repo_scan?.error);
+  panelSummary('sessions',`${(s.agent_history||[]).length} saved sessions`);
+  const recent=(scheduled.runs||[])[0];
+  panelSummary('scheduled',scheduled.error||`${(scheduled.jobs||[]).filter(j=>j.enabled).length} scheduled${recent?` · latest: ${recent.name} ${recent.status}`:' · no reports yet'}`,!!scheduled.error||failedRuns.length);
+  panelSummary('inbox',`${(s.inbox||[]).length} notifications${s.inbox?.[0]?` · ${s.inbox[0].title}`:''}`);
+  const limits=s.usage?.codex_limits;
+  panelSummary('usage',Number.isFinite(limits?.primary?.pct)?`Codex window ${limits.primary.pct}% used${Number.isFinite(limits.secondary?.pct)?` · weekly ${limits.secondary.pct}%`:''}`:s.usage?'Recent agent usage · details available':'Usage unavailable',limits?.primary?.pct>=90||limits?.secondary?.pct>=90);
+  const sys=s.system,percent=n=>Number.isFinite(n)?Math.round(n)+'%':'unavailable';
+  const memory=macosCompanion?sys.mem?.pressure_pct:sys.mem?.pct;
+  const disk=Math.max(...(sys.disks||[]).map(d=>d.pct));
+  panelSummary('stats',`CPU ${percent(sys.cpu?.pct)} · ${macosCompanion?'memory pressure':'RAM'} ${percent(memory)} · disk ${percent(disk)}`,memory>=90||disk>=90);
+  panelSummary('services',`${services.filter(u=>u.active==='active').length}/${services.length} active · ${failedServices.length} failed`,failedServices.length);
+  const unhealthy=containers.filter(c=>c.state!=='running'||/unhealthy/.test(c.status));
+  panelSummary('docker',s.docker?.error||`${containers.length} containers · ${unhealthy.length} need attention`,!!s.docker?.error||unhealthy.length);
+  panelSummary('journal',(s.journal||[]).length?`${s.journal.length} journal lines · past 24 hours`:'No journal errors · run doctor for a full check',(s.journal||[]).length);
+  panelSummary('actions',latestGraveRelease?`${latestGraveRelease} available`:'Check releases & restart controls');
+  $('connections-summary').textContent=`Linear ${li.configured?'connected':'not connected'}${portableCompanion?'':' · T3 & provider setup'}`;
+  $('notifications-summary').textContent=notifyInfo?`${notifyInfo.push?.devices?.length||0} push devices · ${notifyInfo.ntfy?'relay configured':'no relay'}`:'Not configured';
+  $('machine-summary').textContent=`${s.gamewatch?.on?'Gaming features on':'Developer mode'} · keepalive ${s.keepalive?.on?'on':'off'}`;
+  document.querySelector('[data-settings="notifications"]').hidden=!s.notify||macosCompanion||portableCompanion;
+  document.querySelector('[data-settings="machine"]').hidden=macosCompanion||portableCompanion;
+}
 let benchBusy=false,benchChecked=0,benchLatest=null,benchRunning=false;
 function renderBenchmark(b){
   benchRunning=b.state==='running'||b.state==='cancelling';
@@ -1078,11 +1278,13 @@ function renderBenchmark(b){
   $('bench-cancel').hidden=!benchRunning;
   $('bench-progress').hidden=!benchRunning;
   $('bench-progress').value=b.progress||0;
-  $('bench-state').textContent=b.message||'Ready — choose a workload and run it.';
+  $('bench-state').textContent=b.message||'';
+  $('bench-state').hidden=!benchRunning&&!['failed','cancelled','error'].includes(b.state);
   if(b.elapsed_s&&benchRunning)$('bench-state').textContent+=` · ${Math.round(b.elapsed_s)}s`;
   if(b.latest)benchLatest=b.latest;
   const r=benchLatest;
   $('bench-export').hidden=!r;
+  panelSummary('benchmark',r?`Score ${r.score} · ${r.mode} · measured ${new Date(r.measured_at*1000).toLocaleDateString()}`:'Not run yet');
   if(!r)return;
   const e=r.environment,sec=n=>Number(n).toFixed(2),single=r.single;
   $('bench-result').innerHTML=`
@@ -1105,7 +1307,7 @@ async function pollBenchmark(force=false){
     const response=await fetch('api/admin/benchmark',{cache:'no-store'}),b=await response.json();
     if(!response.ok)throw new Error(b.output||b.error||`HTTP ${response.status}`);
     renderBenchmark(b);
-  }catch(e){$('bench-state').textContent=e.message;$('bench-run').disabled=true;}
+  }catch(e){$('bench-state').hidden=false;$('bench-state').textContent=e.message;$('bench-run').disabled=true;}
   finally{benchBusy=false;}
 }
 async function benchmarkAction(action){
@@ -1115,7 +1317,7 @@ async function benchmarkAction(action){
     const response=await fetch('api/admin/benchmark',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),b=await response.json();
     if(!response.ok)throw new Error(b.output||b.error||`HTTP ${response.status}`);
     renderBenchmark(b);
-  }catch(e){$('bench-state').textContent=e.message;}
+  }catch(e){$('bench-state').hidden=false;$('bench-state').textContent=e.message;}
   finally{$('bench-cancel').disabled=false;benchChecked=0;}
 }
 $('bench-run').onclick=()=>benchmarkAction('start');
@@ -1211,7 +1413,7 @@ async function openUpdates(){
   await updateStatus();
 }
 $('update-open').onclick=openUpdates;
-$('settings-update-open').onclick=openUpdates;
+
 $('update-options').onclick=openUpdates;
 $('quick-update').onclick=()=>applyGraveUpdate(latestGraveRelease);
 $('update-close').onclick=()=>$('update-dialog').close();
@@ -1322,7 +1524,8 @@ function render(s){
   $('plot-context').style.color=plotAccent(location.hostname);
   $('t3-setup').textContent=`Set up T3 · ${s.host}`;
   $('t3-setup').style.color=plotAccent(location.hostname);
-  $('settings-title').innerHTML=`Settings · ${plotIcon(s)} ${esc(s.host)}`;
+  settingsHost=s.host;settingsIcon=plotIcon(s);
+  $('settings-title').innerHTML=esc(SETTINGS_TITLES[settingsSection])+' · '+settingsIcon+' '+esc(settingsHost);
   $('settings-title').style.color=plotAccent(location.hostname);
   openT3Setup();
   $('update-title').innerHTML=`Updates & restart · ${plotIcon(s)} ${esc(s.host)} · ${esc(location.hostname)}`;
@@ -1337,10 +1540,8 @@ function render(s){
       else if(result){sessionStorage.removeItem('grave-update-result');$('update-dialog').showModal();lockBody();loadGraveReleases();$('grave-release-state').textContent=result;}
     }catch(_){}
   }
-  if(portableCompanion&&activeTab!=='work'){
-    activeTab='work';localStorage.setItem('grave-tab',activeTab);
-  }
-  $('prs-heading').textContent=macosCompanion?'🐙 GitHub — open work':'🔀 Pull requests';
+  document.querySelector('[data-tab=system]').textContent=portableCompanion?'Preferences':'📟 System';
+  $('prs-heading').querySelector('.panel-toggle > span').textContent=macosCompanion?'🐙 GitHub — open work':'🔀 Pull requests';
   document.body.classList.toggle('gaming',s.mode==='gaming');
   $('game-banner').style.display=s.mode==='gaming'?'block':'none';
   if(s.mode==='gaming')
@@ -1432,11 +1633,13 @@ function render(s){
     :'<tr><td class="dim">no agent sessions — use the Terminal/Claude/Codex tiles</td></tr>';
   const scheduled=s.scheduled||{available:false,jobs:[],runs:[]};
   const report=$('scheduled');
+  const openReports=new Set([...report.querySelectorAll('details[open][data-report]')].map(el=>el.dataset.report));
   report.closest('[data-panel]').hidden=!scheduled.available;
   report.innerHTML=(scheduled.error?`<p>${esc(scheduled.error)}</p>`:'')+
     (scheduled.jobs||[]).map(j=>`<div class="setrow" style="flex-wrap:wrap"><span class="setlabel">${esc(j.name)} · ${esc(j.schedule||'once')} · ${j.enabled?(j.next_due?'next '+esc(new Date(j.next_due*1000).toLocaleString()):'complete'):'cancelled'}</span>${j.enabled?`<button class="mini" data-job-cancel="${esc(j.name)}">Cancel job</button>`:''}</div>`).join('')+
-    (scheduled.runs||[]).map(r=>`<details style="margin-top:10px"><summary>${esc(r.name)} · ${esc(r.status)}${r.exit_code!=null?' (exit '+esc(String(r.exit_code))+')':''} · ${esc(new Date(r.started*1000).toLocaleString())}</summary><p class="dim">${esc(r.reason||r.repo||'')}</p>${r.session&&r.log?`<a class="viewlog" href="#" data-log="${esc(r.session)}" data-file="${esc(r.log)}">Transcript</a> · <a href="${esc(appUrl('/term/?arg='+encodeURIComponent(r.session)))}">Open worktree</a>`:''}<pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto">${esc(r.tail||'No output recorded.')}</pre></details>`).join('')+
+    (scheduled.runs||[]).map(r=>`<details data-report="${esc(r.name+'-'+r.started)}" style="margin-top:10px"><summary>${esc(r.name)} · ${esc(r.status)}${r.exit_code!=null?' (exit '+esc(String(r.exit_code))+')':''} · ${esc(new Date(r.started*1000).toLocaleString())}</summary><p class="dim">${esc(r.reason||r.repo||'')}</p>${r.session&&r.log?`<a class="viewlog" href="#" data-log="${esc(r.session)}" data-file="${esc(r.log)}">Transcript</a> · <a href="${esc(appUrl('/term/?arg='+encodeURIComponent(r.session)))}">Open worktree</a>`:''}<pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto">${esc(r.tail||'No output recorded.')}</pre></details>`).join('')+
     (!(scheduled.jobs||[]).length?'<p class="dim">No scheduled jobs yet. Add one with grave agents run.</p>':'');
+  report.querySelectorAll('[data-report]').forEach(el=>el.open=openReports.has(el.dataset.report));
   report.querySelectorAll('[data-job-cancel]').forEach(button=>button.onclick=async()=>{
     button.disabled=true;
     try{
@@ -1460,7 +1663,7 @@ function render(s){
       <a href="${esc(appUrl(n.link))}">${n.delivered?'':'⚠️ '}${esc(n.title)}</a>
       <span class="dim" style="float:right">${esc(n.when)}</span>
       <div class="dim2" style="white-space:pre-wrap;font-size:12px">${esc(n.body)}</div></div>`).join('')
-    :'<div class="dim">no pages yet — enable notifications in ⚙️ settings</div>';
+    :'<div class="dim">no pages yet — configure Notifications in System</div>';
   const repoScan=s.repo_scan||{};
   if(macosCompanion){
     const repoRows=(s.repos||[]).map(r=>`<tr>
@@ -1535,7 +1738,7 @@ function render(s){
   const li=s.linear||{};
   linearConfigured=!!li.configured;
   $('linear').innerHTML=!li.configured
-    ? '<tr><td class="dim">add a Linear API key in ⚙️ settings</td></tr>'
+    ? '<tr><td class="dim"><button class="mini" data-configure-linear>Connect Linear</button></td></tr>'
     : li.error?`<tr><td class="dim">${esc(li.error)}</td></tr>`
     : ((li.issues||[]).slice(0,5).map(i=>`<tr>
         <td><a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.id)}</a></td>
@@ -1543,7 +1746,9 @@ function render(s){
         <td class="dim">${esc(i.state)}</td></tr>`).join('')
        +moreRow(5,(li.issues||[]).length,li.more_url)
        ||'<tr><td class="dim">nothing assigned 🎉</td></tr>');
+  document.querySelector('[data-configure-linear]')?.addEventListener('click',()=>openSettings('connections'));
   refreshDispatchPRs();
+  renderOverview(s);
   if(window.scrollX!==scrollX||window.scrollY!==scrollY)
     window.scrollTo(scrollX,scrollY);
   requestAnimationFrame(()=>{
@@ -1562,9 +1767,12 @@ async function poll(){
 }
 function renderT3Activity(a){
   const table=$('t3activity'),rows=a.threads||[];
+  activePreview('t3activity',rows.length);
   if(a.status!=='ok'&&a.status!=='stale'){
+    panelSummary('t3activity',`T3 ${a.status||'unreachable'}`,a.status!=='unconfigured');
     table.innerHTML=`<tr><td class="dim">T3 ${esc(a.status||'unreachable')}</td></tr>`;return;
   }
+  panelSummary('t3activity',`${counted(rows.length,'thread')} · ${a.status==='stale'?'snapshot stale':'latest activity'}`,a.status==='stale');
   table.innerHTML=rows.map(x=>{
     const plan=x.plan?` · ${esc(x.plan.step)} (${esc(String(x.plan.completed))}/${esc(String(x.plan.total))})`:'';
     const live=x.liveness?` · ${esc(x.liveness)}`:'';
@@ -1686,7 +1894,7 @@ $('game-confirm').addEventListener('click',e=>{
   if(e.target.id==='game-confirm'){e.currentTarget.style.display='none';unlockBody();}});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){
   closeConsole();$('game-confirm').style.display='none';
-  $('settings-panel').style.display='none';$('kill-dlg').style.display='none';
+  closeSettings();$('kill-dlg').style.display='none';
   $('throttle-dlg').style.display='none';$('capture-dlg').style.display='none';
   closeDispatch();
   closeFiles();closeAppModal();
@@ -1818,15 +2026,18 @@ let draft=null;
 function buildSettings(existing){
   draft=existing||JSON.parse(JSON.stringify(cfg));
   const w=$('set-widgets');
-  const order=draft.panel_order.slice();
+  let saved=draft.panel_order.slice();
+  if(JSON.stringify(saved)===JSON.stringify(OLD_PANEL_ORDER))saved=DEFAULT_PANEL_ORDER.slice();
+  DEFAULT_PANEL_ORDER.forEach(id=>{if(!saved.includes(id))saved.push(id)});
+  const order=[...new Set(DEFAULT_PANEL_ORDER.map(id=>PANEL_GROUPS[id]))].flatMap(group=>saved.filter(id=>PANEL_GROUPS[id]===group));
   Object.keys(PANEL_NAMES).forEach(k=>{if(!order.includes(k))order.push(k)});
   draft.panel_order=order;
   w.innerHTML=order.map((id,i)=>`<div class="setrow">
     <input type="checkbox" data-panel-vis="${id}" ${draft.hidden_panels.includes(id)?'':'checked'}>
     <span class="setlabel">${esc(PANEL_NAMES[id]||id)}
-      <span style="color:var(--muted)">· ${PANEL_TABS[id]==='work'?'🛠️':'📟'}</span></span>
-    <button class="mini" data-up="${i}" ${i===0?'disabled':''}>↑</button>
-    <button class="mini" data-down="${i}" ${i===order.length-1?'disabled':''}>↓</button>
+      <span style="color:var(--muted)">· ${esc(PANEL_GROUPS[id]||'')}</span></span>
+    <button class="mini" data-up="${i}" ${i===0||PANEL_GROUPS[order[i-1]]!==PANEL_GROUPS[id]?'disabled':''}>↑</button>
+    <button class="mini" data-down="${i}" ${i===order.length-1||PANEL_GROUPS[order[i+1]]!==PANEL_GROUPS[id]?'disabled':''}>↓</button>
   </div>`).join('');
   w.querySelectorAll('[data-up]').forEach(b=>b.onclick=()=>{const i=+b.dataset.up;
     syncVis();
@@ -1995,28 +2206,45 @@ const unlockBody=()=>{
   if(!document.querySelector('dialog[open]')&&![...document.querySelectorAll('.overlay')].some(o=>o.style.display==='block'))
     document.body.style.overflow='';
 };
-document.querySelectorAll('.sec-toggle').forEach(h=>h.onclick=()=>{
+document.querySelectorAll('.sec-toggle').forEach(h=>{
+  h.setAttribute('role','button');h.tabIndex=0;h.setAttribute('aria-controls',h.dataset.sec);h.setAttribute('aria-expanded','false');
+  h.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();h.click();}};
+  h.onclick=()=>{
   const sec=$(h.dataset.sec);
   const open=sec.style.display!=='none';
   sec.style.display=open?'none':'block';
-  h.textContent=(open?'▸':'▾')+h.textContent.slice(1);
-});
-function closeSettings(){$('settings-panel').style.display='none';unlockBody();}
-$('gear').onclick=()=>{
-  const p=$('settings-panel');
-  if(p.style.display==='block'){closeSettings();return;}
-  openSettings();
-};
-function openSettings(){
+  h.textContent=(open?'▸':'▾')+h.textContent.slice(1);h.setAttribute('aria-expanded',String(!open));
+};});
+let settingsHost='',settingsIcon='',settingsSection='connections',settingsReturn=null;
+const SETTINGS_TITLES={connections:'Connections & integrations',notifications:'Notifications',machine:'Machine behavior',dashboard:'Dashboard preferences'};
+function closeSettings(){
+  const wasOpen=$('settings-panel').style.display==='block';
+  $('settings-panel').style.display='none';unlockBody();
+  if(wasOpen&&settingsReturn?.isConnected)settingsReturn.focus({preventScroll:true});
+}
+document.querySelectorAll('[data-settings]').forEach(b=>b.onclick=()=>openSettings(b.dataset.settings));
+function openSettings(section='connections'){
   const p=$('settings-panel');
   if(!cfg)return;
+  settingsReturn=document.activeElement;
+  settingsSection=Object.hasOwn(SETTINGS_TITLES,section)?section:'connections';
   buildSettings();
+  document.querySelectorAll('[data-settings-section]').forEach(el=>el.hidden=el.dataset.settingsSection!==settingsSection);
+  $('settings-title').innerHTML=esc(SETTINGS_TITLES[settingsSection])+' · '+settingsIcon+' '+esc(settingsHost);
+  $('settings-scope').textContent=settingsSection==='notifications'
+    ?'Push enrollment is for this device. Event and relay settings apply to this grave.'
+    :settingsSection==='dashboard'?'Launcher, widget order and refresh settings are shared on this grave. Expanded sections are remembered only on this device.'
+    :'Settings and actions apply to this grave.';
+  $('set-msg').textContent='';
+  $('save-set').hidden=settingsSection==='machine';
+  if(settingsSection==='machine')$('settings-scope').textContent='These actions apply immediately to this grave.';
   // sections start collapsed — the modal opens phone-sized
   document.querySelectorAll('.sec-toggle').forEach(h=>{
     $(h.dataset.sec).style.display='none';
-    h.textContent='▸'+h.textContent.slice(1);
+    h.textContent='▸'+h.textContent.slice(1);h.setAttribute('aria-expanded','false');
   });
-  p.style.display='block';p.scrollTop=0;lockBody();
+  $('sec-notify').style.display=notifyInfo?'block':'none';
+  p.style.display='block';p.scrollTop=0;lockBody();$('settings-x').focus({preventScroll:true});
 }
 function openT3Setup(){
   if(location.hash!=='#t3-setup'||!cfg||macosCompanion&&!document.body.classList.contains('macagents'))return;
@@ -2027,6 +2255,14 @@ function openT3Setup(){
 window.addEventListener('hashchange',openT3Setup);
 $('close-set').onclick=closeSettings;
 $('settings-x').onclick=closeSettings;
+$('settings-panel').addEventListener('keydown',e=>{
+  if(e.key!=='Tab')return;
+  const nodes=[...e.currentTarget.querySelectorAll('button,a[href],input,select,[tabindex="0"]')]
+    .filter(el=>!el.disabled&&el.getClientRects().length);
+  const first=nodes[0],last=nodes[nodes.length-1];
+  if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}
+  else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}
+});
 $('settings-panel').addEventListener('click',e=>{
   if(e.target.id==='settings-panel')closeSettings();});
 // ---------- session history: transcript viewer + resume ----------
@@ -2326,8 +2562,9 @@ let timer=null;
 function schedule(){clearInterval(timer);
   // game mode: back off to 30s — the dashboard must not cost resources
   timer=setInterval(poll,lastMode==='gaming'?30000:((cfg&&cfg.poll_ms)||5000));}
+initializePanels();
 const BOOT=/*BOOT*/null;   // server-rendered initial state: instant first paint
-if(BOOT)render(BOOT);else poll();
+if(BOOT){render(BOOT);if(cfg)pollT3Activity();}else poll();
 schedule();
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)poll()});
 // Own the entire appliance origin so /grave/, T3, /term/ and /pair/ remain in

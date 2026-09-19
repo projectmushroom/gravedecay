@@ -15,7 +15,7 @@ listening — add a row in the same commit that adds a listener.
 | 5432 | 127.0.0.1 | core-postgres | loopback only |
 | 6379 | 127.0.0.1 | core-redis | loopback only |
 | 3050 | 127.0.0.1 | browsers-playwright | loopback only |
-| 3000–3999 | 127.0.0.1 | dev-server previews (your projects) | opt-in per port via `grave preview <port>` → https `:<port>` on the tailnet |
+| 3000–3999 | 127.0.0.1 | dev-server previews and isolated dashboard browser fixtures | opt-in per port via `grave preview <port>` → https `:<port>` on the tailnet |
 | 4810–4909 | 127.0.0.1 | per-workspace T3 instances | identity gateway only |
 | 4910–5009 | 127.0.0.1 | per-workspace terminals | identity gateway only |
 | 5010–5109 | 127.0.0.1 | per-workspace dashboards | identity gateway only |

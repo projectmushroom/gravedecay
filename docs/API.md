@@ -121,8 +121,7 @@ or download URL. Concurrent requests are rejected instead of overwriting one
 another. A stale or missing app updater fails closed.
 
 The dashboard shows a latest-release notice with a confirmed quick update
-action. **Settings → Updates & release selection** and **System → Updates &
-restart** retain the release picker. The dialog combines the configured-channel
+action. **System → Updates & restart** opens the release picker. The dialog combines the configured-channel
 and exact-release flows. It remembers an in-flight attempt in session storage,
 ignores an earlier attempt's success, and reloads the page once the new attempt
 succeeds and the dashboard runs its installed files. Connection failures are
