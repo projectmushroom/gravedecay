@@ -1769,7 +1769,7 @@ function renderT3Activity(a){
   const table=$('t3activity'),rows=a.threads||[];
   activePreview('t3activity',rows.length);
   if(a.status!=='ok'&&a.status!=='stale'){
-    panelSummary('t3activity',`T3 ${a.status||'unreachable'}`,a.status!=='unconfigured');
+    panelSummary('t3activity',a.status==='disabled'?'Not connected':`T3 ${a.status||'unreachable'}`,!['disabled','unconfigured'].includes(a.status));
     table.innerHTML=`<tr><td class="dim">T3 ${esc(a.status||'unreachable')}</td></tr>`;return;
   }
   panelSummary('t3activity',`${counted(rows.length,'thread')} · ${a.status==='stale'?'snapshot stale':'latest activity'}`,a.status==='stale');
@@ -2222,11 +2222,11 @@ function closeSettings(){
   $('settings-panel').style.display='none';unlockBody();
   if(wasOpen&&settingsReturn?.isConnected)settingsReturn.focus({preventScroll:true});
 }
-document.querySelectorAll('[data-settings]').forEach(b=>b.onclick=()=>openSettings(b.dataset.settings));
-function openSettings(section='connections'){
+document.querySelectorAll('[data-settings]').forEach(b=>b.onclick=()=>openSettings(b.dataset.settings,b));
+function openSettings(section='connections',returnTo=document.activeElement){
   const p=$('settings-panel');
   if(!cfg)return;
-  settingsReturn=document.activeElement;
+  settingsReturn=returnTo;
   settingsSection=Object.hasOwn(SETTINGS_TITLES,section)?section:'connections';
   buildSettings();
   document.querySelectorAll('[data-settings-section]').forEach(el=>el.hidden=el.dataset.settingsSection!==settingsSection);
