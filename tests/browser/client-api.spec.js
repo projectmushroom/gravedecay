@@ -84,4 +84,7 @@ test('invalid selected endpoint never falls back to local reads or writes', asyn
   await expect(page.locator('#connection-text')).toContainText('Invalid grave address');
   await expect(page.locator('#panels')).toBeHidden();
   await expect(page.locator('#plot-context')).toHaveText('Invalid grave');
+  await page.goto('./?grave=');
+  await expect(page.locator('#connection-text')).toContainText('Invalid grave address');
+  await expect(page.locator('#panels')).toBeHidden();
 });

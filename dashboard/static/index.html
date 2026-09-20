@@ -833,7 +833,7 @@ body.remote-pending #panels,body.remote-pending #launcher,body.remote-pending #a
 const $=id=>document.getElementById(id);
 const selectedGrave=new URLSearchParams(location.search).get('grave');
 let targetLocation=new URL('./',location.href),targetError='';
-if(selectedGrave){
+if(selectedGrave!==null){
   try{
     const u=new URL(selectedGrave);
     if(u.protocol!=='https:'||u.port||u.username||u.password||u.search||u.hash||
@@ -842,7 +842,7 @@ if(selectedGrave){
     targetLocation=u;
   }catch(_){targetError='Invalid grave address; return to the entry grave.';}
 }
-const remoteGrave=!!selectedGrave;
+const remoteGrave=selectedGrave!==null;
 const destinationKey=remoteGrave?':'+targetLocation.href:'';
 let clientCapabilities=null,capabilityPromise=null,lastConnectionError='';
 async function capabilities(){
@@ -1845,7 +1845,10 @@ async function poll(){
   pollBusy=true;
   try{
     const r=await apiFetch('api/state');
-    if(!r.ok)throw new Error(`HTTP ${r.status}`);
+    if(!r.ok){
+      if(remoteGrave&&[401,403].includes(r.status))document.body.classList.add('remote-pending');
+      throw new Error(`HTTP ${r.status}`);
+    }
     render(await r.json());
     if(!document.body.classList.contains('public-view'))pollT3Activity(); // deliberately detached: a remote T3 must not hold up vitals
   }catch(e){pollFailures++;lastConnectionError=e.message;paintConnection();}
