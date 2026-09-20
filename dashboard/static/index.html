@@ -877,7 +877,8 @@ if(remoteGrave){
   document.body.classList.add('remote-pending');
   $('plot-context').textContent=targetError?'Invalid grave':targetLocation.hostname;
   $('remote-context').hidden=false;
-  $('remote-description').textContent=`Managing ${targetLocation.hostname} directly. To connect, open its dashboard → System → Connections & integrations → Trusted dashboards and add ${location.origin}.`;
+  $('remote-description').dataset.setup=`To connect to ${targetLocation.hostname}, open its dashboard → System → Connections & integrations → Trusted dashboards and add ${location.origin}.`;
+  $('remote-description').textContent=$('remote-description').dataset.setup;
   const home=new URL(location.href);home.searchParams.delete('grave');home.hash='';$('remote-home').href=home.href;
   $('remote-direct').href=targetError?home.href:targetLocation.href;
 }
@@ -1565,7 +1566,7 @@ function renderPublicState(s){
   schedule();
 }
 function render(s){
-  if(remoteGrave)document.body.classList.remove('remote-pending');
+  if(remoteGrave){document.body.classList.remove('remote-pending');$('remote-description').textContent=`Managing ${s.host} directly.`;}
   if(s.access==='read-only'){renderPublicState(s);return;}
   document.body.classList.remove('public-view');
   $('public-status').hidden=true;
@@ -1875,6 +1876,7 @@ function paintConnection(){
   const offline=!navigator.onLine,failed=pollFailures>0,c=$('connection');
   c.classList.toggle('show',offline||failed);
   if(!offline&&!failed)return;
+  if(remoteGrave)$('remote-description').textContent=$('remote-description').dataset.setup;
   const ago=lastConnected?Math.max(1,Math.round((Date.now()-lastConnected)/1000)):null;
   $('connection-text').textContent=offline?'network offline — check Tailscale'
     :remoteGrave?`Cannot refresh ${targetLocation.hostname}: ${lastConnectionError||'connection unavailable'}. Check Tailscale, destination trust and API version.${ago?` Last connected ${ago}s ago.`:''}`
