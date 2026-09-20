@@ -156,11 +156,13 @@ CLIENT_TRUST_PATH = os.path.join(GRAVE_ROOT, "config", "secrets", "dashboard-tru
 CLIENT_ROUTES = {
     "GET": frozenset(("state", "settings", "capabilities", "t3-activity",
                       "admin/benchmark", "admin/releases", "admin/update-status",
-                      "files", "download", "agent-log", "dispatch-pr", "operations")),
+                      "files", "download", "agent-log", "dispatch-pr", "operations", "openapi.json",
+                      "resources/system", "resources/services", "resources/containers", "resources/sessions",
+                      "resources/repositories", "resources/preferences")),
     "POST": frozenset(("settings", "admin/benchmark", "admin/upgrade", "admin/update-check",
                        "action", "action-stream", "fs", "upload", "session-kill",
                        "session-resume", "session-capture", "agent-job-cancel",
-                       "linear-issue", "linear-dispatch", "notify-test", "operations")),
+                       "linear-issue", "linear-dispatch", "notify-test", "operations", "resources/preferences")),
 }
 
 
@@ -204,13 +206,15 @@ def save_client_origins(data):
 def client_routes():
     routes = {method: sorted(paths) for method, paths in CLIENT_ROUTES.items()}
     if MACOS:
-        routes = {method: [p for p in paths if p in ("settings", "capabilities")
+        routes = {method: [p for p in paths if p in ("settings", "capabilities", "openapi.json") or p.startswith("resources/")
                   or "/api/" + p in (MACOS_GETS if method == "GET" else MACOS_POSTS)]
                   for method, paths in routes.items()}
         if MACOS_AGENTS:
             routes["POST"].append("action-stream")
     if not MACOS_NATIVE:
         routes["POST"] = [p for p in routes["POST"] if p != "admin/update-check"]
+    if MACOS and not MACOS_AGENTS:
+        routes["GET"] = [p for p in routes["GET"] if p != "resources/sessions"]
     return routes
 
 UNITS = [u for u in os.environ.get(
@@ -224,6 +228,7 @@ if MACOS and "GRAVEDECAY_APPS" not in os.environ:
 # User preferences, editable from the ⚙️ panel (writes gated to ALLOWED_USERS
 # exactly like actions). Stored beside the other appliance config.
 SETTINGS_PATH = os.path.join(GRAVE_ROOT, "config", "gravedecay-settings.json")
+SETTINGS_LOCK = threading.RLock()
 DEFAULT_SETTINGS = {
     "panel_order": ["t3activity", "tmux", "prs", "linear", "ci", "repos", "usage",
                     "scheduled", "sessions", "inbox", "stats", "services", "docker",
@@ -320,6 +325,11 @@ def load_settings():
 
 
 def save_settings(data):
+    with SETTINGS_LOCK:
+        return _save_settings(data)
+
+
+def _save_settings(data):
     merged = load_settings()
     for k, default in DEFAULT_SETTINGS.items():
         if k in data and isinstance(data[k], type(default)):
@@ -328,10 +338,17 @@ def save_settings(data):
     merged["custom_apps"] = _sanitize_custom_apps(merged["custom_apps"])
     if merged["t3_tile"] not in ("pwa", "app"):
         merged["t3_tile"] = "pwa"
-    tmp = SETTINGS_PATH + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(merged, f, indent=2)
-    os.replace(tmp, SETTINGS_PATH)
+    os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(SETTINGS_PATH), prefix=".dashboard-settings-")
+    try:
+        with os.fdopen(fd, "w") as stream:
+            json.dump(merged, stream, indent=2, allow_nan=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp, SETTINGS_PATH)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
     return merged
 
 
@@ -440,6 +457,12 @@ ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _operations_spec = importlib.util.spec_from_file_location("grave_operations", os.path.join(os.path.dirname(__file__), "operations.py"))
 operations = importlib.util.module_from_spec(_operations_spec)
 _operations_spec.loader.exec_module(operations)
+_contract_spec = importlib.util.spec_from_file_location("grave_api_contract", os.path.join(os.path.dirname(__file__), "api_contract.py"))
+api_contract = importlib.util.module_from_spec(_contract_spec)
+_contract_spec.loader.exec_module(api_contract)
+API_DOCUMENT = api_contract.document(CLIENT_ROUTES, BASE)
+API_DOCUMENT_HASH = api_contract.digest(API_DOCUMENT)
+
 OPERATION_PATH = os.path.join(GRAVE_ROOT, "config", "secrets", "operations")
 ACTION_LOCK = (operations.ActionLock(os.path.join(OPERATION_PATH, "action.lock"))
                if client_api_supported() and not MACOS else threading.Lock())
@@ -748,10 +771,14 @@ def agent_worktree_metadata(name):
         return {}
 
 
-def collect_tmux():
-    rc, out, _ = sh(["tmux", "-L", TMUX_SOCKET, "list-sessions", "-F",
+def collect_tmux(strict=False):
+    if strict and not shutil.which("tmux"):
+        raise RuntimeError("tmux is unavailable")
+    rc, out, error = sh(["tmux", "-L", TMUX_SOCKET, "list-sessions", "-F",
                      "#{session_name}\t#{session_windows}\t#{?session_attached,attached,detached}\t#{t:session_activity}"])
     if rc != 0:
+        if strict and not re.search(r"no server running|no sessions|no such file or directory", error, re.I):
+            raise RuntimeError("Session collection failed")
         return []
     rows = []
     for line in out.splitlines():
@@ -762,16 +789,20 @@ def collect_tmux():
     return rows
 
 
-def collect_repos():
+def collect_repos(strict=False):
     # /api/state polls as fast as every 2 s and this forks 3 git processes PER
     # repo; without a TTL cache a few read-only viewers (or a many-repo box)
     # saturate CPU/PIDs. Cache like the github/ci/linear collectors do.
     def fetch():
+        if strict and not shutil.which("git"):
+            raise RuntimeError("Git is unavailable")
         repos = []
         base = f"{GRAVE_ROOT}/repos"
         try:
             entries = sorted(os.listdir(base))
         except OSError:
+            if strict:
+                raise
             return repos
         for name in entries:
             path = f"{base}/{name}"
@@ -785,7 +816,7 @@ def collect_repos():
                           "dirty": len(porcelain.splitlines()),
                           "last_when": when, "last_subject": subject[:60]})
         return repos
-    return cached("repos", 15, fetch)
+    return cached("repos-strict" if strict else "repos", 15, fetch)
 
 
 MACOS_REPO_SCAN_MAX_DEPTH = 4
@@ -2634,6 +2665,118 @@ def _state(headers):
     }
 
 
+# Independent resources never call _state(): vitals must not trigger GitHub,
+# Linear, token usage scans or a complete dashboard collection.
+_RESOURCE_LOCKS = {name: threading.Lock() for name in api_contract.RESOURCE_NAMES}
+_RESOURCE_CACHE = {}
+_RESOURCE_TTLS = {"system": 5, "services": 5, "containers": 5, "sessions": 2, "repositories": 15}
+
+
+def preference_snapshot():
+    # Legacy load_settings deliberately tolerates damaged files for recovery.
+    # The revisioned resource must instead refuse to overwrite corrupt state.
+    try:
+        with open(SETTINGS_PATH) as stream:
+            if not isinstance(json.load(stream), dict):
+                raise ValueError("Invalid settings file")
+    except FileNotFoundError:
+        pass
+    return api_contract.preferences(load_settings(), DEFAULT_SETTINGS)
+
+
+def resource_envelope(name, data, status="ready", error=None, truncated=False):
+    return {"api_version": 1, "kind": name,
+            "observed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "status": status, "data": data, "error": error, "truncated": truncated}
+
+
+def resource_preferences():
+    with SETTINGS_LOCK:
+        return resource_envelope("preferences", preference_snapshot())
+
+
+def patch_preferences(payload):
+    if (not isinstance(payload, dict) or set(payload) != {"revision", "changes"}
+            or not isinstance(payload["revision"], str) or not re.fullmatch(r"[0-9a-f]{64}", payload["revision"])):
+        raise ValueError("Supply a preference revision and changes object")
+    changes = api_contract.validate_preferences(payload["changes"])
+    with SETTINGS_LOCK:
+        try:
+            current = preference_snapshot()
+        except (ValueError, TypeError) as error:
+            raise OSError("Cannot read preferences") from error
+        if current["revision"] != payload["revision"]:
+            return 409, {"ok": False, "error": "revision_conflict",
+                         "output": "Preferences changed on this grave. Reopen Dashboard preferences and review before saving."}
+        if changes:
+            save_settings(changes)
+        return 200, resource_preferences()
+
+
+def resource_paused():
+    return not MACOS and unit_state("t3code").get("active") != "active"
+
+
+def resource_read(name):
+    if name == "preferences":
+        return resource_preferences()
+    with _RESOURCE_LOCKS[name]:
+        cached_result = _RESOURCE_CACHE.get(name)
+        now = time.monotonic()
+        if cached_result and now - cached_result[0] < _RESOURCE_TTLS[name]:
+            return cached_result[1]
+        status, problem, truncated = "ready", None, False
+        try:
+            if name in ("containers", "repositories") and resource_paused():
+                result = resource_envelope(name, None, "paused", {"code": "gaming_mode", "message": "Collection paused in gaming mode"})
+            elif name == "system":
+                raw_system = collect_system()
+                truncated = len(raw_system.get("disks") or []) > 32
+                value = api_contract.system(raw_system, {"hostname": HOST,
+                    "platform": "macos" if MACOS else "linux", **OS_IDENTITY})
+                if truncated or any(v is None for v in (value["uptime_seconds"], value["cpu"]["usage_percent"],
+                                           value["memory"]["total_bytes"], value["memory"]["usage_percent"])):
+                    status = "partial"
+                result = resource_envelope(name, value, status, truncated=truncated)
+            else:
+                manager = "native" if MACOS_NATIVE else "launchd" if MACOS else "systemd"
+                frozen = False
+                if name == "services":
+                    rows = collect_services()
+                elif name == "containers":
+                    raw = collect_docker()
+                    if raw.get("error"):
+                        raise RuntimeError("Container collector unavailable")
+                    rows = raw["containers"]
+                elif name == "sessions":
+                    rows = collect_tmux(strict=True)
+                    if not MACOS:
+                        try:
+                            with open("/sys/fs/cgroup/grave-torpor/cgroup.freeze") as stream:
+                                frozen = stream.read().strip() == "1"
+                        except OSError:
+                            pass
+                else:
+                    if MACOS:
+                        inventory = collect_macos_repo_inventory()
+                        rows = inventory["repos"]
+                        truncated = bool(inventory.get("truncated"))
+                        if inventory.get("error"):
+                            status = "partial" if rows else "unavailable"
+                            problem = {"code": "repository_scan_failed", "message": "Repository scan failed; check the configured root and Git"}
+                    else:
+                        rows = collect_repos(strict=True)
+                value = api_contract.items(name, rows, manager, frozen)
+                truncated = truncated or len(rows) > api_contract.LIST_LIMIT
+                if status == "ready" and (truncated or len(value) < min(len(rows), api_contract.LIST_LIMIT)):
+                    status = "partial"
+                result = resource_envelope(name, None if status == "unavailable" else value, status, problem, truncated)
+        except (OSError, ValueError, TypeError, KeyError, RuntimeError, AttributeError, OverflowError):
+            result = resource_envelope(name, None, "unavailable", {"code": "collector_unavailable", "message": "Resource collection failed; check the grave"})
+        _RESOURCE_CACHE[name] = (time.monotonic(), result)
+        return result
+
+
 # ---------- file manager ----------
 
 def _safe_path(rel):
@@ -3059,7 +3202,17 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps({"product": "gravedecay", "api_version": 1,
                 "host": HOST, "platform": PLATFORM, "routes": client_routes(),
                 "actions": sorted(ACTIONS), "operations": {"protocol": 1, "actions": operation_actions(),
-                "retention_seconds": operations.RETENTION, "new_id_max_age_seconds": operations.KEY_AGE}})); return
+                "retention_seconds": operations.RETENTION, "new_id_max_age_seconds": operations.KEY_AGE},
+                "resource_contract": {"version": api_contract.VERSION, "schema": "openapi.json", "sha256": API_DOCUMENT_HASH, "build": api_contract.BUILD_ID,
+                                      "resources": [p.split("/", 1)[1] for p in client_routes()["GET"] if p.startswith("resources/")]}})); return
+        if self._client_authorized and p == "/api/openapi.json":
+            self._send(200, json.dumps(API_DOCUMENT)); return
+        if self._client_authorized and p.startswith("/api/resources/"):
+            try:
+                self._send(200, json.dumps(resource_read(p.rsplit("/", 1)[1]), allow_nan=False))
+            except (OSError, ValueError, TypeError):
+                self._client_error(503, "resource_unavailable", "Cannot read this resource; check the grave")
+            return
         if self._client_authorized and p == "/api/settings":
             self._send(200, json.dumps({"settings": load_settings()})); return
         if p == "/api/operations":
@@ -3277,6 +3430,19 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, TypeError, OSError) as error:
                 self._send(400, json.dumps({"ok": False, "output": str(error)})); return
             self._send(200, json.dumps({"ok": True, "origins": origins})); return
+        if self._client_authorized and p == "/api/resources/preferences":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                if not 0 < length <= 65536:
+                    raise ValueError("Preference payload must be between 1 and 65536 bytes")
+                payload = json.loads(self.rfile.read(length))
+                code, result = patch_preferences(payload)
+                self._send(code, json.dumps(result, allow_nan=False))
+            except (ValueError, TypeError) as error:
+                self._client_error(400, "invalid_preferences", str(error))
+            except OSError:
+                self._client_error(503, "resource_unavailable", "Cannot read or save preferences; check the grave")
+            return
         if p == "/api/operations":
             if not client_api_supported() or MACOS:
                 self._client_error(501, "unsupported", "Durable actions require a single-owner Linux grave"); return
@@ -3545,6 +3711,20 @@ if __name__ == "__main__":
                 assert "settings" in capabilities["routes"]["POST"]
                 assert "client-trust" not in capabilities["routes"]["POST"]
                 assert response.headers.get("Access-Control-Allow-Origin") is None
+            assert capabilities["resource_contract"]["version"] == api_contract.VERSION
+            assert capabilities["resource_contract"]["build"] == api_contract.BUILD_ID, "resource implementation is stale; restart dashboard"
+            assert capabilities["resource_contract"]["sha256"] == API_DOCUMENT_HASH, "resource contract is stale; restart dashboard"
+            with maintenance_request("/api/v1/openapi.json") as response:
+                schema = json.load(response)
+                assert schema["openapi"] == "3.1.1"
+                assert api_contract.digest(schema) == API_DOCUMENT_HASH
+                for name in capabilities["resource_contract"]["resources"]:
+                    assert "/resources/" + name in schema["paths"], "resource missing from OpenAPI"
+            with maintenance_request("/api/v1/resources/preferences") as response:
+                preferences = json.load(response)
+                assert preferences["kind"] == "preferences" and preferences["status"] == "ready"
+                assert set(preferences["data"]["values"]) == set(api_contract.PREFERENCE_KEYS)
+                api_contract.validate_preferences(preferences["data"]["values"])
             if not MACOS:
                 assert "operations" in capabilities["routes"]["GET"]
                 assert "operations" in capabilities["routes"]["POST"]

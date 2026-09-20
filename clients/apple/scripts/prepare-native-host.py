@@ -19,7 +19,7 @@ DIGESTS = {
 
 def prepare(destination):
     destination.mkdir(parents=True, exist_ok=True)
-    for name in ('gravedecay.py', 'gravenet.py', 'benchmark.py', 'native_updates.py', 'operations.py'):
+    for name in ('gravedecay.py', 'gravenet.py', 'benchmark.py', 'native_updates.py', 'operations.py', 'api_contract.py'):
         shutil.copy2(ROOT / 'dashboard' / name, destination / name)
     for name in ('host.py', 'PYTHON-LICENSES.txt'):
         shutil.copy2(ROOT / 'clients/apple/host' / name, destination / name)

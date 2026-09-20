@@ -870,6 +870,12 @@ async function apiFetch(path,options={}){
     ...options,method,signal:options.signal||(method==='GET'?AbortSignal.timeout(15000):undefined),headers:{...options.headers,'X-Grave-Client':'1'},credentials:'omit',mode:'cors',redirect:'error',cache:'no-store'
   });
 }
+async function preferenceFetch(options={}){
+  if(remoteGrave)return apiFetch('api/resources/preferences',options);
+  return fetch('api/v1/resources/preferences',{...options,
+    signal:options.signal||AbortSignal.timeout(15000),
+    headers:{...options.headers,'X-Grave-Client':'1'},cache:'no-store'});
+}
 function managementURL(url){
   const next=new URL(location.href);next.hash='';
   if(new URL(url).origin===location.origin)next.searchParams.delete('grave');else next.searchParams.set('grave',url);
@@ -2404,8 +2410,10 @@ document.querySelectorAll('.sec-toggle').forEach(h=>{
   h.textContent=(open?'▸':'▾')+h.textContent.slice(1);h.setAttribute('aria-expanded',String(!open));
 };});
 let settingsHost='',settingsIcon='',settingsSection='connections',settingsReturn=null;
+let preferenceLoad=0,preferenceMode='legacy',preferenceRevision=null,preferenceValues=null;
 const SETTINGS_TITLES={connections:'Connections & integrations',notifications:'Notifications',machine:'Machine behavior',dashboard:'Dashboard preferences'};
 function closeSettings(){
+  preferenceLoad++;
   const wasOpen=$('settings-panel').style.display==='block';
   $('settings-panel').style.display='none';unlockBody();
   if(wasOpen&&settingsReturn?.isConnected)settingsReturn.focus({preventScroll:true});
@@ -2416,6 +2424,9 @@ function openSettings(section='connections',returnTo=document.activeElement){
   if(!cfg)return;
   settingsReturn=returnTo;
   settingsSection=Object.hasOwn(SETTINGS_TITLES,section)?section:'connections';
+  preferenceLoad++;preferenceMode='legacy';preferenceRevision=null;preferenceValues=null;
+  $('save-set').disabled=false;
+  document.querySelectorAll('[data-settings-section=dashboard]').forEach(el=>el.inert=false);
   buildSettings();
   document.querySelectorAll('[data-settings-section]').forEach(el=>el.hidden=el.dataset.settingsSection!==settingsSection);
   $('settings-title').innerHTML=esc(SETTINGS_TITLES[settingsSection])+' · '+settingsIcon+' '+esc(settingsHost);
@@ -2434,6 +2445,54 @@ function openSettings(section='connections',returnTo=document.activeElement){
   });
   $('sec-notify').style.display=notifyInfo?'block':'none';
   p.style.display='block';p.scrollTop=0;lockBody();$('settings-x').focus({preventScroll:true});
+  if(settingsSection==='dashboard')loadPreferenceResource(preferenceLoad);
+}
+async function loadPreferenceResource(load){
+  preferenceMode='loading';$('save-set').disabled=true;
+  $('set-msg').textContent='Loading latest preferences…';
+  document.querySelectorAll('[data-settings-section=dashboard]').forEach(el=>el.inert=true);
+  try{
+    let info;
+    try{info=await capabilities();}catch(e){if(!remoteGrave&&e.status===501)info=null;else throw e;}
+    if(load!==preferenceLoad)return;
+    if(!info?.routes?.GET?.includes('resources/preferences')||!info?.routes?.POST?.includes('resources/preferences')){
+      preferenceMode='legacy';$('set-msg').textContent='';return;
+    }
+    const response=await preferenceFetch();
+    const resource=await response.json();
+    if(load!==preferenceLoad)return;
+    if(!response.ok)throw new Error(resource.output||`HTTP ${response.status}`);
+    if(resource.kind!=='preferences'||resource.status!=='ready'||!resource.data?.revision||!resource.data?.values)throw new Error('Invalid preference response');
+    preferenceRevision=resource.data.revision;preferenceValues=resource.data.values;
+    buildSettings(JSON.parse(JSON.stringify({...draft,...preferenceValues})));
+    preferenceMode='resource';$('set-msg').textContent='';
+  }catch(e){
+    if(load!==preferenceLoad)return;
+    preferenceMode='failed';$('set-msg').textContent='Cannot load preferences: '+e.message+'. Close and reopen to retry.';
+  }finally{
+    if(load===preferenceLoad){
+      $('save-set').disabled=!['resource','legacy'].includes(preferenceMode);
+      document.querySelectorAll('[data-settings-section=dashboard]').forEach(el=>el.inert=false);
+    }
+  }
+}
+async function savePreferenceResource(){
+  const load=preferenceLoad;
+  const changes=Object.fromEntries(Object.keys(preferenceValues).filter(key=>JSON.stringify(draft[key])!==JSON.stringify(preferenceValues[key])).map(key=>[key,draft[key]]));
+  $('save-set').disabled=true;$('set-msg').textContent='saving…';
+  try{
+    const response=await preferenceFetch({method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({revision:preferenceRevision,changes})});
+    const resource=await response.json();
+    if(load!==preferenceLoad)return;
+    if(!response.ok){$('set-msg').textContent=resource.output||'Save failed';return;}
+    if(resource.kind!=='preferences'||resource.status!=='ready'||!resource.data?.revision||!resource.data?.values)throw new Error('Invalid preference response');
+    preferenceRevision=resource.data.revision;preferenceValues=resource.data.values;
+    cfg={...cfg,...preferenceValues};cfgSrv=JSON.stringify(cfg);layoutKey='';schedule();
+    $('set-msg').textContent='saved ✓';poll();
+  }catch(e){
+    if(load===preferenceLoad)$('set-msg').textContent='Save response unavailable. Reopen preferences to check what was saved. '+e.message;
+  }finally{if(load===preferenceLoad)$('save-set').disabled=false;}
 }
 function openT3Setup(){
   if(location.hash!=='#t3-setup'||!cfg||macosCompanion&&!document.body.classList.contains('macagents'))return;
@@ -2620,7 +2679,9 @@ $('add-app').onclick=()=>{
 };
 $('new-app-url').addEventListener('keydown',e=>{if(e.key==='Enter')$('add-app').click()});
 $('save-set').onclick=async()=>{
+  if(settingsSection==='dashboard'&&['loading','failed'].includes(preferenceMode))return;
   syncVis();
+  if(settingsSection==='dashboard'&&preferenceMode==='resource')return savePreferenceResource();
   const payload={...draft};
   const lk=$('set-linear').value.trim();
   if(lk)payload.linear_key=lk;

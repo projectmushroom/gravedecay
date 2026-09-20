@@ -164,6 +164,7 @@ if [ "$DRY" = 0 ]; then
   run cp "$HERE/grave" "$ROOT/scripts/grave"; run cp "$HERE/updater.py" "$ROOT/scripts/updater.py"; run cp "$HERE/status.sh" "$ROOT/scripts/status.sh"; run chmod 700 "$ROOT/scripts/grave" "$ROOT/scripts/updater.py" "$ROOT/scripts/status.sh"
   run cp "$HERE/../dashboard/benchmark.py" "$ROOT/scripts/benchmark.py"
   run cp "$HERE/../dashboard/operations.py" "$ROOT/scripts/operations.py"
+  run cp "$HERE/../dashboard/api_contract.py" "$ROOT/scripts/api_contract.py"
   "$PYTHON" - "$ROOT" "$SOURCE" "${GRAVEDECAY_UPDATE_CHANNEL:-release}" <<'PY'
 import json, os, subprocess, sys
 root, source, channel = sys.argv[1:]

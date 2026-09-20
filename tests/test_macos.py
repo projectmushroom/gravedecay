@@ -393,6 +393,8 @@ class MacosContractTests(unittest.TestCase):
             shutil.copy(ROOT / "dashboard/benchmark.py", src / "dashboard/benchmark.py")
             shutil.copy(ROOT / "dashboard/operations.py", root / "scripts/operations.py")
             shutil.copy(ROOT / "dashboard/operations.py", src / "dashboard/operations.py")
+            shutil.copy(ROOT / "dashboard/api_contract.py", root / "scripts/api_contract.py")
+            shutil.copy(ROOT / "dashboard/api_contract.py", src / "dashboard/api_contract.py")
             shutil.copy(ROOT / "macos/grave", root / "scripts/grave"); (root / "scripts/grave").chmod(0o700)
             (root / "config/components").write_text("dashboard=1\nnetwork=0\nserve=1\nkeepawake=1\n")
             run_status = lambda *extra: subprocess.run(

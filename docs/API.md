@@ -92,7 +92,7 @@ These routes share the local dashboard's validated handlers and payloads;
 legacy clients continue to work. The web dashboard uses the v1 transport for
 remote management and preserves legacy local requests for workspace/portable
 compatibility. This first version exposes a dashboard-shaped state snapshot;
-structured resource schemas and an OpenAPI contract are follow-up work.
+structured resources are documented below, while integrations retain their existing dashboard-shaped contracts.
 
 Gate failures use `{ok:false,error:<code>,output:<explanation>}`:
 `forbidden`, `untrusted_origin`, `client_header_required` (403),
@@ -129,6 +129,139 @@ stream does not cancel its server operation.
 `grave doctor`'s dashboard auth probe checks version/capabilities, operation journal
 integrity and runner build identity, plus refusal of unauthorized identities and
 untrusted origins, without starting actions or changing trust.
+
+## Structured resources and OpenAPI
+
+The [OpenAPI 3.1 description](openapi.json) is also available from the destination
+at `GET openapi.json`, behind the same owner/origin/protocol checks. It describes
+the v1 catalogue; **capabilities remains the runtime availability authority**.
+`capabilities.resource_contract` gives the contract version (`1.0.0`), schema URL,
+canonical schema SHA-256, implementation build digest, and available resource names.
+The document follows the [OpenAPI 3.1.1 specification](https://spec.openapis.org/oas/v3.1.1.html).
+
+Tailnet owner authorization is out of band and is documented in the schema's
+`x-grave-authorization` extension. It is mandatory for every operation. There is
+no anonymous access or browser login cookie. `X-Grave-Client: 1` is only a protocol
+marker. Generated clients must **never set Tailscale identity headers**; Serve
+supplies them. The private local maintenance token remains a loopback alternative.
+
+| Resource route | Representation |
+| --- | --- |
+| `GET resources/system` | Host identity, uptime in seconds, CPU percentage/count, memory and disks in bytes, load averages, temperatures in Celsius |
+| `GET resources/services` | Service IDs, supervisor, machine state and optional detail |
+| `GET resources/containers` | Container names/IDs, machine state, optional status text and Compose project |
+| `GET resources/sessions` | Session names/IDs, integer window counts, nullable attached state, frozen state and optional activity label |
+| `GET resources/repositories` | Local inventory with IDs, branch, changed-file count and optional commit subject |
+| `GET/POST resources/preferences` | Dashboard preferences and their revision; POST applies a validated patch |
+
+These routes support single-owner Linux and macOS. macOS advertises sessions only
+with its agents layer. Portable and multi-user backends remain unsupported. There
+are no unversioned `/api/resources/*` aliases. Each read runs only its own collector;
+reading system metrics never scans repositories or requests GitHub/Linear data.
+
+Resource responses share an envelope:
+
+```json
+{
+  "api_version": 1,
+  "kind": "services",
+  "observed_at": "2026-09-20T12:00:00Z",
+  "status": "ready",
+  "data": [{"id":"t3code","manager":"systemd","state":"active","detail":"running"}],
+  "error": null,
+  "truncated": false
+}
+```
+
+`status` is `ready`, `partial`, `unavailable`, or `paused`. A ready empty list means
+no entries; unavailable/paused data is `null`, with an error `{code,message}`.
+Partial results can contain useful data even when a scan was incomplete or a core
+system measurement is missing. Individual unknown measurements are `null`, never
+fabricated zeroes; machine-readable states are separate from human-readable labels.
+macOS memory percentage measures **pressure**, so `memory.percent_kind` is
+`pressure` and `used_bytes` is `null`. Linux reports occupied memory (`used`).
+
+IDs are scoped to the destination origin. `system.identity.id` is `self`; service
+IDs are supervisor names, container IDs are names, session IDs are tmux names,
+and repository IDs are names relative to the configured inventory root. Renaming
+one changes its ID; container names are not Docker immutable object IDs. Session
+`activity_label` is display text, not a timestamp. These collection IDs do not
+implicitly authorize arbitrary service/container commands.
+
+Collections return at most 500 entries (system disks at most 32), setting
+`truncated` for capped collections. macOS inventory retains its existing smaller
+scan limits. There is no pagination in this revision. In gaming mode, repositories
+and containers report `paused` without running their collectors. Metrics, services
+and containers cache representations for five seconds, sessions for two, and
+repositories for fifteen. Some underlying collectors also cache samples:
+`observed_at` is the time this representation was assembled, **not a guarantee
+that every underlying measurement was sampled then**. Concurrent requests for the
+same resource share one collection. HTTP responses remain `no-store`.
+
+### Preference writes
+
+Read `resources/preferences` before editing. Its `data` contains `revision` and
+`values`. Send that revision with only the fields being changed:
+
+```json
+{"revision":"<64 lowercase hex digits from GET>","changes":{"poll_ms":10000}}
+```
+
+The server validates the complete patch before writing, checks the revision and
+atomically replaces the settings file. Both this endpoint and legacy settings
+saves share one write lock in the installed dashboard process. A stale revision
+returns 409 `revision_conflict` without modifying anything. A lost success response
+is resolved by reading again and inspecting the values, not by generating a blind
+replacement. Arbitrary external edits/file-manager writes are outside this write
+protocol; operate one dashboard process per grave as installed.
+
+Requests are limited to 64 KiB of encoded JSON. Supported fields are `panel_order`, `hidden_panels`, `hidden_apps`, `newtab_apps`,
+`modal_apps`, `yolo_apps`, `custom_apps`, `t3_tile`, and `poll_ms`. Unknown fields,
+wrong types, duplicate list entries, out-of-range intervals, unsafe tile URLs and
+credential-bearing URLs are rejected. The OpenAPI schema defines bounds; URL
+validation additionally enforces the documented semantic rules. Integration secrets,
+repository-root configuration and notification settings stay on their existing
+handlers. They cannot be written through the preference resource. Invalid legacy
+list entries and credential-bearing tiles are omitted from its typed view.
+
+The dashboard preference editor reads this resource when opened, then submits its
+revision and changed fields. Conflicts keep the draft visible and ask the user to
+reopen and review. Network/authorization/validation errors never fall back to the
+legacy settings writer. Explicitly older peers without the resource capability,
+and unsupported local workspace deployments, retain their legacy editor behavior.
+Other settings sections continue to use their existing handlers.
+
+### Compatibility and validation
+
+`/api/v1` is the API major version. The structured contract uses semantic versions:
+patch releases clarify/fix behavior without changing the contract, and minor
+releases may add routes and optional fields. Clients must ignore unknown response
+fields and discover available features instead of comparing entire capability
+lists. Removing fields/routes, changing field types or units, introducing required
+request fields, or changing closed enum values requires a new major API version.
+Open string state fields can acquire new values; render unfamiliar states as
+unknown. Do not assume newer clients can call every method on an older grave.
+
+Structured resources, capabilities and operations have concrete schemas marked
+`x-grave-contract: 1.0.0`. Existing dashboard-shaped endpoints are explicitly marked
+`legacy`; their generic object schemas are not promises of normalized resource
+fields. The original state snapshot remains available while integration and other
+clients migrate. No v1 method is removed by this phase.
+
+`grave doctor` checks schema and implementation digests, resource discovery and
+preference shape without changing configuration. To validate/regenerate contracts
+in a development checkout (JSON Schema/OpenAPI validators are test dependencies):
+
+```sh
+python -m venv .venv
+.venv/bin/python -m pip install -r tests/requirements.txt
+.venv/bin/python -m unittest discover -s tests -v
+python dashboard/api_contract.py --check docs/openapi.json
+python dashboard/api_contract.py > docs/openapi.json  # after an intentional contract change
+```
+
+Tests validate the actual HTTP representations against their JSON Schemas, validate
+the OpenAPI document, and compare the committed snapshot with the generated one.
 
 ## Resumable console operations
 

@@ -102,9 +102,12 @@ test('attention opens a hidden failed section without persisting widget visibili
 test('configuration has one focused view, a save scope, and a working Back action', async ({ page, request, baseURL }) => {
   const { state } = await fixture(page, request, baseURL);
   const writes = [];
-  await page.route('**/api/settings', route => {
-    writes.push(route.request().postDataJSON());
-    return route.fulfill({ json: { ok: true, settings: writes.at(-1), linear_configured: false } });
+  await page.route('**/api/v1/resources/preferences', route => {
+    const values={...state.settings};delete values.repo_root;
+    if(route.request().method()==='POST'){
+      const data=route.request().postDataJSON();writes.push(data.changes);Object.assign(values,data.changes);
+    }
+    return route.fulfill({ json: {kind:'preferences',status:'ready',data:{revision:'a'.repeat(64),values}} });
   });
   await system(page);
   await page.locator('[data-settings=dashboard]').click();
@@ -112,6 +115,7 @@ test('configuration has one focused view, a save scope, and a working Back actio
   await expect(page.locator('#settings-scope')).toContainText('shared on this grave');
   await expect(page.locator('#set-linear')).toBeHidden();
   await expect(page.locator('#throttle-row')).toBeHidden();
+  await expect(page.locator('#save-set')).toBeEnabled();
   await page.locator('#set-poll').selectOption('10000');
   await page.evaluate(s => render(s), { ...state, settings: { ...state.settings, poll_ms: 2000 } });
   await expect(page.locator('#set-poll')).toHaveValue('10000');
