@@ -8,7 +8,7 @@
 // on T3 instead of this dashboard. The backend cannot 301 it because
 // tailscale serve strips the mount prefix before proxying. Fix the base
 // before the parser touches any href/src below.
-if(!location.pathname.endsWith('/'))history.replaceState(null,'',location.pathname+'/');
+if(!location.pathname.endsWith('/'))history.replaceState(null,'',location.pathname+'/'+location.search+location.hash);
 </script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#070907">
@@ -450,6 +450,10 @@ body.gaming[data-view="system"] #panels>[data-panel="actions"]{display:block!imp
 }
 @media(min-width:761px){#configuration{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}#configuration h2{grid-column:1/-1}}
 
+body.remote-pending #panels,body.remote-pending #launcher,body.remote-pending #attention,body.remote-pending #update-notice{display:none!important}
+#remote-context{padding:10px 16px;overflow-wrap:anywhere;border-bottom:1px solid var(--ring);font-size:12px}
+#remote-context a{margin-right:12px}
+#trusted-origins{width:100%;box-sizing:border-box;min-height:90px}
 </style></head><body data-dashboard-layout="2">
 @OS_LOGOS@
 <div id="topcover"></div>
@@ -466,6 +470,7 @@ body.gaming[data-view="system"] #panels>[data-panel="actions"]{display:block!imp
 </div>
 <div id="connection" role="status" aria-live="polite"><span id="connection-text"></span>
   <button id="connection-retry">↻ retry</button></div>
+<div id="remote-context" hidden><div id="remote-description"></div><a id="remote-home">Return to entry grave</a><a id="remote-direct" target="_blank" rel="noopener noreferrer">Open destination ↗</a></div>
 <dialog class="dlg" id="graveyard-dialog" aria-labelledby="graveyard-title">
   <div class="graveyard-heading">
     <h2 id="graveyard-title">🪦 Graveyard</h2>
@@ -477,7 +482,7 @@ body.gaming[data-view="system"] #panels>[data-panel="actions"]{display:block!imp
   </div>
   <div class="graveyard-body">
     <p id="graveyard-status" class="dim" role="status">Discovering graves…</p>
-    <p id="graveyard-pwa-note" class="dim" hidden>↗ Other graves open in a browser view. Close that view to return here.</p>
+    <p id="graveyard-pwa-note" class="dim" hidden>Manage here keeps this app open. ↗ links open the destination website.</p>
     <p id="graveyard-empty" role="status" hidden>No graves match your search.</p>
     <div id="graveyard-plots"></div>
   </div>
@@ -510,6 +515,13 @@ body.gaming[data-view="system"] #panels>[data-panel="actions"]{display:block!imp
     style="position:absolute;top:10px;right:10px;z-index:2">←</button>
   <h2 id="settings-title" style="color:var(--ink);font-size:15px;margin-bottom:10px">⚙️ Settings</h2>
   <p id="settings-scope" class="dim"></p>
+  <details id="client-trust-settings"><summary>Trusted dashboards</summary>
+    <p class="dim">Allow these dashboard origins to manage this grave using your Tailscale identity. Only trust dashboards you control. Remove an origin to revoke its access.</p>
+    <label for="trusted-origins">Dashboard origins (one per line)</label>
+    <textarea id="trusted-origins" placeholder="https://my-vm.tail123.ts.net" spellcheck="false"></textarea>
+    <button id="save-client-trust" type="button">Save trusted dashboards</button>
+    <p id="client-trust-status" class="dim" role="status"></p>
+  </details>
   <div data-settings-section="dashboard">
 
   <div class="sethead sec-toggle" data-sec="sec-apps">▸ Launcher tiles — 👁 show · ⚡ skip-perms · ▢ modal · ↗ new tab</div>
@@ -819,6 +831,76 @@ body.gaming[data-view="system"] #panels>[data-panel="actions"]{display:block!imp
 <footer id="foot">🪦 gravedecay © <span id="footyear"></span> — <span id="epitaph"></span></footer>
 <script>
 const $=id=>document.getElementById(id);
+const selectedGrave=new URLSearchParams(location.search).get('grave');
+let targetLocation=new URL('./',location.href),targetError='';
+if(selectedGrave){
+  try{
+    const u=new URL(selectedGrave);
+    if(u.protocol!=='https:'||u.port||u.username||u.password||u.search||u.hash||
+       !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.ts\.net$/.test(u.hostname)||
+       !['/','/grave/'].includes(u.pathname))throw new Error('Invalid grave address');
+    targetLocation=u;
+  }catch(_){targetError='Invalid grave address; return to the entry grave.';}
+}
+const remoteGrave=!!selectedGrave;
+const destinationKey=remoteGrave?':'+targetLocation.href:'';
+let clientCapabilities=null,capabilityPromise=null,lastConnectionError='';
+async function capabilities(){
+  if(targetError)throw new Error(targetError);
+  if(clientCapabilities)return clientCapabilities;
+  if(!capabilityPromise)capabilityPromise=fetch(new URL('api/v1/capabilities',targetLocation),{
+    headers:{'X-Grave-Client':'1'},credentials:'omit',mode:'cors',redirect:'error',cache:'no-store',signal:AbortSignal.timeout(10000)
+  }).then(async r=>{
+    if(!r.ok)throw new Error(`Destination API HTTP ${r.status}; check owner access and upgrade the grave.`);
+    const data=await r.json();
+    if(data.product!=='gravedecay'||data.api_version!==1||!Array.isArray(data.routes?.GET)||!Array.isArray(data.routes?.POST))throw new Error('Unsupported destination API');
+    clientCapabilities=data;return data;
+  }).catch(e=>{capabilityPromise=null;throw e;});
+  return capabilityPromise;
+}
+async function apiFetch(path,options={}){
+  if(!remoteGrave)return fetch(path,options);
+  const info=await capabilities();
+  const endpoint=path.replace(/^api\//,'').split('?')[0];
+  const method=endpoint==='action-stream'?'POST':(options.method||'GET');
+  if(!info.routes[method]?.includes(endpoint))throw new Error('This operation is unavailable through the destination API. Open its dashboard directly.');
+  return fetch(new URL(path.replace(/^api\//,'api/v1/'),targetLocation),{
+    ...options,method,signal:options.signal||(method==='GET'?AbortSignal.timeout(15000):undefined),headers:{...options.headers,'X-Grave-Client':'1'},credentials:'omit',mode:'cors',redirect:'error',cache:'no-store'
+  });
+}
+function managementURL(url){
+  const next=new URL(location.href);next.hash='';
+  if(new URL(url).origin===location.origin)next.searchParams.delete('grave');else next.searchParams.set('grave',url);
+  return next.href;
+}
+if(remoteGrave){
+  document.body.classList.add('remote-pending');
+  $('plot-context').textContent=targetError?'Invalid grave':targetLocation.hostname;
+  $('remote-context').hidden=false;
+  $('remote-description').textContent=`Managing ${targetLocation.hostname} directly. To connect, open its dashboard → System → Connections & integrations → Trusted dashboards and add ${location.origin}.`;
+  const home=new URL(location.href);home.searchParams.delete('grave');home.hash='';$('remote-home').href=home.href;
+  $('remote-direct').href=targetError?home.href:targetLocation.href;
+}
+async function loadClientTrust(){
+  $('client-trust-settings').hidden=remoteGrave||portableCompanion;
+  if(remoteGrave||portableCompanion)return;
+  try{
+    const r=await fetch('api/client-trust');
+    if(!r.ok){$('client-trust-settings').hidden=true;return;}
+    $('trusted-origins').value=(await r.json()).origins.join('\n');
+  }catch(_){$('client-trust-status').textContent='Unable to load trusted dashboards.';}
+}
+$('save-client-trust').onclick=async()=>{
+  if(remoteGrave)return;
+  const origins=$('trusted-origins').value.split(/\s+/).filter(Boolean);
+  if(!confirm('Allow these dashboards to read private data and operate this grave as your authorized Tailscale user?'))return;
+  try{
+    const r=await fetch('api/client-trust',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({origins})});
+    const data=await r.json();if(!r.ok)throw new Error(data.output||'Unable to save trust');
+    $('client-trust-status').textContent='Trusted dashboards saved.';
+  }catch(e){$('client-trust-status').textContent=e.message;}
+};
+
 // one epitaph per visit
 $('footyear').textContent=new Date().getFullYear();
 $('epitaph').textContent=[
@@ -878,11 +960,11 @@ function renderGraveyard(message,checking=graveyardChecking){
   $('graveyard-count').textContent=savedPlots.length?` · ${savedPlots.length}`:'';
   const expanded=new Set([...document.querySelectorAll('[data-plot-details][aria-expanded="true"]')].map(b=>b.closest('[data-plot]').dataset.plot));
   const focused=document.activeElement,focusPlot=focused?.closest('[data-plot]')?.dataset.plot,focusAction=focused?.dataset.plotAction;
-  const plots=[...savedPlots].sort((a,b)=>Number(b.dns===location.hostname)-Number(a.dns===location.hostname)||a.name.localeCompare(b.name)||a.dns.localeCompare(b.dns));
+  const plots=[...savedPlots].sort((a,b)=>Number(b.dns===targetLocation.hostname)-Number(a.dns===targetLocation.hostname)||a.name.localeCompare(b.name)||a.dns.localeCompare(b.dns));
   $('graveyard-plots').innerHTML=plots.map((p,index)=>{
     const s=p.summary,problems=(s.health.services_failed||0)+(s.health.containers_problem||0);
     const age=Math.max(0,Math.floor((Date.now()/1000-p.lastSeen)/60));
-    const here=p.dns===location.hostname,open=expanded.has(p.id),detailsId=`plot-detail-${index}`;
+    const here=p.dns===targetLocation.hostname,open=expanded.has(p.id),detailsId=`plot-detail-${index}`;
     const link=key=>{
       const url=plotLink(p,key);if(checking||!p.reachable||!url)return '';
       // Plain top-level navigation: local apps stay in scope; another origin
@@ -903,7 +985,7 @@ function renderGraveyard(message,checking=graveyardChecking){
         <p>${esc(plotConnection(p,checking))}</p>
         ${!checking&&p.reachable?`<p class="dim">CPU ${percent(s.resources.cpu_pct)} · Memory ${percent(s.resources.memory_pct)} · Disk ${percent(s.resources.disk_pct)}</p>`:''}
         <p class="dim">${!checking&&p.reachable?`${esc(s.activity.sessions_live??'—')} live sessions · ${esc(problems)} problems`:`Last seen ${age<1?'just now':age<60?age+'m ago':Math.floor(age/60)+'h ago'}`}</p>
-        <div class="plot-links">${link('terminal')}${link('network')}${link('t3_setup')}${!checking&&!p.reachable?`<button data-forget-plot="${esc(p.id)}" data-plot-action="forget">Forget plot</button>`:''}</div>
+        <div class="plot-links">${!checking&&p.reachable?`<a href="${esc(managementURL(plotLink(p,'dashboard')))}" data-plot-action="manage">Manage here</a>`:''}${link('terminal')}${link('network')}${link('t3_setup')}${!checking&&!p.reachable?`<button data-forget-plot="${esc(p.id)}" data-plot-action="forget">Forget plot</button>`:''}</div>
       </div></article>`;
   }).join('');
   filterGraveyard();
@@ -1025,16 +1107,16 @@ function statusDot(state){
 // same-origin app paths need the https origin spelled out when gravedecay is
 // viewed on a bare port (localhost:4712) rather than mounted at /grave/
 let macosCompanion=false,portableCompanion=false;
-const appUrl=u=>portableCompanion?u:(macosCompanion&&location.port&&u==='/net/')
-  ?`http://${location.hostname}:4714/`
+const appUrl=u=>portableCompanion?u:remoteGrave?(u==='grave:files'?u:new URL(u,targetLocation.origin+'/').href):(macosCompanion&&location.port&&u==='/net/')
+  ?`http://${targetLocation.hostname}:4714/`
   // agents-mode Mac viewed on its bare port: T3 and terminal live on their
   // own loopback ports, not under this origin's path routing
   :(macosCompanion&&location.port&&u==='/')
-  ?`http://${location.hostname}:4711/`
+  ?`http://${targetLocation.hostname}:4711/`
   :(macosCompanion&&location.port&&u.startsWith('/term/'))
-  ?`http://${location.hostname}:4713/${u.slice('/term/'.length)}`
+  ?`http://${targetLocation.hostname}:4713/${u.slice('/term/'.length)}`
   :(location.port&&location.port!=='443'&&u.startsWith('/'))
-  ?`https://${location.hostname}${u}`:u;
+  ?`https://${targetLocation.hostname}${u}`:u;
 // 'claude' or 'codex' if this tile launches that agent CLI via /term/?arg=…,
 // else null. Gates the ⚡ skip-perms toggle and the -yolo session rewrite.
 const agentArg=u=>{const m=/[?&]arg=(claude|codex)(?=$|&)/.exec(u||'');return m?m[1]:null;};
@@ -1064,7 +1146,7 @@ async function refreshDispatchPRs(){
     if(Date.now()-(dispatchPRs.get(name)?.at||0)<120000)continue;
     dispatchPRs.set(name,{at:Date.now(),pr:null});
     try{
-      const r=await fetch('api/dispatch-pr?name='+encodeURIComponent(name));
+      const r=await apiFetch('api/dispatch-pr?name='+encodeURIComponent(name));
       if(!r.ok)continue;
       const {pr}=await r.json();
       if(pr&&/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+$/.test(pr.url||'')){
@@ -1097,7 +1179,7 @@ async function pollReleaseNotice(){
   clearTimeout(releaseNoticeTimer);
   if(portableCompanion)return;
   try{
-    const response=await fetch('api/admin/releases',{cache:'no-store'});
+    const response=await apiFetch('api/admin/releases',{cache:'no-store'});
     if(!response.ok){$('update-notice').hidden=true;return;}
     showReleaseNotice(await response.json());
   }catch(_){$('update-notice').hidden=true;}
@@ -1119,7 +1201,7 @@ const DEFAULT_PANEL_ORDER=['t3activity','tmux','prs','linear','ci','repos','usag
   'stats','services','docker','journal','actions','benchmark'];
 const OLD_PANEL_ORDER=['prs','linear','ci','t3activity','tmux','scheduled','sessions','usage','inbox','repos',
   'stats','benchmark','actions','services','docker','journal'];
-const panelStorageKey='grave-panels-v2:'+location.pathname;
+const panelStorageKey='grave-panels-v2:'+location.pathname+destinationKey;
 let expandedPanels={};
 try{const saved=JSON.parse(localStorage.getItem(panelStorageKey)||'{}');if(saved&&typeof saved==='object'&&!Array.isArray(saved))expandedPanels=saved;}catch(_){}
 const defaultExpanded=new Set(['t3activity','tmux']);
@@ -1304,7 +1386,7 @@ async function pollBenchmark(force=false){
   if(benchBusy||portableCompanion||(!force&&Date.now()-benchChecked<2000))return;
   benchBusy=true;benchChecked=Date.now();
   try{
-    const response=await fetch('api/admin/benchmark',{cache:'no-store'}),b=await response.json();
+    const response=await apiFetch('api/admin/benchmark',{cache:'no-store'}),b=await response.json();
     if(!response.ok)throw new Error(b.output||b.error||`HTTP ${response.status}`);
     renderBenchmark(b);
   }catch(e){$('bench-state').hidden=false;$('bench-state').textContent=e.message;$('bench-run').disabled=true;}
@@ -1314,7 +1396,7 @@ async function benchmarkAction(action){
   $('bench-run').disabled=true;$('bench-cancel').disabled=true;
   try{
     const body=action==='start'?{action,mode:$('bench-mode').value}:{action};
-    const response=await fetch('api/admin/benchmark',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),b=await response.json();
+    const response=await apiFetch('api/admin/benchmark',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),b=await response.json();
     if(!response.ok)throw new Error(b.output||b.error||`HTTP ${response.status}`);
     renderBenchmark(b);
   }catch(e){$('bench-state').hidden=false;$('bench-state').textContent=e.message;}
@@ -1338,7 +1420,7 @@ async function loadGraveReleases(){
   if(updatePending)return;
   updateControls(true);
   try{
-    const r=await fetch('api/admin/releases',{cache:'no-store'}),data=await r.json();
+    const r=await apiFetch('api/admin/releases',{cache:'no-store'}),data=await r.json();
     if(!r.ok)throw new Error(data.output||`HTTP ${r.status}`);
     macUpdateChannel=data.channel==='edge'?'edge':'release';
     showReleaseNotice(data);
@@ -1353,13 +1435,13 @@ async function loadGraveReleases(){
   }finally{updateControls(!!updatePending);}
 }
 function rememberUpdate(){
-  try{if(updatePending)sessionStorage.setItem('grave-update-pending',JSON.stringify(updatePending));else sessionStorage.removeItem('grave-update-pending');}catch(_){}
+  try{if(updatePending)sessionStorage.setItem('grave-update-pending'+destinationKey,JSON.stringify(updatePending));else sessionStorage.removeItem('grave-update-pending'+destinationKey);}catch(_){}
 }
 async function updateStatus(){
   if(updatePolling)return;
   clearTimeout(updateTimer);updatePolling=true;
   try{
-    const r=await fetch('api/admin/update-status',{cache:'no-store'}),x=await r.json();
+    const r=await apiFetch('api/admin/update-status',{cache:'no-store'}),x=await r.json();
     if(!r.ok)throw new Error(x.output||x.error||`HTTP ${r.status}`);
     $('update-log').textContent=x.log||'No update log yet.';
     const fresh=!updatePending||(x.attempt&&x.attempt!==updatePending.previous);
@@ -1378,7 +1460,7 @@ async function updateStatus(){
         updatePending=null;rememberUpdate();updateControls(false);
         // A full navigation loads the new HTML/JS. Polling /api/state alone
         // leaves an already-open phone/PWA running the previous interface.
-        try{sessionStorage.setItem('grave-update-result',message);location.reload();}
+        try{sessionStorage.setItem('grave-update-result'+destinationKey,message);location.reload();}
         catch(_){$('grave-release-state').textContent='Update completed. Reload to load the updated dashboard.';$('reload-dashboard').hidden=false;}
         return;
       }
@@ -1421,12 +1503,12 @@ $('update-dialog').addEventListener('close',()=>{unlockBody();$('update-open').f
 $('refresh-grave-releases').onclick=async()=>{
   if(nativeMacHost){
     try{
-      const response=await fetch('api/admin/update-check',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      const response=await apiFetch('api/admin/update-check',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
       if(!response.ok)throw new Error((await response.json()).output||'Cannot check for updates');
       $('grave-release-state').textContent='Checking for app releases…';
       for(let i=0;i<30;i++){
         await new Promise(resolve=>setTimeout(resolve,1000));
-        const state=await(await fetch('api/admin/update-status',{cache:'no-store'})).json();
+        const state=await(await apiFetch('api/admin/update-status',{cache:'no-store'})).json();
         if(!state.checking&&state.state!=='queued')break;
       }
     }catch(error){$('grave-release-state').textContent=error.message;return;}
@@ -1443,13 +1525,13 @@ async function applyGraveUpdate(selection){
   try{
     // Snapshot the previous attempt so an old success cannot complete a new
     // asynchronous systemd start. Keep this identity through page reloads.
-    const before=await fetch('api/admin/update-status',{cache:'no-store'}),old=await before.json();
+    const before=await apiFetch('api/admin/update-status',{cache:'no-store'}),old=await before.json();
     if(!before.ok)throw new Error(old.output||old.error||'Cannot read updater status');
     if(old.state==='queued'||old.state==='running')throw new Error('An update is already running. Check its progress before starting another.');
     const body=selection==='configured'?{channel:macosCompanion?macUpdateChannel:'configured'}:{tag:selection};
     updatePending={previous:old.attempt||'',started:Date.now(),target:selection==='configured'?macUpdateChannel:selection};rememberUpdate();
     $('grave-release-state').textContent='Queueing '+(selection==='configured'?'configured channel':selection)+'…';
-    const r=await fetch('api/admin/upgrade',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),data=await r.json();
+    const r=await apiFetch('api/admin/upgrade',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),data=await r.json();
     if(!r.ok){updatePending=null;rememberUpdate();throw new Error(data.output||`HTTP ${r.status}`);}
     $('grave-release-state').textContent='Update queued — waiting for the installer…';
     updateStatus();
@@ -1470,7 +1552,7 @@ function renderPublicState(s){
   }
   document.body.classList.add('public-view');
   $('public-status').hidden=false;
-  pollFailures=0;lastConnected=Date.now();paintConnection();
+  pollFailures=0;lastConnectionError='';lastConnected=Date.now();paintConnection();
   lastMode=s.mode;cfg=null;cfgSrv='';envApps=[];lastTmux=[];
   dispatchCaps={};dispatchRepos=[];dispatchIssues=[];
   $('public-host').textContent=`${s.host} · ${s.platform} · ${s.mode}`;
@@ -1483,6 +1565,7 @@ function renderPublicState(s){
   schedule();
 }
 function render(s){
+  if(remoteGrave)document.body.classList.remove('remote-pending');
   if(s.access==='read-only'){renderPublicState(s);return;}
   document.body.classList.remove('public-view');
   $('public-status').hidden=true;
@@ -1491,7 +1574,7 @@ function render(s){
   // explicitly across every poll-driven render. WebKit can adjust its anchor
   // on the next frame, so repeat then unless fresh input says the user moved.
   const scrollX=window.scrollX,scrollY=window.scrollY,inputAtRender=scrollInput;
-  pollFailures=0;lastConnected=Date.now();paintConnection();
+  pollFailures=0;lastConnectionError='';lastConnected=Date.now();paintConnection();
   envApps=s.apps||[];
   lastTmux=s.tmux||[];
   dispatchCaps=s.dispatch||{};
@@ -1520,24 +1603,24 @@ function render(s){
   document.body.classList.toggle('macagents',macosCompanion&&!!s.macos_agents);
   document.body.classList.toggle('portable',portableCompanion);
   $('plot-context').innerHTML=`${plotIcon(s)} ${esc(s.host)}`;
-  $('plot-context').title=`Managing ${s.host} · ${location.hostname}`;
-  $('plot-context').style.color=plotAccent(location.hostname);
+  $('plot-context').title=`Managing ${s.host} · ${targetLocation.hostname}`;
+  $('plot-context').style.color=plotAccent(targetLocation.hostname);
   $('t3-setup').textContent=`Set up T3 · ${s.host}`;
-  $('t3-setup').style.color=plotAccent(location.hostname);
+  $('t3-setup').style.color=plotAccent(targetLocation.hostname);
   settingsHost=s.host;settingsIcon=plotIcon(s);
   $('settings-title').innerHTML=esc(SETTINGS_TITLES[settingsSection])+' · '+settingsIcon+' '+esc(settingsHost);
-  $('settings-title').style.color=plotAccent(location.hostname);
+  $('settings-title').style.color=plotAccent(targetLocation.hostname);
   openT3Setup();
-  $('update-title').innerHTML=`Updates & restart · ${plotIcon(s)} ${esc(s.host)} · ${esc(location.hostname)}`;
-  $('update-title').style.color=plotAccent(location.hostname);
+  $('update-title').innerHTML=`Updates & restart · ${plotIcon(s)} ${esc(s.host)} · ${esc(targetLocation.hostname)}`;
+  $('update-title').style.color=plotAccent(targetLocation.hostname);
   if(!updateBooted&&!portableCompanion){
     updateBooted=true;
     pollReleaseNotice();
     try{
-      updatePending=JSON.parse(sessionStorage.getItem('grave-update-pending')||'null');
-      const result=sessionStorage.getItem('grave-update-result');
+      updatePending=JSON.parse(sessionStorage.getItem('grave-update-pending'+destinationKey)||'null');
+      const result=sessionStorage.getItem('grave-update-result'+destinationKey);
       if(updatePending){$('update-dialog').showModal();lockBody();updateControls(true);updateStatus();}
-      else if(result){sessionStorage.removeItem('grave-update-result');$('update-dialog').showModal();lockBody();loadGraveReleases();$('grave-release-state').textContent=result;}
+      else if(result){sessionStorage.removeItem('grave-update-result'+destinationKey);$('update-dialog').showModal();lockBody();loadGraveReleases();$('grave-release-state').textContent=result;}
     }catch(_){}
   }
   document.querySelector('[data-tab=system]').textContent=portableCompanion?'Preferences':'📟 System';
@@ -1643,7 +1726,7 @@ function render(s){
   report.querySelectorAll('[data-job-cancel]').forEach(button=>button.onclick=async()=>{
     button.disabled=true;
     try{
-      const response=await fetch('api/agent-job-cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:button.dataset.jobCancel})});
+      const response=await apiFetch('api/agent-job-cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:button.dataset.jobCancel})});
       const result=await response.json();
       if(!response.ok||!result.ok)throw new Error(result.output||'Cancellation failed');
       button.textContent='Cancelled';
@@ -1756,14 +1839,17 @@ function render(s){
       window.scrollTo(scrollX,scrollY);
   });
 }
+let pollBusy=false;
 async function poll(){
-  if(document.hidden)return;
+  if(document.hidden||pollBusy)return;
+  pollBusy=true;
   try{
-    const r=await fetch('api/state');
+    const r=await apiFetch('api/state');
     if(!r.ok)throw new Error(`HTTP ${r.status}`);
     render(await r.json());
     if(!document.body.classList.contains('public-view'))pollT3Activity(); // deliberately detached: a remote T3 must not hold up vitals
-  }catch(e){pollFailures++;paintConnection();}
+  }catch(e){pollFailures++;lastConnectionError=e.message;paintConnection();}
+  finally{pollBusy=false;}
 }
 function renderT3Activity(a){
   const table=$('t3activity'),rows=a.threads||[];
@@ -1776,11 +1862,11 @@ function renderT3Activity(a){
   table.innerHTML=rows.map(x=>{
     const plan=x.plan?` · ${esc(x.plan.step)} (${esc(String(x.plan.completed))}/${esc(String(x.plan.total))})`:'';
     const live=x.liveness?` · ${esc(x.liveness)}`:'';
-    return `<tr><td>${statusDot(x.phase==='failed'?'failed':x.phase==='completed'?'inactive':'active')}<a href="${esc(x.link)}" target="_blank" rel="noopener">${esc(x.environment)} · ${esc(x.project)} · ${esc(x.title)}</a></td><td class="dim">${esc(x.provider)}${x.model?' / '+esc(x.model):''} · ${esc(x.phase.replaceAll('_',' '))}${live}${plan}</td><td class="dim">${a.status==='stale'?'stale · ':''}${esc(x.updated_at||'')}</td></tr>`;
+    return `<tr><td>${statusDot(x.phase==='failed'?'failed':x.phase==='completed'?'inactive':'active')}<a href="${esc(appUrl(x.link))}" target="_blank" rel="noopener">${esc(x.environment)} · ${esc(x.project)} · ${esc(x.title)}</a></td><td class="dim">${esc(x.provider)}${x.model?' / '+esc(x.model):''} · ${esc(x.phase.replaceAll('_',' '))}${live}${plan}</td><td class="dim">${a.status==='stale'?'stale · ':''}${esc(x.updated_at||'')}</td></tr>`;
   }).join('')||`<tr><td class="dim">${a.status==='stale'?'T3 snapshot stale':'no active T3 threads'}</td></tr>`;
 }
 async function pollT3Activity(){
-  try{const r=await fetch('api/t3-activity',{cache:'no-store'});if(r.ok)renderT3Activity(await r.json());}catch(_){}
+  try{const r=await apiFetch('api/t3-activity',{cache:'no-store'});if(r.ok)renderT3Activity(await r.json());}catch(_){}
 }
 function paintConnection(){
   const offline=!navigator.onLine,failed=pollFailures>0,c=$('connection');
@@ -1788,6 +1874,7 @@ function paintConnection(){
   if(!offline&&!failed)return;
   const ago=lastConnected?Math.max(1,Math.round((Date.now()-lastConnected)/1000)):null;
   $('connection-text').textContent=offline?'network offline — check Tailscale'
+    :remoteGrave?`Cannot refresh ${targetLocation.hostname}: ${lastConnectionError||'connection unavailable'}. Check Tailscale, destination trust and API version.${ago?` Last connected ${ago}s ago.`:''}`
     :`box unreachable${ago?` · last connected ${ago}s ago`:''}`;
 }
 $('connection-retry').onclick=poll;
@@ -1810,8 +1897,8 @@ async function runStream(act,title){
   aborter=new AbortController();
   $('game-confirm').style.display='none';
   $('console').style.display='block';lockBody();
-  $('console-title').textContent='▚ '+location.hostname+' · '+(title||('grave '+act));
-  $('console-title').style.color=plotAccent(location.hostname);
+  $('console-title').textContent='▚ '+targetLocation.hostname+' · '+(title||('grave '+act));
+  $('console-title').style.color=plotAccent(targetLocation.hostname);
   const out=$('console-out');out.innerHTML='';
   $('console-close').style.display='none';
   const add=(t,cls)=>{const d=document.createElement('div');
@@ -1839,7 +1926,7 @@ async function runStream(act,title){
     out.appendChild(d);out.scrollTop=out.scrollHeight;};
   let gotData=false,okDone=false;
   try{
-    const r=await fetch('api/action-stream?action='+encodeURIComponent(act),
+    const r=await apiFetch('api/action-stream?action='+encodeURIComponent(act),
       {signal:aborter.signal});
     if(!r.ok){
       let msg=await r.text();
@@ -1929,7 +2016,7 @@ async function openCapture(name){
   $('capture-msg').textContent='';
   $('capture-dlg').style.display='block';lockBody();
   try{
-    const r=await fetch('api/session-capture',{method:'POST',
+    const r=await apiFetch('api/session-capture',{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
     const j=await r.json();
     $('capture-ta').value=j.ok?j.output:(j.output||'capture failed');
@@ -1955,7 +2042,7 @@ $('tmux').addEventListener('click',async e=>{
   e.preventDefault();
   if(!confirm(`Kill session "${n}"? Anything running in it dies.`))return;
   try{
-    const r=await fetch('api/session-kill',{method:'POST',
+    const r=await apiFetch('api/session-kill',{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});
     const j=await r.json();
     if(!j.ok)alert(j.output||'kill failed');
@@ -1988,7 +2075,7 @@ $('dispatch-start').onclick=async()=>{
   dispatchBusy=true;$('dispatch-start').disabled=true;$('dispatch-x').disabled=true;
   $('dispatch-message').textContent='Starting work…';
   try{
-    const r=await fetch('api/linear-dispatch',{method:'POST',headers:{'Content-Type':'application/json'},
+    const r=await apiFetch('api/linear-dispatch',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({issue:dispatchIssue.id,repo,agent})});
     const j=await r.json();
     $('dispatch-message').textContent=j.output||(j.ok?'Session created.':'Could not start work.');
@@ -2005,7 +2092,7 @@ $('add-linear').onclick=async()=>{
   if(!t)return;
   $('add-linear').disabled=true;
   try{
-    const r=await fetch('api/linear-issue',{method:'POST',
+    const r=await apiFetch('api/linear-issue',{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify({title:t})});
     const j=await r.json();
     if(j.ok){$('new-linear').value='';poll();}
@@ -2098,7 +2185,7 @@ const b64ToU8=s=>{const b=atob(s.replace(/-/g,'+').replace(/_/g,'/')
   .padEnd(s.length+(4-s.length%4)%4,'='));return Uint8Array.from(b,c=>c.charCodeAt(0));};
 const notifyMsg=t=>{$('notify-msg').textContent=t;};
 function canBrowserPush(){
-  return 'serviceWorker'in navigator&&'PushManager'in window&&'Notification'in window;
+  return !remoteGrave&&'serviceWorker'in navigator&&'PushManager'in window&&'Notification'in window;
 }
 function buildNotify(){
   const n=notifyInfo,head=$('notify-head');
@@ -2106,7 +2193,8 @@ function buildNotify(){
   if(!n){$('sec-notify').style.display='none';return;}
   $('ntfy-state').textContent=n.ntfy?'✓ configured':'(not set)';
   const sup=$('push-support');
-  if(!n.push.supported)sup.textContent='· '+(n.push.reason||'unavailable on the box');
+  if(remoteGrave)sup.textContent='· open the destination dashboard to manage browser push';
+  else if(!n.push.supported)sup.textContent='· '+(n.push.reason||'unavailable on the box');
   else if(!canBrowserPush())
     sup.textContent='· this browser can’t receive push (iOS: install the PWA, then enable here)';
   else sup.textContent='';
@@ -2114,9 +2202,10 @@ function buildNotify(){
   const localId=localStorage.getItem('grave-push-id');
   $('push-devices').innerHTML=(n.push.devices||[]).map(d=>`<div class="setrow">
     <span class="setlabel">📱 ${esc(d.label)} <span class="dim2">· ${esc(d.added)}${d.id===localId?' · this device':''}</span></span>
-    <button class="mini" data-push-del="${esc(d.id)}">✕</button>
+    <button class="mini" data-push-del="${esc(d.id)}" ${remoteGrave?'disabled':''}>✕</button>
   </div>`).join('')||'<div class="setrow dim2">no devices enrolled</div>';
   $('push-devices').querySelectorAll('[data-push-del]').forEach(b=>b.onclick=async()=>{
+    if(remoteGrave)return;
     b.disabled=true;
     try{
       if(b.dataset.pushDel===localStorage.getItem('grave-push-id')){
@@ -2126,7 +2215,7 @@ function buildNotify(){
           if(sub)await sub.unsubscribe();}catch(e){}
         localStorage.removeItem('grave-push-id');
       }
-      const r=await fetch('api/push-unsubscribe',{method:'POST',
+      const r=await apiFetch('api/push-unsubscribe',{method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({id:b.dataset.pushDel})});
       if((await r.json()).ok){
@@ -2140,12 +2229,13 @@ function buildNotify(){
     ${esc(EVENT_LABEL[c]||c)}</label>`).join('');
 }
 $('push-enable').onclick=async()=>{
+  if(remoteGrave)return;
   notifyMsg('');
   try{
     // Order matters on iOS: requestPermission must run inside this tap.
     const perm=await Notification.requestPermission();
     if(perm!=='granted'){notifyMsg('notification permission denied');return;}
-    const kj=await(await fetch('api/push-key')).json();
+    const kj=await(await apiFetch('api/push-key')).json();
     if(!kj.ok){notifyMsg(kj.output||'no server key');return;}
     const reg=await navigator.serviceWorker.ready;
     let sub=await reg.pushManager.getSubscription();
@@ -2153,7 +2243,7 @@ $('push-enable').onclick=async()=>{
       {userVisibleOnly:true,applicationServerKey:b64ToU8(kj.key)});
     const label=((navigator.userAgentData&&navigator.userAgentData.platform)
       ||navigator.platform||'device')+(navigator.maxTouchPoints>1?' (touch)':'');
-    const j=await(await fetch('api/push-subscribe',{method:'POST',
+    const j=await(await apiFetch('api/push-subscribe',{method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({subscription:sub.toJSON(),label})})).json();
     if(!j.ok){notifyMsg(j.output||'enroll failed');return;}
@@ -2162,14 +2252,14 @@ $('push-enable').onclick=async()=>{
     // render() deliberately won't adopt state while the modal is open, so pull
     // the fresh device list directly — otherwise "no devices enrolled" lingers
     // right after a successful enroll (#97).
-    try{const s=await(await fetch('api/state')).json();
+    try{const s=await(await apiFetch('api/state')).json();
       if(s.notify){notifyInfo=s.notify;buildNotify();}}catch(e){}
   }catch(e){notifyMsg('enable failed: '+e);}
 };
 $('ntfy-clear').onclick=async()=>{
   if(!confirm('Remove the ntfy channel from the box?'))return;
   try{
-    const j=await(await fetch('api/settings',{method:'POST',
+    const j=await(await apiFetch('api/settings',{method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({ntfy_clear:true})})).json();
     if(j.ok){if(j.notify)notifyInfo=j.notify;buildNotify();notifyMsg('ntfy channel removed');}
@@ -2179,7 +2269,7 @@ $('ntfy-clear').onclick=async()=>{
 $('notify-test').onclick=async()=>{
   notifyMsg('sending…');
   try{
-    const j=await(await fetch('api/notify-test',{method:'POST',
+    const j=await(await apiFetch('api/notify-test',{method:'POST',
       headers:{'Content-Type':'application/json'},body:'{}'})).json();
     notifyMsg(j.ok?'📣 sent — check your devices':(j.output||'send failed'));
   }catch(e){notifyMsg('send failed: '+e);}
@@ -2236,6 +2326,7 @@ function openSettings(section='connections',returnTo=document.activeElement){
     :settingsSection==='dashboard'?'Launcher, widget order and refresh settings are shared on this grave. Expanded sections are remembered only on this device.'
     :'Settings and actions apply to this grave.';
   $('set-msg').textContent='';
+  loadClientTrust();
   $('save-set').hidden=settingsSection==='machine';
   if(settingsSection==='machine')$('settings-scope').textContent='These actions apply immediately to this grave.';
   // sections start collapsed — the modal opens phone-sized
@@ -2271,7 +2362,7 @@ async function openLog(name,file){
   $('log-text').textContent='loading…';
   $('log-dlg').style.display='block';lockBody();
   try{
-    const r=await(await fetch(`api/agent-log?name=${encodeURIComponent(name)}&file=${encodeURIComponent(file)}`)).json();
+    const r=await(await apiFetch(`api/agent-log?name=${encodeURIComponent(name)}&file=${encodeURIComponent(file)}`)).json();
     $('log-text').textContent=r.ok?(r.text||'(empty log)'):r.output;
   }catch(e){$('log-text').textContent='failed to load: '+e;}
 }
@@ -2281,7 +2372,7 @@ document.addEventListener('click',async e=>{
   if(v){e.preventDefault();openLog(v.dataset.log,v.dataset.file);return;}
   const r=e.target.closest('a.resume');
   if(r){e.preventDefault();r.textContent='…';
-    const res=await fetch('api/session-resume',{method:'POST',
+    const res=await apiFetch('api/session-resume',{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify({name:r.dataset.resume})});
     if(!(await res.json()).ok)r.textContent='✗';  // next poll redraws either way
   }
@@ -2295,7 +2386,7 @@ function buildKillList(){
   :'<div class="setrow dim2">no sessions running</div>';
 }
 async function killSession(n){
-  const r=await fetch('api/session-kill',{method:'POST',
+  const r=await apiFetch('api/session-kill',{method:'POST',
     headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});
   return (await r.json()).ok;
 }
@@ -2342,7 +2433,7 @@ function paintBoot(){
 async function setBoot(m){
   $('boot-state').textContent='saving…';
   try{
-    const r=await fetch('api/action',{method:'POST',
+    const r=await apiFetch('api/action',{method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({action:'bootmode-'+m})});
     const j=await r.json();
@@ -2381,7 +2472,7 @@ function applyGamewatch(g){
 async function setThrottle(on){
   $('throttle-state').textContent='saving…';
   try{
-    const r=await fetch('api/action',{method:'POST',headers:{'Content-Type':'application/json'},
+    const r=await apiFetch('api/action',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({action:on?'gamewatch-on':'gamewatch-off'})});
     const j=await r.json();
     $('throttle-state').textContent=j.ok?'saved ✓':(j.output||'failed');
@@ -2407,7 +2498,7 @@ function applyKeepalive(g){
 async function setKeepalive(on){
   $('keepalive-state').textContent='saving…';
   try{
-    const r=await fetch('api/action',{method:'POST',headers:{'Content-Type':'application/json'},
+    const r=await apiFetch('api/action',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({action:on?'keepalive-on':'keepalive-off'})});
     const j=await r.json();
     $('keepalive-state').textContent=j.ok?'saved ✓':(j.output||'failed');
@@ -2444,7 +2535,7 @@ $('save-set').onclick=async()=>{
   }
   $('set-msg').textContent='saving…';
   try{
-    const r=await fetch('api/settings',{method:'POST',
+    const r=await apiFetch('api/settings',{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const j=await r.json();
     if(j.ok){cfg=j.settings;cfgSrv=JSON.stringify(j.settings);layoutKey='';schedule();
@@ -2470,14 +2561,14 @@ function joinPath(a,b){return a?a+'/'+b:b;}
 function openFiles(){$('files-dlg').style.display='block';lockBody();loadFiles('');}
 function closeFiles(){$('files-dlg').style.display='none';unlockBody();}
 async function fsOp(body){
-  const r=await fetch('api/fs',{method:'POST',
+  const r=await apiFetch('api/fs',{method:'POST',
     headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   return r.json();
 }
 async function loadFiles(path){
   $('files-msg').textContent='';
   let j;
-  try{const r=await fetch('api/files?path='+encodeURIComponent(path));j=await r.json();}
+  try{const r=await apiFetch('api/files?path='+encodeURIComponent(path));j=await r.json();}
   catch(e){$('files-msg').textContent='load failed: '+e;return;}
   if(!j.ok){$('files-msg').textContent=j.output||'load failed';return;}
   filesPath=j.path;
@@ -2509,8 +2600,18 @@ $('files-mkdir').onclick=async()=>{
 $('files-list').addEventListener('click',async e=>{
   const dl=e.target.closest('[data-dl]');
   if(dl){const n=dl.dataset.dl,a=document.createElement('a');
-    a.href='api/download?path='+encodeURIComponent(joinPath(filesPath,n));a.download=n;
-    document.body.appendChild(a);a.click();a.remove();return;}
+    const path='api/download?path='+encodeURIComponent(joinPath(filesPath,n));
+    if(!remoteGrave){a.href=path;a.download=n;document.body.appendChild(a);a.click();a.remove();return;}
+    try{
+      const response=await apiFetch(path);
+      if(!response.ok)throw new Error('Download failed');
+      if(Number(response.headers.get('Content-Length'))>64*1024*1024){
+        await response.body.cancel();throw new Error('Open the destination dashboard to download files larger than 64 MiB.');
+      }
+      a.href=URL.createObjectURL(await response.blob());a.download=n;
+      document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),60000);
+    }catch(e){$('files-msg').textContent=e.message;}
+    return;}
   const ren=e.target.closest('[data-ren]');
   if(ren){const n=ren.dataset.ren,nn=prompt('Rename to:',n);
     if(!nn||nn===n)return;
@@ -2528,7 +2629,7 @@ async function uploadFiles(list){
   for(const f of list){
     $('files-msg').textContent='uploading '+f.name+'…';
     let j;
-    try{const r=await fetch('api/upload?path='+encodeURIComponent(filesPath)
+    try{const r=await apiFetch('api/upload?path='+encodeURIComponent(filesPath)
         +'&name='+encodeURIComponent(f.name),{method:'POST',body:f});j=await r.json();}
     catch(e){$('files-msg').textContent='upload failed: '+e;return;}
     if(!j.ok){$('files-msg').textContent=j.output||'upload failed';return;}
@@ -2548,6 +2649,7 @@ $('files-dlg').addEventListener('click',e=>{if(e.target.id==='files-dlg')closeFi
 // app-in-modal (iframe over the dashboard) — never used for T3
 function openAppModal(url,name){
   const full=appUrl(url);
+  if(remoteGrave){location.href=full;return;}
   $('appframe-title').textContent=name||url;
   $('appframe-open').href=full;
   $('appframe-if').src=full;
@@ -2564,7 +2666,7 @@ function schedule(){clearInterval(timer);
   timer=setInterval(poll,lastMode==='gaming'?30000:((cfg&&cfg.poll_ms)||5000));}
 initializePanels();
 const BOOT=/*BOOT*/null;   // server-rendered initial state: instant first paint
-if(BOOT){render(BOOT);if(cfg)pollT3Activity();}else poll();
+if(BOOT&&!remoteGrave){render(BOOT);if(cfg)pollT3Activity();}else poll();
 schedule();
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)poll()});
 // Own the entire appliance origin so /grave/, T3, /term/ and /pair/ remain in

@@ -63,6 +63,22 @@ timeouts and a 64 KiB summary limit. Each inventory holds at most 128 plots.
 Client devices must be able to reach a destination themselves to open its apps;
 the web overview reports reachability from its hosting appliance.
 
+## Direct management from one dashboard
+
+After upgrading both graves, trust the entry dashboard's exact HTTPS origin
+on the destination in **System → Connections & integrations → Trusted dashboards**.
+Then choose **Details → Manage here** in Graveyard. Work/System read the selected
+grave and send settings and supported operations directly to it, while the PWA
+stays at the entry origin. The destination banner includes a direct setup link
+and a return link. Requests never fall back to the entry grave after a failure.
+
+This mode supports single-owner Linux/macOS. An old or unsupported destination
+shows an error; its existing **Open grave** link still works. Trust is explicit
+and revocable on each destination; user authorization still comes from Tailscale.
+See [the API and setup contract](API.md#direct-management-api-v1). The entry grave
+still supplies the shell and inventory; it does not relay management traffic.
+T3 and other app links still navigate to the selected grave's website.
+
 ## Installed PWA navigation
 
 Install from `/grave/`. Its manifest covers `/` on that **one origin**, so
@@ -76,7 +92,7 @@ navigation surface. This is browser behavior, not a second installed PWA.
 See [Apple's web app navigation guidance](https://developer.apple.com/videos/play/wwdc2023/10120/)
 and the [manifest scope reference](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Manifest/Reference/scope).
 
-One installation remains a launcher for all reachable graves, but cannot
+Direct **Open grave** links remain a launcher for all reachable graves, but cannot
 make different hostnames share its standalone scope on iOS. Each destination
 keeps its own authentication and pairing. We do not proxy private apps or
 embed remote dashboards to disguise that boundary.

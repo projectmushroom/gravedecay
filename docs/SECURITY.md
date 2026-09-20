@@ -46,6 +46,22 @@ Run `grave docker up browsers` to recreate the service, then `grave doctor`.
 The image check compares the container with the installed configuration; it
 does not detect an installed configuration that still pins an older release.
 
+## Trusted management clients
+
+The opt-in v1 management API permits direct browser requests only from explicitly
+trusted exact HTTPS tailnet origins, while independently enforcing the existing
+Tailscale owner identity. Native clients still need owner authorization.
+A trusted dashboard can perform owner management operations; trust only hosts
+you control. Trust is local to each destination and stored in its secret store.
+The local trust endpoint retains the existing CSRF gate and has no v1 alias.
+
+Versioned requests require an explicit client header, including reads; mutation
+streams use POST. Preflights allow only supported methods and required headers.
+Neither legacy APIs nor the public summary acquire CORS access. Multi-user and
+portable management clients are refused until workspace delegation is designed.
+No central proxy forwards viewer identities, and no shared browser credential
+is introduced. See [API setup and contract](API.md#direct-management-api-v1).
+
 ## Threat model
 
 A personal box on a home LAN, reachable only over a personal tailnet. The

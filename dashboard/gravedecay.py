@@ -147,6 +147,71 @@ def owner_request(headers):
     except (OSError, ValueError):
         return False
 
+
+# Versioned client routes deliberately share the existing validated handlers.
+# Trust authorizes a browser origin, never a user: Serve identity is still
+# checked on every request. Workspace delegation needs a separate contract.
+CLIENT_TRUST_PATH = os.path.join(GRAVE_ROOT, "config", "secrets", "dashboard-trusted-origins.json")
+CLIENT_ROUTES = {
+    "GET": frozenset(("state", "settings", "capabilities", "t3-activity",
+                      "admin/benchmark", "admin/releases", "admin/update-status",
+                      "files", "download", "agent-log", "dispatch-pr")),
+    "POST": frozenset(("settings", "admin/benchmark", "admin/upgrade", "admin/update-check",
+                       "action", "action-stream", "fs", "upload", "session-kill",
+                       "session-resume", "session-capture", "agent-job-cancel",
+                       "linear-issue", "linear-dispatch", "notify-test")),
+}
+
+
+def client_api_supported():
+    return not (PORTABLE or BACKEND_TOKEN or REQUIRE_BACKEND_TOKEN)
+
+
+def client_origin(value):
+    # Exact HTTPS tailnet origins only. No paths, credentials, wildcards or
+    # arbitrary internet pages with ambient access to an owner's tailnet.
+    return (isinstance(value, str) and len(value) <= 253
+            and re.fullmatch(r"https://[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.ts\.net", value) is not None)
+
+
+def client_origins():
+    try:
+        with open(CLIENT_TRUST_PATH) as stream:
+            values = json.load(stream)
+        return [value for value in values if client_origin(value)][:32] if isinstance(values, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def save_client_origins(data):
+    values = data.get("origins")
+    if set(data) != {"origins"} or not isinstance(values, list) or len(values) > 32 or not all(client_origin(v) for v in values):
+        raise ValueError("Use at most 32 exact https://machine.tailnet.ts.net origins, one per line")
+    values = sorted(set(values))
+    os.makedirs(os.path.dirname(CLIENT_TRUST_PATH), mode=0o700, exist_ok=True)
+    fd, path = tempfile.mkstemp(dir=os.path.dirname(CLIENT_TRUST_PATH), prefix=".dashboard-trust-")
+    try:
+        with os.fdopen(fd, "w") as stream:
+            json.dump(values, stream)
+        os.replace(path, CLIENT_TRUST_PATH)
+    finally:
+        if os.path.exists(path):
+            os.unlink(path)
+    return values
+
+
+def client_routes():
+    routes = {method: sorted(paths) for method, paths in CLIENT_ROUTES.items()}
+    if MACOS:
+        routes = {method: [p for p in paths if p in ("settings", "capabilities")
+                  or "/api/" + p in (MACOS_GETS if method == "GET" else MACOS_POSTS)]
+                  for method, paths in routes.items()}
+        if MACOS_AGENTS:
+            routes["POST"].append("action-stream")
+    if not MACOS_NATIVE:
+        routes["POST"] = [p for p in routes["POST"] if p != "admin/update-check"]
+    return routes
+
 UNITS = [u for u in os.environ.get(
     "GRAVEDECAY_UNITS", "t3code,gravedecay,gravedecay-term,tailscaled,sshd,docker").split(",") if u]
 APPS = [{"name": name.strip(), "url": url.strip()}
@@ -2589,6 +2654,8 @@ def fs_op(data):
     full = _safe_path(rel)
     if full is None:
         return {"ok": False, "output": "path not allowed"}
+    if op in ("delete", "rename") and any(deny.startswith(full + os.sep) for deny in FILES_DENY):
+        return {"ok": False, "output": "cannot modify a protected directory"}
     try:
         if op == "mkdir":
             if not os.path.isdir(full):
@@ -2618,6 +2685,8 @@ def fs_op(data):
             target = _safe_path(os.path.join(os.path.dirname(rel), name))
             if target is None:
                 return {"ok": False, "output": "path not allowed"}
+            if any(deny.startswith(target + os.sep) for deny in FILES_DENY):
+                return {"ok": False, "output": "cannot replace a protected directory"}
             os.rename(full, target)
             return {"ok": True, "output": f"renamed to {name}"}
     except OSError as e:
@@ -2640,9 +2709,15 @@ class Handler(BaseHTTPRequestHandler):
         # it does not prevent the dashboard from embedding its own app tiles.
         self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
         self.send_header("X-Frame-Options", "DENY")
+        if getattr(self, "_client_cors", None):
+            self.send_header("Access-Control-Allow-Origin", self._client_cors)
+            self.send_header("Vary", "Origin")
         super().end_headers()
 
     def _send(self, code, body, ctype="application/json", cache="no-store", headers=None):
+        if code >= 400 and self.command == "POST":
+            # A gate may refuse a request before consuming its body.
+            self.close_connection = True
         data = body.encode() if isinstance(body, str) else body
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -2699,6 +2774,8 @@ class Handler(BaseHTTPRequestHandler):
         Requests without the header are non-browser clients (curl, local tooling)
         — allowed, but an Origin whose host mismatches is refused as an
         older-browser fallback."""
+        if getattr(self, "_client_authorized", False):
+            return False
         site = self.headers.get("Sec-Fetch-Site")
         if site is not None:
             ok = site in ("same-origin", "none")
@@ -2811,6 +2888,8 @@ class Handler(BaseHTTPRequestHandler):
     def _route(self):
         """Path with the optional BASE mount prefix stripped; None if a
         redirect was already sent (relative URLs need the trailing slash)."""
+        self._client_authorized = False
+        self._client_cors = None
         p = self.path.split("?", 1)[0]
         if BASE and p == BASE:
             self.send_response(301)
@@ -2819,7 +2898,56 @@ class Handler(BaseHTTPRequestHandler):
             return None
         if BASE and p.startswith(BASE + "/"):
             p = p[len(BASE):]
+        if p.startswith("/api/v1/") and p != "/api/v1/summary":
+            if self._backend_forbidden(p):
+                return None
+            if not client_api_supported():
+                self._client_error(501, "unsupported", "Client API requires a single-owner Linux or macOS grave")
+                return None
+            origin = self.headers.get("Origin")
+            same = origin == f"{public_scheme(self.headers)}://{self.headers.get('Host', '')}"
+            if origin and not same:
+                if origin not in client_origins():
+                    self._client_error(403, "untrusted_origin", "Trust this dashboard origin on the destination grave first")
+                    return None
+                self._client_cors = origin
+            if not owner_request(self.headers):
+                self._client_error(403, "forbidden", "The connected Tailscale identity is not authorized on this grave")
+                return None
+            route = p[len("/api/v1/"):]
+            method = self.headers.get("Access-Control-Request-Method", "") if self.command == "OPTIONS" else self.command
+            if route not in client_routes().get(method, ()):
+                self._client_error(404, "unsupported_route", "This method or operation is unavailable on this grave")
+                return None
+            if self.command != "OPTIONS" and self.headers.get("X-Grave-Client") != "1":
+                self._client_error(403, "client_header_required", "X-Grave-Client: 1 is required")
+                return None
+            if not origin and self.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none"):
+                self._client_error(403, "untrusted_origin", "A browser client must supply its trusted origin")
+                return None
+            self._client_authorized = True
+            return "/api/" + route
         return p
+
+    def _client_error(self, code, error, message):
+        self.close_connection = True
+        self._send(code, json.dumps({"ok": False, "error": error, "output": message}))
+
+    def do_OPTIONS(self):
+        p = self._route()
+        if p is None:
+            return
+        if not self._client_authorized:
+            self._send(403, '{"error":"preflight unavailable"}')
+            return
+        requested = {h.strip().lower() for h in self.headers.get("Access-Control-Request-Headers", "").split(",") if h.strip()}
+        if not requested <= {"content-type", "x-grave-client"}:
+            self._client_error(403, "headers_refused", "Unsupported client headers")
+            return
+        self._send(204, "", headers={
+            "Access-Control-Allow-Methods": self.headers["Access-Control-Request-Method"],
+            "Access-Control-Allow-Headers": "Content-Type, X-Grave-Client",
+        })
 
     def _stream_action(self):
         """SSE boot console: runs a grave action and streams its output live
@@ -2905,6 +3033,18 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self._backend_forbidden(p):
             return
+        if p == "/api/client-trust":
+            if not client_api_supported():
+                self._send(501, '{"error":"unsupported"}'); return
+            if self._forbidden() or self._cross_site():
+                return
+            self._send(200, json.dumps({"origins": client_origins()})); return
+        if self._client_authorized and p == "/api/capabilities":
+            self._send(200, json.dumps({"product": "gravedecay", "api_version": 1,
+                "host": HOST, "platform": PLATFORM, "routes": client_routes(),
+                "actions": sorted(ACTIONS)})); return
+        if self._client_authorized and p == "/api/settings":
+            self._send(200, json.dumps({"settings": load_settings()})); return
         if MACOS and p not in MACOS_GETS:
             self._send(404, '{"error":"unavailable in macOS companion"}')
             return
@@ -3084,6 +3224,24 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self._backend_forbidden(p):
             return
+        if p == "/api/client-trust":
+            if not client_api_supported():
+                self._send(501, '{"error":"unsupported"}'); return
+            if self._forbidden() or self._cross_site():
+                return
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                if not 0 < length <= 16384:
+                    raise ValueError("Invalid trust payload size")
+                data = json.loads(self.rfile.read(length))
+                if not isinstance(data, dict):
+                    raise ValueError("JSON object required")
+                origins = save_client_origins(data)
+            except (ValueError, TypeError, OSError) as error:
+                self._send(400, json.dumps({"ok": False, "output": str(error)})); return
+            self._send(200, json.dumps({"ok": True, "origins": origins})); return
+        if self._client_authorized and p == "/api/action-stream":
+            self._stream_action(); return
         if MACOS and p not in MACOS_POSTS:
             self._send(404, '{"error":"unavailable in macOS companion"}')
             return
@@ -3292,8 +3450,11 @@ class Handler(BaseHTTPRequestHandler):
 
 
 
-def maintenance_request(path, data=None, authenticated=True):
+def maintenance_request(path, data=None, authenticated=True, extra_headers=None):
     headers = {"Content-Type": "application/json"}
+    if path.startswith("/api/v1/"):
+        headers["X-Grave-Client"] = "1"
+    headers.update(extra_headers or {})
     if authenticated:
         headers["X-Grave-Local-Token"] = local_token()
     if BACKEND_TOKEN:
@@ -3317,6 +3478,22 @@ if __name__ == "__main__":
             validate_public_state(json.load(response))
         with maintenance_request("/api/auth-check") as response:
             assert response.status == 200
+        if client_api_supported():
+            with maintenance_request("/api/v1/capabilities") as response:
+                capabilities = json.load(response)
+                assert capabilities["api_version"] == 1
+                assert "state" in capabilities["routes"]["GET"]
+                assert "settings" in capabilities["routes"]["POST"]
+                assert "client-trust" not in capabilities["routes"]["POST"]
+                assert response.headers.get("Access-Control-Allow-Origin") is None
+            for authenticated, extra in ((False, {}), (True, {"Origin": "https://untrusted.invalid"})):
+                try:
+                    maintenance_request("/api/v1/state", authenticated=authenticated, extra_headers=extra)
+                except urllib.error.HTTPError as error:
+                    assert error.code == 403, "client API must refuse unauthorized requests"
+                    assert error.headers.get("Access-Control-Allow-Origin") is None
+                else:
+                    sys.exit("client API unexpectedly authorized an untrusted request")
         # Keep local app navigation inside one installed PWA. Another plot's
         # origin necessarily uses the browser's external-navigation UI.
         with maintenance_request("/manifest.webmanifest") as response:
