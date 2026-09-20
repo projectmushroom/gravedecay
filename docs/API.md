@@ -1,4 +1,133 @@
-# Internal API
+# Direct management API (v1)
+
+The dashboard can manage another grave without navigating to its hostname.
+The browser stays on the entry dashboard origin and sends requests **directly**
+to the selected grave over Tailscale. The entry machine does not forward API
+traffic. This is a first management-client contract, not a proxy for T3 or
+other hosted websites.
+
+## Connect a dashboard
+
+1. Upgrade the entry grave and each destination to a release with this API.
+2. Open the destination's own dashboard. In **System → Connections &
+   integrations → Trusted dashboards**, add the exact entry origin, such as
+   `https://home.tail123.ts.net` (no `/grave/`, trailing slash or wildcard).
+3. On the entry dashboard, open **Graveyard → Details → Manage here** for the
+   destination. Its name and a persistent destination banner identify which
+   grave receives operations. **Return to entry grave** restores local control.
+
+Trust is per destination and does not synchronize. Removing an origin revokes
+subsequent API requests; an already-started operation continues on its grave.
+Only trust dashboard hosts you control: their JavaScript can exercise the
+management permissions of your authorized Tailscale user. Configuring trust
+does not authorize additional Tailscale users or expose a grave publicly.
+
+Trust is stored in owner-private
+`$GRAVE_ROOT/config/secrets/dashboard-trusted-origins.json`. The destination's
+legacy, owner-gated `GET/POST /grave/api/client-trust` reads/replaces
+`{"origins":["https://home.tail123.ts.net"]}` and retains same-origin mutation
+protection. No versioned route can change trust. The file manager cannot access
+the secret directory or rename/delete its ancestors. Origin lists are limited
+to 32 exact HTTPS machine/tailnet names under `ts.net`.
+
+## Requests and authorization
+
+The base is `https://<destination>/grave/api/v1/` (locally `/api/v1/`).
+Every management request requires `X-Grave-Client: 1` plus the destination's
+existing owner identity check. On the tailnet, Tailscale Serve supplies the
+requesting device's user identity. Clients must not manufacture or forward
+Tailscale identity headers. Owner maintenance can use the existing private
+local token on loopback. No new shared secret is distributed to browsers.
+
+Browser requests use `credentials: 'omit'`, `mode: 'cors'` and `redirect: 'error'`.
+Serve's network identity is independent of browser cookies. The exact browser
+Origin must be trusted by the destination, or match the destination itself.
+Native clients can omit Origin and still require the owner check and protocol
+header. OPTIONS preflights accept only the advertised method and the
+`Content-Type` / `X-Grave-Client` headers. An allowed origin is returned exactly,
+with `Vary: Origin`; there is no wildcard, credentialed CORS, or preflight cache.
+Each actual request rechecks trust and identity. Legacy routes retain their
+existing protections and do not acquire CORS headers.
+
+This first version supports **single-owner Linux and macOS**. Multi-user
+backends and portable workspaces fail closed (501, or their existing backend
+capability refusal). Their workspace identity delegation is future work.
+
+## Contract
+
+`GET capabilities` returns:
+
+```json
+{
+  "product": "gravedecay",
+  "api_version": 1,
+  "host": "destination",
+  "platform": "linux",
+  "routes": {"GET": ["capabilities", "state", "settings"], "POST": ["settings"]},
+  "actions": ["doctor"]
+}
+```
+
+The route/action lists above are illustrative; use the actual advertised lists.
+Clients must tolerate added fields and hide/refuse unsupported operations.
+Platform-specific handlers continue to validate runtime availability.
+
+| Routes | Method / response |
+| --- | --- |
+| `state` | GET: authorized dashboard snapshot, with the existing platform-specific fields; no public-state fallback |
+| `settings` | GET: `{settings: {...}}`; POST: existing validated settings patch and `{ok, settings, ...}` response |
+| `admin/benchmark` | GET status; POST start/cancel with existing mode validation |
+| `admin/releases`, `admin/update-status` | GET release choices and update progress |
+| `admin/upgrade`, `admin/update-check` | POST existing validated update request; update-check only on native Mac hosting |
+| `t3-activity`, `dispatch-pr`, `agent-log` | GET existing bounded activity, PR and log projections |
+| `files`, `download` | GET jailed directory listing / binary download |
+| `fs`, `upload` | POST jailed file operations / raw file upload |
+| `session-kill`, `session-resume`, `session-capture`, `agent-job-cancel` | POST the existing named-session/job operation |
+| `linear-issue`, `linear-dispatch`, `notify-test` | POST existing integration operations |
+| `action` | POST `{action: ...}` using the advertised fixed action names |
+| `action-stream?action=...` | **POST only**: SSE output (`data: <JSON string>`, then `event: done` with exit code) |
+
+These routes share the local dashboard's validated handlers and payloads;
+legacy clients continue to work. The web dashboard uses the v1 transport for
+remote management and preserves legacy local requests for workspace/portable
+compatibility. This first version exposes a dashboard-shaped state snapshot;
+structured resource schemas and an OpenAPI contract are follow-up work.
+
+Gate failures use `{ok:false,error:<code>,output:<explanation>}`:
+`forbidden`, `untrusted_origin`, `client_header_required` (403),
+`unsupported_route` (404), or `unsupported` (501). Operation handlers keep their
+existing response/error bodies. Clients must check HTTP status before rendering.
+The public `summary` endpoint below is unchanged and remains without CORS.
+
+## Client behavior and limits
+
+The selected destination is an explicit `grave` query parameter on the entry
+page. Changing it reloads the same dashboard origin, so pending requests cannot
+be retargeted by a selection change. Remote mode ignores the entry page's
+server-rendered snapshot, never falls back to local requests, and partitions
+update tracking and panel preferences by destination. Discovery still uses the
+entry grave's existing inventory collector. The entry host must be reachable to
+load/reload the shell; an independently cached client shell is future work.
+
+An old, unauthorized or unreachable destination remains selected with a visible
+error and a direct setup link. Browser CORS/network failures can be
+indistinguishable; the UI directs the user to check Tailscale, destination trust
+and API version. Browser push enrollment stays on the destination's own PWA.
+
+T3, terminal and other app links still open the selected grave's own origin.
+Custom modal apps open directly when managing remotely. The management API does
+not eliminate iOS browser chrome when navigating to those websites. Direct
+terminal/T3 protocol integrations are separate follow-ups. Remote file downloads
+currently assemble a Blob in the client and are limited to 64 MiB; use the
+destination directly for larger files. Local downloads retain browser streaming.
+
+Mutations are not automatically retried. Existing update/benchmark status can be
+queried after reconnect, but general durable operation IDs and idempotency keys
+are not implemented. An interrupted stream does not cancel its server operation.
+`grave doctor`'s dashboard auth probe checks version/capabilities and refusal of
+unauthorized identities and untrusted origins without changing trust or state.
+
+# Existing dashboard API
 
 `GET /grave/api/v1/summary` is the stable, read-only appliance summary for
 thin tailnet clients. Locally, the same route is `/api/v1/summary`. It has no
