@@ -53,6 +53,29 @@ def check(port, network_port):
                                      headers={'X-Grave-Local-Token': dashboard.local_token()})
     with urllib.request.urlopen(request, timeout=5) as response:
         assert response.status == 200
+    # Native management uses the same owner gate without browser Origin/cookies.
+    for route in ('capabilities', 'resources/preferences'):
+        url = f'http://127.0.0.1:{port}/api/v1/{route}'
+        try:
+            urllib.request.urlopen(urllib.request.Request(url, headers={'X-Grave-Client': '1'}), timeout=5)
+        except urllib.error.HTTPError as error:
+            assert error.code == 403
+        else:
+            raise AssertionError('Native management request without owner was authorized')
+        request = urllib.request.Request(url, headers={'X-Grave-Client': '1',
+                                         'X-Grave-Local-Token': dashboard.local_token()})
+        with urllib.request.urlopen(request, timeout=5) as response:
+            value = json.load(response)
+            assert response.headers.get('Access-Control-Allow-Origin') is None
+            if route == 'capabilities':
+                assert value['resource_contract']['version'] == dashboard.api_contract.VERSION
+                assert value['resource_contract']['build'] == dashboard.api_contract.BUILD_ID
+                assert value['resource_contract']['sha256'] == dashboard.API_DOCUMENT_HASH
+                assert 'resources/preferences' in value['routes']['POST']
+            else:
+                assert value['kind'] == 'preferences' and value['status'] == 'ready'
+                assert len(value['data']['revision']) == 64
+                dashboard.api_contract.validate_preferences(value['data']['values'])
     with urllib.request.urlopen(f'http://127.0.0.1:{network_port}/healthz', timeout=5) as response:
         assert response.status == 200
 
@@ -85,7 +108,7 @@ if __name__ == '__main__':
     try:
         if args.check:
             check(args.port, args.network_port)
-            print('Native host doctor: dashboard, PWA, summary, identity boundary and network pass')
+            print('Native host doctor: dashboard, PWA, summary, management API, identity boundary and network pass')
         else:
             serve()
     except Exception:

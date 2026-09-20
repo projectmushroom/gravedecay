@@ -11,22 +11,33 @@ final class GraveMenuModel: ObservableObject {
     @Published private(set) var state: State = .idle
     @Published private(set) var graves: [Grave] = []
     @Published private(set) var tailscaleUnavailable = false
-    @Published var selectedID: String? { didSet { UserDefaults.standard.set(selectedID, forKey: "graveSelectedTarget") } }
+    @Published var selectedID: String? { didSet { defaults.set(selectedID, forKey: "graveSelectedTarget") } }
     private var timer: Timer?
+    private let defaults: UserDefaults
 
     var selected: Grave? { graves.first { $0.id == selectedID } }
 
-    init() {
-        graves = GravePlot.restore(UserDefaults.standard.data(forKey: "graveyardPlots"))
-        selectedID = UserDefaults.standard.string(forKey: "graveSelectedTarget")
+    init(defaults: UserDefaults = .standard, automaticallyRefresh: Bool = true) {
+        self.defaults = defaults
+        graves = GravePlot.restore(defaults.data(forKey: "graveyardPlots"))
+        selectedID = defaults.string(forKey: "graveSelectedTarget")
         if selectedID == nil { selectedID = graves.first?.id }
+        guard automaticallyRefresh else { return }
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 45, repeats: true) { [weak self] _ in Task { @MainActor in self?.refresh() } }
     }
     func refresh() { Task { await scan() } }
 
     private func save() {
-        if let data = try? JSONEncoder().encode(graves) { UserDefaults.standard.set(data, forKey: "graveyardPlots") }
+        if let data = try? JSONEncoder().encode(graves) { defaults.set(data, forKey: "graveyardPlots") }
+    }
+
+    func add(_ input: String) -> Bool {
+        guard let plot = GravePlot(tailnetHost: input) else { return false }
+        if let existing = graves.first(where: { $0.candidate.dns == plot.candidate.dns }) { selectedID = existing.id; return true }
+        guard graves.count < 128 else { return false }
+        graves.append(plot); selectedID = plot.id; save(); if timer != nil { refresh() }
+        return true
     }
 
     func forget(_ grave: Grave) {
@@ -41,13 +52,17 @@ final class GraveMenuModel: ObservableObject {
         let probe = await Task.detached(priority: .utility, operation: Self.tailscaleStatus).value
         let statusData = probe.data
         switch GraveDiscovery.tailscaleState(executableFound: probe.executableFound, statusData: statusData) {
-        case .missing: graves = GravePlot.merge(saved: graves, discovered: []); state = .missingTailscale; return
-        case .unavailable: graves = GravePlot.merge(saved: graves, discovered: []); tailscaleUnavailable = true; state = .noAppliances; return
-        case .loggedOut: graves = GravePlot.merge(saved: graves, discovered: []); state = .loggedOut; return
+        case .missing: graves = GravePlot.merge(saved: graves, discovered: []); state = .missingTailscale
+        case .unavailable: graves = GravePlot.merge(saved: graves, discovered: []); tailscaleUnavailable = true; state = .noAppliances
+        case .loggedOut: graves = GravePlot.merge(saved: graves, discovered: []); state = .loggedOut
         case .running: break
         }
-        guard let statusData else { return }
-        let candidates = GraveDiscovery.candidates(statusData: statusData)
+        let discoveryState = state
+        state = .scanning
+        var candidates = statusData.map { GraveDiscovery.candidates(statusData: $0) } ?? []
+        let discoveredDNS = Set(candidates.map(\.dns))
+        // Saved hosts are probed directly even when discovery cannot list peers.
+        candidates = graves.map(\.candidate).filter { !discoveredDNS.contains($0.dns) } + candidates
         var found: [Grave] = []
         let bounded = Array(candidates.prefix(64))
         for start in stride(from: 0, to: bounded.count, by: 8) {
@@ -64,7 +79,7 @@ final class GraveMenuModel: ObservableObject {
         graves = GravePlot.merge(saved: graves, discovered: found)
         if selectedID == nil { selectedID = graves.first?.id }
         save()
-        state = graves.isEmpty ? .noAppliances : .ready
+        state = found.isEmpty && discoveryState != .scanning ? discoveryState : graves.isEmpty ? .noAppliances : .ready
     }
 
     nonisolated static func tailscaleStatus() async -> (executableFound: Bool, data: Data?) {

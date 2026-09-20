@@ -11,6 +11,7 @@ struct GravedecayApp: App {
     @StateObject private var graveMenu = GraveMenuModel()
     @StateObject private var macDashboard = MacDashboardModel()
     @StateObject private var macHost = MacNativeHost()
+    @StateObject private var management = ManagementModel()
     @State private var macSelection: MacNativeContentView.Section = .graveyard
     @AppStorage("macWelcomeCompleted") private var macWelcomeCompleted = false
     #endif
@@ -28,7 +29,7 @@ struct GravedecayApp: App {
             #if os(macOS)
             Group {
                 if macWelcomeCompleted {
-                    MacNativeContentView(graves: graveMenu, model: macDashboard, host: macHost, selection: $macSelection)
+                    MacNativeContentView(graves: graveMenu, model: macDashboard, host: macHost, management: management, selection: $macSelection)
                 } else {
                     MacWelcomeView { choice in
                         macWelcomeCompleted = true

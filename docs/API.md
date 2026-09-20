@@ -6,6 +6,22 @@ to the selected grave over Tailscale. The entry machine does not forward API
 traffic. This is a first management-client contract, not a proxy for T3 or
 other hosted websites.
 
+## Native macOS client
+
+The native Mac app consumes the structured resources and durable operations in
+this document through `GravedecayKit`. Its saved inventory is local to the Mac;
+selecting a grave sets a fixed HTTPS Tailscale API destination. Native requests
+omit Origin, cookies and identity headers and require the same owner authorization.
+Redirects are refused. No request uses an entry VM or falls back to loopback.
+Capability discovery precedes resource reads and controls mutation availability.
+
+Preferences retain their original revision and draft on conflicts or ambiguous
+network failures. Operations persist their destination and ID before submission,
+then reconnect with GET and a cursor; acknowledged records are never recreated.
+See [native management](MACOS.md#native-management-of-saved-graves) for controls,
+persistence, unsupported deployments and recovery limits. Phone users continue
+using the PWA; a standalone iOS app is outside the current goal.
+
 ## Connect a dashboard
 
 1. Upgrade the entry grave and each destination to a release with this API.

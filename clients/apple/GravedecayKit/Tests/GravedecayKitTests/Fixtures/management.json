@@ -1,0 +1,220 @@
+{
+  "capabilities": {
+    "product": "gravedecay",
+    "api_version": 1,
+    "host": "test",
+    "platform": "linux",
+    "routes": {
+      "GET": [
+        "capabilities",
+        "operations",
+        "resources/system",
+        "resources/services",
+        "resources/containers",
+        "resources/sessions",
+        "resources/repositories",
+        "resources/preferences"
+      ],
+      "POST": [
+        "operations",
+        "resources/preferences"
+      ]
+    },
+    "actions": [
+      "doctor"
+    ],
+    "operations": {
+      "protocol": 1,
+      "actions": [
+        "doctor",
+        "reboot"
+      ],
+      "retention_seconds": 604800,
+      "new_id_max_age_seconds": 86400
+    },
+    "resource_contract": {
+      "version": "1.0.0",
+      "schema": "openapi.json",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "build": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "resources": [
+        "system",
+        "services",
+        "containers",
+        "sessions",
+        "repositories",
+        "preferences"
+      ]
+    }
+  },
+  "system": {
+    "api_version": 1,
+    "kind": "system",
+    "observed_at": "2026-09-20T12:00:00Z",
+    "status": "ready",
+    "data": {
+      "identity": {
+        "id": "self",
+        "hostname": "fixture",
+        "platform": "linux",
+        "os_name": "Linux",
+        "os_icon": "linux"
+      },
+      "uptime_seconds": 120,
+      "cpu": {
+        "usage_percent": 23,
+        "logical_count": 8
+      },
+      "memory": {
+        "total_bytes": 4194304,
+        "used_bytes": 1048576,
+        "usage_percent": 25,
+        "percent_kind": "used"
+      },
+      "load_average": [
+        null,
+        null,
+        null
+      ],
+      "disks": [
+        {
+          "id": "/",
+          "mountpoint": "/",
+          "total_bytes": 1024,
+          "used_bytes": 512,
+          "usage_percent": 50
+        }
+      ],
+      "temperature": {
+        "cpu_celsius": null,
+        "gpu_celsius": null
+      }
+    },
+    "error": null,
+    "truncated": false
+  },
+  "preferences": {
+    "api_version": 1,
+    "kind": "preferences",
+    "observed_at": "2026-09-20T12:00:00Z",
+    "status": "ready",
+    "data": {
+      "revision": "f726af044fe6da457881f24f42a3b54e6723b7a5a361d2dacc706ba3f4eca445",
+      "values": {
+        "panel_order": [
+          "t3activity",
+          "tmux",
+          "prs",
+          "linear",
+          "ci",
+          "repos",
+          "usage",
+          "scheduled",
+          "sessions",
+          "inbox",
+          "stats",
+          "services",
+          "docker",
+          "journal",
+          "actions",
+          "benchmark"
+        ],
+        "hidden_panels": [],
+        "hidden_apps": [],
+        "newtab_apps": [],
+        "modal_apps": [],
+        "yolo_apps": [],
+        "custom_apps": [],
+        "t3_tile": "pwa",
+        "poll_ms": 5000
+      }
+    },
+    "error": null,
+    "truncated": false
+  },
+  "operation": {
+    "id": "1790000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "action": "doctor",
+    "state": "succeeded",
+    "created_at": 1790000000.0,
+    "finished_at": 1790000001.0,
+    "exit_code": 0,
+    "cursor": 1,
+    "events": [
+      {
+        "seq": 1,
+        "text": "healthy\n"
+      }
+    ],
+    "truncated": false,
+    "message": ""
+  },
+  "services": {
+    "api_version": 1,
+    "kind": "services",
+    "observed_at": "2026-09-20T12:00:00Z",
+    "status": "ready",
+    "data": [
+      {
+        "id": "t3code",
+        "manager": "systemd",
+        "state": "active",
+        "detail": "running"
+      }
+    ],
+    "error": null,
+    "truncated": false
+  },
+  "containers": {
+    "api_version": 1,
+    "kind": "containers",
+    "observed_at": "2026-09-20T12:00:00Z",
+    "status": "ready",
+    "data": [
+      {
+        "id": "redis",
+        "name": "redis",
+        "state": "running",
+        "status_message": "Up",
+        "project": "core"
+      }
+    ],
+    "error": null,
+    "truncated": false
+  },
+  "sessions": {
+    "api_version": 1,
+    "kind": "sessions",
+    "observed_at": "2026-09-20T12:00:00Z",
+    "status": "ready",
+    "data": [
+      {
+        "id": "coding",
+        "name": "coding",
+        "window_count": 2,
+        "attached": false,
+        "frozen": false,
+        "activity_label": "today"
+      }
+    ],
+    "error": null,
+    "truncated": false
+  },
+  "repositories": {
+    "api_version": 1,
+    "kind": "repositories",
+    "observed_at": "2026-09-20T12:00:00Z",
+    "status": "ready",
+    "data": [
+      {
+        "id": "repo",
+        "name": "repo",
+        "branch": "master",
+        "changed_files": 3,
+        "last_commit_subject": "message"
+      }
+    ],
+    "error": null,
+    "truncated": false
+  }
+}
