@@ -235,7 +235,7 @@ Management regression checks:
 swift test --package-path GravedecayKit
 make project
 xcodebuild -project Gravedecay.xcodeproj -scheme Gravedecay-macOS \
-  -destination 'platform=macOS' test CODE_SIGN_IDENTITY=-
+  -destination 'platform=macOS' test CODE_SIGN_IDENTITY=- ONLY_ACTIVE_ARCH=YES
 ```
 
 Swift tests use intercepted HTTPS requests to cover destination isolation, owner

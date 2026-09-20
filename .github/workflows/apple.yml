@@ -68,7 +68,7 @@ jobs:
         run: >
           xcodebuild -project Gravedecay.xcodeproj -scheme Gravedecay-macOS
           -destination 'platform=macOS' test -derivedDataPath build/DerivedData
-          CODE_SIGN_IDENTITY=- -skipPackagePluginValidation
+          CODE_SIGN_IDENTITY=- ONLY_ACTIVE_ARCH=YES -skipPackagePluginValidation
       - name: Verify signed app update and relaunch
         run: |
           export SPARKLE_DIST=$(clients/apple/scripts/prepare-sparkle.sh)
