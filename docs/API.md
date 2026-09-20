@@ -84,6 +84,7 @@ Platform-specific handlers continue to validate runtime availability.
 | `fs`, `upload` | POST jailed file operations / raw file upload |
 | `session-kill`, `session-resume`, `session-capture`, `agent-job-cancel` | POST the existing named-session/job operation |
 | `linear-issue`, `linear-dispatch`, `notify-test` | POST existing integration operations |
+| `operations` | GET owner-private progress or health; POST a retry-safe console action (single-owner Linux) |
 | `action` | POST `{action: ...}` using the advertised fixed action names |
 | `action-stream?action=...` | **POST only**: SSE output (`data: <JSON string>`, then `event: done` with exit code) |
 
@@ -121,11 +122,101 @@ terminal/T3 protocol integrations are separate follow-ups. Remote file downloads
 currently assemble a Blob in the client and are limited to 64 MiB; use the
 destination directly for larger files. Local downloads retain browser streaming.
 
-Mutations are not automatically retried. Existing update/benchmark status can be
-queried after reconnect, but general durable operation IDs and idempotency keys
-are not implemented. An interrupted stream does not cancel its server operation.
-`grave doctor`'s dashboard auth probe checks version/capabilities and refusal of
-unauthorized identities and untrusted origins without changing trust or state.
+Console actions advertised in `capabilities.operations.actions` use the durable
+operation protocol below. Other mutations are not automatically retried. Existing
+update/benchmark status can be queried after reconnect. An interrupted legacy
+stream does not cancel its server operation.
+`grave doctor`'s dashboard auth probe checks version/capabilities, operation journal
+integrity and runner build identity, plus refusal of unauthorized identities and
+untrusted origins, without starting actions or changing trust.
+
+## Resumable console operations
+
+On single-owner Linux graves, `capabilities.operations` advertises `protocol: 1`,
+`actions`, `retention_seconds` and `new_id_max_age_seconds`. Only use actions also
+advertised by the destination. Current coverage is doctor, gaming/developer mode,
+T3 restart/update, T3 Connect off and reboot. Pairing remains an ephemeral stream:
+its token and pairing URL must not enter operation history. Appliance updates and
+benchmarks keep their dedicated status APIs. Other platforms retain their existing
+handlers; durable coverage can grow without changing older clients.
+
+Before submitting, save a unique ID on the client: Unix seconds, a hyphen and
+32 lowercase UUID hex digits, e.g. `1790000000-3bce7ad71fa04458bd43bdd0f9864d49`.
+The timestamp must be within the preceding 24 hours or at most five minutes ahead
+of the destination clock for a **new** operation. A known ID can be read/retried
+throughout its retention period. Persist the ID *before* sending this JSON:
+
+```http
+POST /grave/api/v1/operations
+Content-Type: application/json
+X-Grave-Client: 1
+
+{"id":"1790000000-3bce7ad71fa04458bd43bdd0f9864d49","action":"doctor"}
+```
+
+A new operation returns 202; the same ID/action returns 200 with the existing
+record, without running again. Reusing an ID for a different action returns 409
+`id_conflict`. A different action already holding the shared action lock returns
+409 `busy` without creating a record. Caller-provided commands/arguments are never
+accepted. The record is atomically persisted and synced before execution starts.
+
+`GET operations?id=<id>&after=<cursor>` returns:
+
+```json
+{
+  "id": "1790000000-3bce7ad71fa04458bd43bdd0f9864d49",
+  "action": "doctor",
+  "state": "running",
+  "created_at": 1790000000.1,
+  "finished_at": null,
+  "exit_code": null,
+  "cursor": 2,
+  "events": [{"seq": 2, "text": "Checking services…\n"}],
+  "truncated": false,
+  "message": ""
+}
+```
+
+Events are ordered text chunks, not necessarily whole lines; `after` excludes
+already-read sequence numbers. Poll about once a second while viewing progress.
+States are `queued`, `running`, `succeeded`, `failed`, `timed_out`, `interrupted`.
+A zero command exit means `succeeded`; service readiness may still need its normal
+state check. No percentage is fabricated for commands without measurable progress.
+All reads, starts and retries recheck identity/origin trust. Local owner clients
+can use `/api/operations` with the existing same-origin protection. GET never
+starts a command. `GET operations?health=1` is the private, read-only doctor probe.
+
+The dashboard stores only the latest operation's ID/action/tracking state per
+destination in browser local storage. **Resume action** reopens progress after
+closing the console or reloading. If the initial POST response was lost, it first
+looks up that ID; only a missing, never-acknowledged ID is submitted again, with
+exactly the same ID. An acknowledged operation that disappears is never recreated.
+Completed progress remains available through **View last action**. Output and
+credentials are not cached in browser storage. Other mutations retain their
+existing behavior; a settings save is not an operation-history entry.
+
+Output is limited to 128 KiB of UTF-8 or 512 chunks per operation, with a visible
+`truncated` flag. The runner continues draining discarded output and enforces a
+20-minute timeout, including silent commands and descendants holding stdout open.
+Records live in owner-private `$GRAVE_ROOT/config/secrets/operations/` (directory
+0700, atomic record files 0600), protected from the dashboard file manager. Keep
+this directory private in backups: command diagnostics may contain private data.
+There are at most 512 records. Records older than seven days are pruned on the
+next accepted start; a full journal returns 503 `history_full`. Unknown old IDs
+return 409 `expired_id`, so pruning cannot turn an old retry into a fresh command.
+Missing/expired reads return 404 `not_found`; unreadable history fails closed.
+Do not delete this directory to retry an uncertain action: doing so removes its
+idempotency record. No API exposes history deletion.
+
+Browser disconnects do not stop commands. A dashboard restart reports unfinished
+records as **interrupted / outcome unknown**, retaining output, and never replays
+them. A surviving command retains the file lock and blocks another console action
+until it exits; systemd may instead terminate the service's whole process group.
+Check the grave's state before deliberately starting a new action with a new ID.
+This is retry deduplication and durable observation, not a guarantee of exactly-once
+side effects across a power failure. Reboot commonly produces an interrupted
+record even when the reboot itself succeeds. The store assumes one dashboard
+process per grave, as installed by systemd/LaunchAgent.
 
 # Existing dashboard API
 

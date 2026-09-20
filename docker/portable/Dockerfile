@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && install -d -o grave -g grave /workspace /workspace/repos /workspace/agents/t3code /workspace/config /workspace/logs
 
 COPY --chown=grave:grave dashboard/gravedecay.py /opt/gravedecay/gravedecay.py
+COPY --chown=grave:grave dashboard/operations.py /opt/gravedecay/operations.py
 COPY --chown=grave:grave dashboard/static /opt/gravedecay/dashboard-static
 COPY --chown=grave:grave bin/webterm /opt/gravedecay/webterm
 COPY --chown=grave:grave config/tmux.conf /opt/gravedecay/tmux.conf
