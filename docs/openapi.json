@@ -1,0 +1,3570 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Gravedecay owner management API",
+    "version": "1.0.0",
+    "description": "Owner authorization is mandatory for EVERY endpoint. Tailscale Serve supplies the authenticated network identity; clients must never manufacture identity headers. Browser origins additionally require explicit trust. OpenAPI has no network-identity scheme; x-grave-authorization describes this out-of-band requirement. No anonymous access is supported. Legacy methods remain transitional; inspect capabilities before calling."
+  },
+  "servers": [
+    {
+      "url": "/grave/api/v1"
+    }
+  ],
+  "x-grave-authorization": {
+    "required": true,
+    "network_identity": "Tailscale Serve owner",
+    "local_alternative": "X-Grave-Local-Token (owner-private, loopback maintenance only)",
+    "browser_origin": "exact trusted origin or same origin; no cookies"
+  },
+  "paths": {
+    "/admin/benchmark": {
+      "get": {
+        "operationId": "get_admin_benchmark",
+        "summary": "GET admin/benchmark",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "post_admin_benchmark",
+        "summary": "POST admin/benchmark",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LegacyObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/releases": {
+      "get": {
+        "operationId": "get_admin_releases",
+        "summary": "GET admin/releases",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/update-status": {
+      "get": {
+        "operationId": "get_admin_update_status",
+        "summary": "GET admin/update-status",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/agent-log": {
+      "get": {
+        "operationId": "get_agent_log",
+        "summary": "GET agent-log",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/capabilities": {
+      "get": {
+        "operationId": "get_capabilities",
+        "summary": "GET capabilities",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "1.0.0",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Capabilities"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Access, validation or availability error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Workspace gateway capability refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dispatch-pr": {
+      "get": {
+        "operationId": "get_dispatch_pr",
+        "summary": "GET dispatch-pr",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/download": {
+      "get": {
+        "operationId": "get_download",
+        "summary": "GET download",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/files": {
+      "get": {
+        "operationId": "get_files",
+        "summary": "GET files",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "operationId": "get_openapi_json",
+        "summary": "GET openapi.json",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "1.0.0",
+        "responses": {
+          "200": {
+            "description": "This OpenAPI 3.1 document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Access, validation or availability error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Workspace gateway capability refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/operations": {
+      "get": {
+        "operationId": "get_operations",
+        "summary": "GET operations",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{10}-[0-9a-f]{32}$"
+            },
+            "description": "Required unless health=1."
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9999999999
+            }
+          },
+          {
+            "name": "health",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Use alone for the read-only doctor probe."
+          }
+        ],
+        "x-grave-contract": "1.0.0",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Operation"
+                    },
+                    {
+                      "$ref": "#/components/schemas/OperationHealth"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Access, validation or availability error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Workspace gateway capability refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "post_operations",
+        "summary": "POST operations",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "1.0.0",
+        "responses": {
+          "200": {
+            "description": "Existing operation; never replayed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Access, validation or availability error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "New operation accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Workspace gateway capability refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperationRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/resources/containers": {
+      "get": {
+        "operationId": "get_resources_containers",
+        "summary": "GET resources/containers",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "1.0.0",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContainersResource"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Workspace gateway capability refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Identity or origin refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unsupported resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Preference revision conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Unsupported deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Resource unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Access, validation or availability error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Owner-private resource. Unknown measurements are null; inspect status and error before using data."
+      }
+    },
+    "/resources/preferences": {
+      "get": {
+        "operationId": "get_resources_preferences",
+        "summary": "GET resources/preferences",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "1.0.0",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreferencesResource"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Workspace gateway capability refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Identity or origin refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unsupported resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Preference revision conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Unsupported deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Resource unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Access, validation or availability error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Owner-private resource. Unknown measurements are null; inspect status and error before using data."
+      },
+      "post": {
+        "operationId": "post_resources_preferences",
+        "summary": "POST resources/preferences",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "1.0.0",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreferencesResource"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Workspace gateway capability refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Identity or origin refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unsupported resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Preference revision conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Unsupported deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Resource unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Access, validation or availability error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreferencePatch"
+              }
+            }
+          },
+          "description": "Revision-checked patch, at most 65536 encoded bytes; unknown fields are rejected."
+        },
+        "description": "Owner-private resource. Unknown measurements are null; inspect status and error before using data."
+      }
+    },
+    "/resources/repositories": {
+      "get": {
+        "operationId": "get_resources_repositories",
+        "summary": "GET resources/repositories",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "1.0.0",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositoriesResource"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Workspace gateway capability refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Identity or origin refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unsupported resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Preference revision conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Unsupported deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Resource unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Access, validation or availability error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Owner-private resource. Unknown measurements are null; inspect status and error before using data."
+      }
+    },
+    "/resources/services": {
+      "get": {
+        "operationId": "get_resources_services",
+        "summary": "GET resources/services",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "1.0.0",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServicesResource"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Workspace gateway capability refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Identity or origin refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unsupported resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Preference revision conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Unsupported deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Resource unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Access, validation or availability error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Owner-private resource. Unknown measurements are null; inspect status and error before using data."
+      }
+    },
+    "/resources/sessions": {
+      "get": {
+        "operationId": "get_resources_sessions",
+        "summary": "GET resources/sessions",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "1.0.0",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionsResource"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Workspace gateway capability refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Identity or origin refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unsupported resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Preference revision conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Unsupported deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Resource unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Access, validation or availability error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Owner-private resource. Unknown measurements are null; inspect status and error before using data."
+      }
+    },
+    "/resources/system": {
+      "get": {
+        "operationId": "get_resources_system",
+        "summary": "GET resources/system",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "1.0.0",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemResource"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Workspace gateway capability refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid payload",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Identity or origin refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unsupported resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Preference revision conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Unsupported deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Resource unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Access, validation or availability error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Owner-private resource. Unknown measurements are null; inspect status and error before using data."
+      }
+    },
+    "/settings": {
+      "get": {
+        "operationId": "get_settings",
+        "summary": "GET settings",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "post_settings",
+        "summary": "POST settings",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LegacyObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/state": {
+      "get": {
+        "operationId": "get_state",
+        "summary": "GET state",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/t3-activity": {
+      "get": {
+        "operationId": "get_t3_activity",
+        "summary": "GET t3-activity",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/action": {
+      "post": {
+        "operationId": "post_action",
+        "summary": "POST action",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LegacyObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/action-stream": {
+      "post": {
+        "operationId": "post_action_stream",
+        "summary": "POST action-stream",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Legacy ephemeral action stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/update-check": {
+      "post": {
+        "operationId": "post_admin_update_check",
+        "summary": "POST admin/update-check",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LegacyObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/upgrade": {
+      "post": {
+        "operationId": "post_admin_upgrade",
+        "summary": "POST admin/upgrade",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LegacyObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/agent-job-cancel": {
+      "post": {
+        "operationId": "post_agent_job_cancel",
+        "summary": "POST agent-job-cancel",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LegacyObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/fs": {
+      "post": {
+        "operationId": "post_fs",
+        "summary": "POST fs",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LegacyObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/linear-dispatch": {
+      "post": {
+        "operationId": "post_linear_dispatch",
+        "summary": "POST linear-dispatch",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LegacyObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/linear-issue": {
+      "post": {
+        "operationId": "post_linear_issue",
+        "summary": "POST linear-issue",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LegacyObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/notify-test": {
+      "post": {
+        "operationId": "post_notify_test",
+        "summary": "POST notify-test",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LegacyObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/session-capture": {
+      "post": {
+        "operationId": "post_session_capture",
+        "summary": "POST session-capture",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LegacyObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/session-kill": {
+      "post": {
+        "operationId": "post_session_kill",
+        "summary": "POST session-kill",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LegacyObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/session-resume": {
+      "post": {
+        "operationId": "post_session_resume",
+        "summary": "POST session-resume",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LegacyObject"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/upload": {
+      "post": {
+        "operationId": "post_upload",
+        "summary": "POST upload",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "legacy",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Legacy handler error, or an owner/origin gate error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegacyObject"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "const": false
+          },
+          "error": {
+            "type": "string"
+          },
+          "output": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "error",
+          "output"
+        ],
+        "additionalProperties": true
+      },
+      "ResourceProblem": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "additionalProperties": true
+      },
+      "System": {
+        "type": "object",
+        "properties": {
+          "identity": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "self"
+              },
+              "hostname": {
+                "type": "string"
+              },
+              "platform": {
+                "type": "string"
+              },
+              "os_name": {
+                "type": "string"
+              },
+              "os_icon": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "hostname",
+              "platform",
+              "os_name",
+              "os_icon"
+            ],
+            "additionalProperties": true
+          },
+          "uptime_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "cpu": {
+            "type": "object",
+            "properties": {
+              "usage_percent": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 100
+              },
+              "logical_count": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 1
+              }
+            },
+            "required": [
+              "usage_percent",
+              "logical_count"
+            ],
+            "additionalProperties": true
+          },
+          "memory": {
+            "type": "object",
+            "properties": {
+              "total_bytes": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "used_bytes": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "usage_percent": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 100
+              },
+              "percent_kind": {
+                "enum": [
+                  "used",
+                  "pressure"
+                ]
+              }
+            },
+            "required": [
+              "total_bytes",
+              "used_bytes",
+              "usage_percent",
+              "percent_kind"
+            ],
+            "additionalProperties": true
+          },
+          "load_average": {
+            "type": "array",
+            "items": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "maxItems": 3,
+            "minItems": 3
+          },
+          "disks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "mountpoint": {
+                  "type": "string"
+                },
+                "total_bytes": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "used_bytes": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "usage_percent": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "maximum": 100
+                }
+              },
+              "required": [
+                "id",
+                "mountpoint",
+                "total_bytes",
+                "used_bytes",
+                "usage_percent"
+              ],
+              "additionalProperties": true
+            },
+            "maxItems": 32
+          },
+          "temperature": {
+            "type": "object",
+            "properties": {
+              "cpu_celsius": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "gpu_celsius": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "cpu_celsius",
+              "gpu_celsius"
+            ],
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "identity",
+          "uptime_seconds",
+          "cpu",
+          "memory",
+          "load_average",
+          "disks",
+          "temperature"
+        ],
+        "additionalProperties": true
+      },
+      "Service": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "manager": {
+            "enum": [
+              "systemd",
+              "launchd",
+              "native"
+            ]
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "manager",
+          "state",
+          "detail"
+        ],
+        "additionalProperties": true
+      },
+      "Container": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status_message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "state",
+          "status_message",
+          "project"
+        ],
+        "additionalProperties": true
+      },
+      "Session": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "window_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "attached": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "frozen": {
+            "type": "boolean"
+          },
+          "activity_label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "window_count",
+          "attached",
+          "frozen",
+          "activity_label"
+        ],
+        "additionalProperties": true
+      },
+      "Repository": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "changed_files": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "last_commit_subject": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "branch",
+          "changed_files",
+          "last_commit_subject"
+        ],
+        "additionalProperties": true
+      },
+      "Preferences": {
+        "type": "object",
+        "properties": {
+          "revision": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "values": {
+            "type": "object",
+            "properties": {
+              "panel_order": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "maxItems": 100,
+                "uniqueItems": true
+              },
+              "hidden_panels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "maxItems": 100,
+                "uniqueItems": true
+              },
+              "hidden_apps": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "maxItems": 100,
+                "uniqueItems": true
+              },
+              "newtab_apps": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "maxItems": 100,
+                "uniqueItems": true
+              },
+              "modal_apps": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "maxItems": 100,
+                "uniqueItems": true
+              },
+              "yolo_apps": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "maxItems": 100,
+                "uniqueItems": true
+              },
+              "custom_apps": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 40
+                    },
+                    "url": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200,
+                      "description": "Root-relative (not //) or HTTP(S), without credentials, whitespace, controls or backslashes."
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "url"
+                  ],
+                  "additionalProperties": false
+                },
+                "maxItems": 12
+              },
+              "t3_tile": {
+                "type": "string",
+                "enum": [
+                  "pwa",
+                  "app"
+                ]
+              },
+              "poll_ms": {
+                "type": "integer",
+                "minimum": 2000,
+                "maximum": 60000
+              }
+            },
+            "required": [
+              "panel_order",
+              "hidden_panels",
+              "hidden_apps",
+              "newtab_apps",
+              "modal_apps",
+              "yolo_apps",
+              "custom_apps",
+              "t3_tile",
+              "poll_ms"
+            ],
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "revision",
+          "values"
+        ],
+        "additionalProperties": true
+      },
+      "PreferencePatch": {
+        "type": "object",
+        "properties": {
+          "revision": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "changes": {
+            "type": "object",
+            "properties": {
+              "panel_order": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "maxItems": 100,
+                "uniqueItems": true
+              },
+              "hidden_panels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "maxItems": 100,
+                "uniqueItems": true
+              },
+              "hidden_apps": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "maxItems": 100,
+                "uniqueItems": true
+              },
+              "newtab_apps": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "maxItems": 100,
+                "uniqueItems": true
+              },
+              "modal_apps": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "maxItems": 100,
+                "uniqueItems": true
+              },
+              "yolo_apps": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "maxItems": 100,
+                "uniqueItems": true
+              },
+              "custom_apps": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 40
+                    },
+                    "url": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 200,
+                      "description": "Root-relative (not //) or HTTP(S), without credentials, whitespace, controls or backslashes."
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "url"
+                  ],
+                  "additionalProperties": false
+                },
+                "maxItems": 12
+              },
+              "t3_tile": {
+                "type": "string",
+                "enum": [
+                  "pwa",
+                  "app"
+                ]
+              },
+              "poll_ms": {
+                "type": "integer",
+                "minimum": 2000,
+                "maximum": 60000
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "revision",
+          "changes"
+        ],
+        "additionalProperties": false
+      },
+      "OperationRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9]{10}-[0-9a-f]{32}$"
+          },
+          "action": {
+            "type": "string",
+            "description": "One of capabilities.operations.actions on this destination."
+          }
+        },
+        "required": [
+          "id",
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "Operation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9]{10}-[0-9a-f]{32}$"
+          },
+          "action": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "timed_out",
+              "interrupted"
+            ]
+          },
+          "created_at": {
+            "type": "number"
+          },
+          "finished_at": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cursor": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "seq": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "seq",
+                "text"
+              ],
+              "additionalProperties": true
+            },
+            "maxItems": 512
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "action",
+          "state",
+          "created_at",
+          "finished_at",
+          "exit_code",
+          "cursor",
+          "events",
+          "truncated",
+          "message"
+        ],
+        "additionalProperties": true
+      },
+      "OperationHealth": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "const": true
+          },
+          "protocol": {
+            "const": 1
+          },
+          "records": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "build": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "ok",
+          "protocol",
+          "records",
+          "build"
+        ],
+        "additionalProperties": true
+      },
+      "Capabilities": {
+        "type": "object",
+        "properties": {
+          "product": {
+            "const": "gravedecay"
+          },
+          "api_version": {
+            "const": 1
+          },
+          "host": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "routes": {
+            "type": "object",
+            "properties": {
+              "GET": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "POST": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "GET",
+              "POST"
+            ],
+            "additionalProperties": true
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "operations": {
+            "type": "object",
+            "properties": {
+              "protocol": {
+                "const": 1
+              },
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "retention_seconds": {
+                "type": "integer"
+              },
+              "new_id_max_age_seconds": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "protocol",
+              "actions",
+              "retention_seconds",
+              "new_id_max_age_seconds"
+            ],
+            "additionalProperties": true
+          },
+          "resource_contract": {
+            "type": "object",
+            "properties": {
+              "version": {
+                "type": "string",
+                "pattern": "^1\\.[0-9]+\\.[0-9]+$"
+              },
+              "schema": {
+                "const": "openapi.json"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "build": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "resources": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "version",
+              "schema",
+              "sha256",
+              "build",
+              "resources"
+            ],
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "product",
+          "api_version",
+          "host",
+          "platform",
+          "routes",
+          "actions",
+          "operations",
+          "resource_contract"
+        ],
+        "additionalProperties": true
+      },
+      "LegacyObject": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Transitional dashboard-shaped payload; see docs/API.md. Not a structured resource contract."
+      },
+      "SystemResource": {
+        "type": "object",
+        "properties": {
+          "api_version": {
+            "const": 1
+          },
+          "kind": {
+            "const": "system"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "partial",
+              "unavailable",
+              "paused"
+            ]
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/System"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResourceProblem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "api_version",
+          "kind",
+          "observed_at",
+          "status",
+          "data",
+          "error",
+          "truncated"
+        ],
+        "additionalProperties": true
+      },
+      "ServicesResource": {
+        "type": "object",
+        "properties": {
+          "api_version": {
+            "const": 1
+          },
+          "kind": {
+            "const": "services"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "partial",
+              "unavailable",
+              "paused"
+            ]
+          },
+          "data": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Service"
+                },
+                "maxItems": 500
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResourceProblem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "api_version",
+          "kind",
+          "observed_at",
+          "status",
+          "data",
+          "error",
+          "truncated"
+        ],
+        "additionalProperties": true
+      },
+      "ContainersResource": {
+        "type": "object",
+        "properties": {
+          "api_version": {
+            "const": 1
+          },
+          "kind": {
+            "const": "containers"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "partial",
+              "unavailable",
+              "paused"
+            ]
+          },
+          "data": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Container"
+                },
+                "maxItems": 500
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResourceProblem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "api_version",
+          "kind",
+          "observed_at",
+          "status",
+          "data",
+          "error",
+          "truncated"
+        ],
+        "additionalProperties": true
+      },
+      "SessionsResource": {
+        "type": "object",
+        "properties": {
+          "api_version": {
+            "const": 1
+          },
+          "kind": {
+            "const": "sessions"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "partial",
+              "unavailable",
+              "paused"
+            ]
+          },
+          "data": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Session"
+                },
+                "maxItems": 500
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResourceProblem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "api_version",
+          "kind",
+          "observed_at",
+          "status",
+          "data",
+          "error",
+          "truncated"
+        ],
+        "additionalProperties": true
+      },
+      "RepositoriesResource": {
+        "type": "object",
+        "properties": {
+          "api_version": {
+            "const": 1
+          },
+          "kind": {
+            "const": "repositories"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "partial",
+              "unavailable",
+              "paused"
+            ]
+          },
+          "data": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Repository"
+                },
+                "maxItems": 500
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResourceProblem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "api_version",
+          "kind",
+          "observed_at",
+          "status",
+          "data",
+          "error",
+          "truncated"
+        ],
+        "additionalProperties": true
+      },
+      "PreferencesResource": {
+        "type": "object",
+        "properties": {
+          "api_version": {
+            "const": 1
+          },
+          "kind": {
+            "const": "preferences"
+          },
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "partial",
+              "unavailable",
+              "paused"
+            ]
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Preferences"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResourceProblem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "api_version",
+          "kind",
+          "observed_at",
+          "status",
+          "data",
+          "error",
+          "truncated"
+        ],
+        "additionalProperties": true
+      }
+    }
+  }
+}

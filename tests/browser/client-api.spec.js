@@ -17,7 +17,7 @@ async function origins(page, request, baseURL, options = {}) {
     const req = route.request(), url = new URL(req.url()), isRemote = url.origin === remote;
     if (isRemote && options.offline) return route.abort('connectionfailed');
     if (isRemote && req.method() === 'POST') writes.push(url.pathname);
-    const headers = { ...req.headers(), 'Tailscale-User-Login': options.denied && isRemote ? 'outsider@example.test' : 'browser@example.test' };
+    const headers = { ...req.headers(), 'X-Forwarded-Proto': 'https', 'Tailscale-User-Login': options.denied && isRemote ? 'outsider@example.test' : 'browser@example.test' };
     delete headers.host;
     const response = await request.fetch(new URL(url.pathname + url.search, baseURL).href, {
       method: req.method(), headers, data: req.postDataBuffer() || undefined,
@@ -50,7 +50,7 @@ test('Manage here preserves entry origin and sends settings only to selected gra
   await expect(page.locator('#client-trust-settings')).toBeHidden();
   await page.locator('#save-set').click();
   await expect(page.locator('#set-msg')).toHaveText('saved ✓');
-  expect(writes).toEqual(['/grave/api/v1/settings']);
+  expect(writes).toEqual(['/grave/api/v1/resources/preferences']);
   await page.reload();
   await expect(page.locator('#plot-context')).toContainText('REMOTE-MAC');
   await expect(page.locator('#plot-context')).toHaveAttribute('title', /mac\.tail123\.ts\.net/);

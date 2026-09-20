@@ -466,3 +466,20 @@ expiring new IDs and explicit unknown outcomes prevent automatic replay after
 connection loss or restart. This protocol currently covers console actions only;
 see [resumable operations](API.md#resumable-console-operations) for limits and
 recovery behavior.
+
+## Structured management resources
+
+`/api/v1/resources/*` and `/api/v1/openapi.json` reuse the owner, origin-trust and
+protocol-header gates. They have no unversioned aliases or public projection.
+Resource providers select named fields instead of serializing whole collector
+objects, so newly added private collector fields do not automatically enter the
+contract. Unavailable collectors return bounded, generic errors without command
+stderr or local paths. Host resource reads do not contact remote integrations.
+
+Preference patches reject unknown fields and secrets, validate the entire patch
+before writing, and require the revision returned by the last read. The shared
+settings lock and atomic replacement protect against conflicting API writers.
+The dashboard never retries a refused resource write through the older settings
+handler. Direct file edits and file-manager writes are outside this protocol.
+See [the resource contract](API.md#structured-resources-and-openapi) for coverage,
+compatibility, and the limits of legacy endpoint schemas.

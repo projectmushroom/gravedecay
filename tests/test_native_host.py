@@ -25,7 +25,7 @@ class NativeHostTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         bundle = self.root / 'bundle'
         bundle.mkdir()
-        for name in ('gravedecay.py', 'gravenet.py', 'benchmark.py', 'native_updates.py', 'operations.py'):
+        for name in ('gravedecay.py', 'gravenet.py', 'benchmark.py', 'native_updates.py', 'operations.py', 'api_contract.py'):
             shutil.copy(ROOT / 'dashboard' / name, bundle / name)
         shutil.copy(ROOT / 'clients/apple/host/host.py', bundle / 'host.py')
         shutil.copytree(ROOT / 'dashboard/static', bundle / 'static')

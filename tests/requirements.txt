@@ -1,0 +1,4 @@
+# Development/CI validation only; the appliance runtime remains stdlib-only.
+cryptography
+jsonschema>=4.18,<5
+openapi-spec-validator>=0.7,<0.8

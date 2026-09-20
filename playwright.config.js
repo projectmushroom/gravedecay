@@ -7,7 +7,8 @@ module.exports = defineConfig({
   use: {
     baseURL: process.env.GRAVEDECAY_TEST_URL || 'http://127.0.0.1:3000/',
     locale: 'en-US',
-    extraHTTPHeaders: { 'Tailscale-User-Login': 'browser@example.test' },
+    // Emulate Serve identity over the fixture's actual HTTP transport.
+    extraHTTPHeaders: { 'Tailscale-User-Login': 'browser@example.test', 'X-Forwarded-Proto': 'http' },
     reducedMotion: 'reduce',
   },
   projects: [

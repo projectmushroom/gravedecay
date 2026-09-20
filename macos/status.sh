@@ -108,6 +108,7 @@ drift(){ name=$1 rel=$2 enabled=$3; [ "$enabled" = 1 ] || return 0; [ -d "$SRC/.
 drift gravedecay.py dashboard/gravedecay.py "$dash"
 drift benchmark.py dashboard/benchmark.py "$dash"
 drift operations.py dashboard/operations.py "$dash"
+drift api_contract.py dashboard/api_contract.py "$dash"
 if [ "$dash" = 1 ]; then
   python3 "$ROOT/scripts/benchmark.py" --root "$ROOT" check || rc=1
 fi
