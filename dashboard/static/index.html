@@ -71,6 +71,7 @@ h1{font-size:17px;font-weight:700;color:var(--ink);text-shadow:var(--glow)}
 #connection{display:none;margin:-8px 0 14px;padding:8px 10px;border:1px solid var(--warn);
   background:var(--track-warn);color:var(--warn);font-size:12px}
 #connection.show{display:flex;align-items:center;justify-content:space-between;gap:10px}
+#operation-resume{max-width:100%;overflow-wrap:anywhere;text-align:left;margin-bottom:10px}
 #connection button{min-height:32px;padding:3px 9px;font-size:12px;flex:none}
 .badge{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;
   border:1px solid var(--ring);font-size:12px;font-weight:700;color:var(--ink)}
@@ -470,6 +471,7 @@ body.remote-pending #panels,body.remote-pending #launcher,body.remote-pending #a
 </div>
 <div id="connection" role="status" aria-live="polite"><span id="connection-text"></span>
   <button id="connection-retry">↻ retry</button></div>
+<div style="padding:0 6px"><button id="operation-resume" hidden></button></div>
 <div id="remote-context" hidden><div id="remote-description"></div><a id="remote-home">Return to entry grave</a><a id="remote-direct" target="_blank" rel="noopener noreferrer">Open destination ↗</a></div>
 <dialog class="dlg" id="graveyard-dialog" aria-labelledby="graveyard-title">
   <div class="graveyard-heading">
@@ -851,7 +853,7 @@ async function capabilities(){
   if(!capabilityPromise)capabilityPromise=fetch(new URL('api/v1/capabilities',targetLocation),{
     headers:{'X-Grave-Client':'1'},credentials:'omit',mode:'cors',redirect:'error',cache:'no-store',signal:AbortSignal.timeout(10000)
   }).then(async r=>{
-    if(!r.ok)throw new Error(`Destination API HTTP ${r.status}; check owner access and upgrade the grave.`);
+    if(!r.ok){const error=new Error(`Destination API HTTP ${r.status}; check owner access and upgrade the grave.`);error.status=r.status;throw error;}
     const data=await r.json();
     if(data.product!=='gravedecay'||data.api_version!==1||!Array.isArray(data.routes?.GET)||!Array.isArray(data.routes?.POST))throw new Error('Unsupported destination API');
     clientCapabilities=data;return data;
@@ -1895,7 +1897,98 @@ function closeConsole(){
   $('console').style.display='none';
   unlockBody();
 }
+// Persist only the operation identity, never output or pairing credentials.
+const operationKey='grave-operation:'+targetLocation.href;
+let pendingOperation=null,choosingAction=false;
+try{const p=JSON.parse(localStorage.getItem(operationKey));
+  if(p&&/^[0-9]{10}-[0-9a-f]{32}$/.test(p.id)&&typeof p.action==='string')pendingOperation=p;
+}catch(_){}
+function rememberOperation(){
+  localStorage.setItem(operationKey,JSON.stringify(pendingOperation));
+  paintOperation();
+}
+function paintOperation(){
+  $('operation-resume').hidden=!pendingOperation;
+  $('operation-resume').textContent=(pendingOperation?.done?'View last action':'Resume action')+' · '+(pendingOperation?.action||'')+' · '+targetLocation.hostname;
+}
+paintOperation();
+$('operation-resume').onclick=()=>runOperation(pendingOperation);
 async function runStream(act,title){
+  if(streaming||choosingAction)return;
+  if(['t3-pair','update-grave','bootmode-developer','bootmode-gaming','gamewatch-on','gamewatch-off','keepalive-on','keepalive-off'].includes(act))return runLegacyStream(act,title);
+  choosingAction=true;
+  try{
+    // Unsupported workspace/portable installs retain their existing handlers.
+    // A failed remote capability request never falls back to a different host.
+    if(!remoteGrave&&(portableCompanion||macosCompanion))return runLegacyStream(act,title);
+    let info;
+    try{info=await capabilities();}catch(e){if(!remoteGrave&&e.status===501)return runLegacyStream(act,title);throw e;}
+    if(!info.operations?.actions?.includes(act))return runLegacyStream(act,title);
+    if(pendingOperation&&!pendingOperation.done)return runOperation(pendingOperation);
+    pendingOperation={id:Math.floor(Date.now()/1000)+'-'+crypto.randomUUID().replaceAll('-',''),action:act,title,accepted:false,done:false};
+    rememberOperation(); // Refuse to submit if this browser cannot retain its retry ID.
+    return runOperation(pendingOperation,true);
+  }catch(e){alert('Cannot start action: '+e.message);}
+  finally{choosingAction=false;}
+}
+async function runOperation(pending,create=false){
+  if(streaming||!pending)return;
+  streaming=true;const myRun=++runId;
+  const controller=new AbortController();aborter=controller;
+  $('game-confirm').style.display='none';
+  $('console').style.display='block';lockBody();
+  $('console-title').textContent='▚ '+targetLocation.hostname+' · '+(pending.title||pending.action);
+  $('console-title').style.color=plotAccent(targetLocation.hostname);
+  const out=$('console-out');out.textContent='';
+  $('console-close').style.display='';
+  const status=document.createElement('div');status.setAttribute('role','status');out.appendChild(status);
+  let cursor=0,transcript='',truncated=false;
+  function paint(message){out.textContent=transcript;status.textContent=message;out.appendChild(status);out.scrollTop=out.scrollHeight;}
+  async function requestOperation(method){
+    const options={signal:AbortSignal.any([controller.signal,AbortSignal.timeout(15000)])};
+    if(method==='POST')Object.assign(options,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify({id:pending.id,action:pending.action})});
+    const response=await apiFetch('api/operations'+(method==='POST'?'':'?id='+encodeURIComponent(pending.id)+'&after='+cursor),options);
+    let data;try{data=await response.json();}catch(_){throw new Error('Unreadable operation response');}
+    return {response,data};
+  }
+  try{
+    let first=true;
+    while(!controller.signal.aborted){
+      let {response,data}=await requestOperation(first&&create?'POST':'GET');
+      if(first&&!create&&response.status===404&&!pending.accepted){
+        // Lost POST response: retry the SAME saved ID, never invent a new one.
+        ({response,data}=await requestOperation('POST'));
+      }
+      first=false;
+      if(!response.ok){
+        if(response.status===404&&pending.accepted){pending.done=true;rememberOperation();}
+        if(response.status>=400&&response.status<500&&response.status!==404&&!pending.accepted){pending.done=true;rememberOperation();}
+        throw new Error(data.output||`HTTP ${response.status}`);
+      }
+      if(data.id!==pending.id||data.action!==pending.action)throw new Error('Operation identity mismatch');
+      pending.accepted=true;rememberOperation();
+      for(const event of data.events||[]){
+        if(event.seq>cursor){transcript+=event.text;cursor=event.seq;}
+      }
+      // Commands can emit ANSI colors split across chunks; strip after assembly.
+      transcript=transcript.replace(/\x1b\[[0-9;]*m/g,'');
+      if(data.truncated&&!truncated){transcript+='\n— output limit reached; further output omitted\n';truncated=true;}
+      if(!['queued','running'].includes(data.state)){
+        pending.done=true;rememberOperation();
+        paint(data.state==='succeeded'?'— sequence complete ✓':`— ${data.state}: ${data.message||'exit code '+data.exit_code}`);
+        break;
+      }
+      paint('— '+data.state+' · closing this view leaves the action running');
+      await new Promise(resolve=>{const timer=setTimeout(done,1000);function done(){clearTimeout(timer);controller.signal.removeEventListener('abort',done);resolve();}controller.signal.addEventListener('abort',done,{once:true});});
+    }
+  }catch(e){
+    if(!controller.signal.aborted)paint('— '+e.message+(pending.done?' · Check the grave before starting another action.':' · Use Resume action to reconnect. The saved operation ID will be reused.'));
+  }finally{
+    if(runId===myRun){streaming=false;aborter=null;}
+    paintOperation();poll();
+  }
+}
+async function runLegacyStream(act,title){
   if(streaming)return;
   streaming=true;
   const myRun=++runId;
@@ -1991,7 +2084,7 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'){
   closeDispatch();
   closeFiles();closeAppModal();
   unlockBody();}});
-$('console-close').onclick=()=>{$('console').style.display='none'};
+$('console-close').onclick=closeConsole;
 // ---------- gaming confirm dialog ----------
 function openGameConfirm(){
   $('gc-sessions').innerHTML=lastTmux.length

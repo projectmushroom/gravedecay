@@ -667,6 +667,7 @@ fi
 step "gravedecay"
 install -m 755 "$REPO_DIR/dashboard/gravedecay.py" "$GRAVE_ROOT/scripts/gravedecay.py"
 install -m 755 "$REPO_DIR/dashboard/benchmark.py" "$GRAVE_ROOT/scripts/benchmark.py"
+install -m 644 "$REPO_DIR/dashboard/operations.py" "$GRAVE_ROOT/scripts/operations.py"
 install -m 755 "$REPO_DIR/libexec/workspace-env.py" "$GRAVE_ROOT/scripts/workspace-env.py"
 install -m 755 "$REPO_DIR/libexec/backup-integrity.py" "$GRAVE_ROOT/scripts/backup-integrity.py"
 install -m 755 "$REPO_DIR/libexec/agent-task.py" "$GRAVE_ROOT/scripts/agent-task.py"

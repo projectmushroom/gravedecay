@@ -26,6 +26,7 @@ import glob
 import hmac
 import hashlib
 import io
+import importlib.util
 import json
 import math
 import os
@@ -155,11 +156,11 @@ CLIENT_TRUST_PATH = os.path.join(GRAVE_ROOT, "config", "secrets", "dashboard-tru
 CLIENT_ROUTES = {
     "GET": frozenset(("state", "settings", "capabilities", "t3-activity",
                       "admin/benchmark", "admin/releases", "admin/update-status",
-                      "files", "download", "agent-log", "dispatch-pr")),
+                      "files", "download", "agent-log", "dispatch-pr", "operations")),
     "POST": frozenset(("settings", "admin/benchmark", "admin/upgrade", "admin/update-check",
                        "action", "action-stream", "fs", "upload", "session-kill",
                        "session-resume", "session-capture", "agent-job-cancel",
-                       "linear-issue", "linear-dispatch", "notify-test")),
+                       "linear-issue", "linear-dispatch", "notify-test", "operations")),
 }
 
 
@@ -436,7 +437,22 @@ elif PORTABLE:
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 # Only one grave action at a time: concurrent mode flips race each other
 # (instrumentation caught a developer run failing mid gaming-kill).
-ACTION_LOCK = threading.Lock()
+_operations_spec = importlib.util.spec_from_file_location("grave_operations", os.path.join(os.path.dirname(__file__), "operations.py"))
+operations = importlib.util.module_from_spec(_operations_spec)
+_operations_spec.loader.exec_module(operations)
+OPERATION_PATH = os.path.join(GRAVE_ROOT, "config", "secrets", "operations")
+ACTION_LOCK = (operations.ActionLock(os.path.join(OPERATION_PATH, "action.lock"))
+               if client_api_supported() and not MACOS else threading.Lock())
+OPERATIONS = operations.Store(OPERATION_PATH, ACTION_LOCK)
+
+
+def operation_actions():
+    # Pairing output contains credentials. Updater/benchmark have dedicated jobs.
+    if MACOS or not client_api_supported():
+        return []
+    return sorted(set(ACTIONS) & {"doctor", "gaming", "gaming-kill", "developer",
+                  "restart-t3", "update-t3", "t3connect-off", "reboot"})
+
 
 
 @functools.cache
@@ -3042,9 +3058,30 @@ class Handler(BaseHTTPRequestHandler):
         if self._client_authorized and p == "/api/capabilities":
             self._send(200, json.dumps({"product": "gravedecay", "api_version": 1,
                 "host": HOST, "platform": PLATFORM, "routes": client_routes(),
-                "actions": sorted(ACTIONS)})); return
+                "actions": sorted(ACTIONS), "operations": {"protocol": 1, "actions": operation_actions(),
+                "retention_seconds": operations.RETENTION, "new_id_max_age_seconds": operations.KEY_AGE}})); return
         if self._client_authorized and p == "/api/settings":
             self._send(200, json.dumps({"settings": load_settings()})); return
+        if p == "/api/operations":
+            if not client_api_supported() or MACOS:
+                self._client_error(501, "unsupported", "Durable actions require a single-owner Linux grave"); return
+            if self._forbidden() or self._cross_site():
+                return
+            try:
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                if query == {"health": ["1"]}:
+                    result = OPERATIONS.health()
+                else:
+                    cursor = query.get("after", ["0"])[0]
+                    if not re.fullmatch(r"[0-9]{1,10}", cursor):
+                        raise operations.OperationError(400, "invalid_cursor", "Invalid progress cursor")
+                    result = OPERATIONS.get(query.get("id", [""])[0], int(cursor))
+                self._send(200, json.dumps(result))
+            except operations.OperationError as error:
+                self._client_error(error.status, error.code, str(error))
+            except (OSError, ValueError, KeyError, AssertionError):
+                self._client_error(503, "history_unavailable", "Cannot read operation history; run grave doctor")
+            return
         if MACOS and p not in MACOS_GETS:
             self._send(404, '{"error":"unavailable in macOS companion"}')
             return
@@ -3240,6 +3277,28 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, TypeError, OSError) as error:
                 self._send(400, json.dumps({"ok": False, "output": str(error)})); return
             self._send(200, json.dumps({"ok": True, "origins": origins})); return
+        if p == "/api/operations":
+            if not client_api_supported() or MACOS:
+                self._client_error(501, "unsupported", "Durable actions require a single-owner Linux grave"); return
+            if self._forbidden() or self._cross_site():
+                return
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                if not 0 < length <= 2048:
+                    raise ValueError("Invalid operation payload size")
+                data = json.loads(self.rfile.read(length))
+                if (not isinstance(data, dict) or set(data) != {"id", "action"}
+                        or not isinstance(data["action"], str) or data["action"] not in operation_actions()):
+                    raise ValueError("Choose an advertised durable action and supply its operation ID")
+                result, created = OPERATIONS.start(data["id"], data["action"], ACTIONS[data["action"]])
+                self._send(202 if created else 200, json.dumps(result))
+            except operations.OperationError as error:
+                self._client_error(error.status, error.code, str(error))
+            except (ValueError, TypeError) as error:
+                self._client_error(400, "invalid_operation", str(error))
+            except OSError:
+                self._client_error(503, "history_unavailable", "Cannot save operation history; run grave doctor")
+            return
         if self._client_authorized and p == "/api/action-stream":
             self._stream_action(); return
         if MACOS and p not in MACOS_POSTS:
@@ -3486,6 +3545,15 @@ if __name__ == "__main__":
                 assert "settings" in capabilities["routes"]["POST"]
                 assert "client-trust" not in capabilities["routes"]["POST"]
                 assert response.headers.get("Access-Control-Allow-Origin") is None
+            if not MACOS:
+                assert "operations" in capabilities["routes"]["GET"]
+                assert "operations" in capabilities["routes"]["POST"]
+                assert capabilities["operations"]["protocol"] == 1
+                assert "t3-pair" not in capabilities["operations"]["actions"]
+                with maintenance_request("/api/v1/operations?health=1") as response:
+                    operation_health = json.load(response)
+                    assert operation_health["ok"], "operation history is unreadable"
+                    assert operation_health["build"] == operations.BUILD_ID, "operation runner is stale; restart dashboard"
             for authenticated, extra in ((False, {}), (True, {"Origin": "https://untrusted.invalid"})):
                 try:
                     maintenance_request("/api/v1/state", authenticated=authenticated, extra_headers=extra)

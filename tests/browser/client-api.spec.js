@@ -88,3 +88,85 @@ test('invalid selected endpoint never falls back to local reads or writes', asyn
   await expect(page.locator('#connection-text')).toContainText('Invalid grave address');
   await expect(page.locator('#panels')).toBeHidden();
 });
+
+async function operationFixture(page, request, baseURL, options={}) {
+  await origins(page, request, baseURL);
+  const starts=[];let record=null,reads=0;
+  await page.route(remote+'/grave/api/v1/operations*', async route=>{
+    const req=route.request();
+    const headers={'Access-Control-Allow-Origin':entry,'Vary':'Origin','Content-Type':'application/json',
+      'Access-Control-Allow-Headers':'Content-Type, X-Grave-Client','Access-Control-Allow-Methods':'POST, GET'};
+    if(req.method()==='OPTIONS')return route.fulfill({status:204,headers});
+    if(req.method()==='POST'){
+      const body=req.postDataJSON();starts.push(body);
+      if(options.lostBeforeSubmit)return route.abort('connectionfailed');
+      record={...body,state:'running',events:[{seq:1,text:'started once\n'}],cursor:1};
+      if(options.lostResponse)return route.abort('connectionfailed');
+      return route.fulfill({status:202,headers,json:record});
+    }
+    reads++;
+    if(!record||options.expired)return route.fulfill({status:404,headers,json:{output:'Operation not found or history expired; it has not been restarted'}});
+    const after=Number(new URL(req.url()).searchParams.get('after'));
+    const state=options.finish?'succeeded':options.interrupted?'interrupted':'running';
+    return route.fulfill({headers,json:{...record,state,message:options.interrupted?'Dashboard restarted; outcome unknown. Check the grave.':'',events:record.events.filter(e=>e.seq>after)}});
+  });
+  return {starts,get reads(){return reads;}};
+}
+
+test('lost operation response resumes the same ID after reload without another start', async ({page,request,baseURL})=>{
+  const options={lostResponse:true};
+  const fixture=await operationFixture(page,request,baseURL,options);
+  await page.goto(selectedURL);
+  await page.evaluate(()=>{runStream('doctor');});
+  await expect(page.locator('#console-out')).toContainText('Use Resume action');
+  expect(fixture.starts).toHaveLength(1);
+  const id=fixture.starts[0].id;
+  await page.reload();
+  await expect(page.locator('#operation-resume')).toContainText('Resume action · doctor · mac.tail123.ts.net');
+  options.finish=true;
+  await page.locator('#operation-resume').click();
+  await expect(page.locator('#console-out')).toContainText('sequence complete');
+  await expect(page.locator('#console-out')).toContainText('started once');
+  expect(fixture.starts).toEqual([{id,action:'doctor'}]);
+  expect(fixture.reads).toBeGreaterThan(0);
+  await page.locator('#console-x').click();
+  await page.locator('#remote-home').click();
+  await expect(page.locator('#operation-resume')).toBeHidden();
+});
+
+test('closing progress preserves tracking and restart uncertainty does not replay an action',async ({page,request,baseURL})=>{
+  const options={};
+  const fixture=await operationFixture(page,request,baseURL,options);
+  await page.goto(selectedURL);
+  await page.evaluate(()=>{runStream('doctor');});
+  await expect(page.locator('#console-out')).toContainText('started once');
+  await page.locator('#console-x').click();
+  await expect(page.locator('#console')).toBeHidden();
+  await expect(page.locator('#operation-resume')).toBeVisible();
+  options.interrupted=true;
+  await page.reload();
+  await page.locator('#operation-resume').click();
+  await expect(page.locator('#console-out')).toContainText('outcome unknown');
+  expect(fixture.starts).toHaveLength(1);
+  await page.locator('#console-close').click();
+  options.expired=true;
+  await page.locator('#operation-resume').click();
+  await expect(page.locator('#console-out')).toContainText('history expired');
+  expect(fixture.starts).toHaveLength(1);
+});
+
+
+test('an unreceived submission retries only its saved ID',async ({page,request,baseURL})=>{
+  const options={lostBeforeSubmit:true};
+  const fixture=await operationFixture(page,request,baseURL,options);
+  await page.goto(selectedURL);
+  await page.evaluate(()=>{runStream('doctor');});
+  await expect(page.locator('#console-out')).toContainText('Use Resume action');
+  expect(fixture.starts).toHaveLength(1);
+  options.lostBeforeSubmit=false;options.finish=true;
+  await page.locator('#console-x').click();
+  await page.locator('#operation-resume').click();
+  await expect(page.locator('#console-out')).toContainText('sequence complete');
+  expect(fixture.starts).toHaveLength(2);
+  expect(fixture.starts[1]).toEqual(fixture.starts[0]);
+});

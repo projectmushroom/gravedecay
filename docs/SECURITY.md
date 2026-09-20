@@ -449,3 +449,20 @@ root-managed backend capability before evaluating owner access.
 Scheduled jobs run as the single appliance owner, with private prompt snapshots
 and owner-gated reports. They inherit provider credentials and cannot overlap
 the same job; see [SCHEDULES.md](SCHEDULES.md) for isolation and cancellation.
+
+## Durable console action history
+
+Single-owner Linux graves keep bounded action progress in
+`$GRAVE_ROOT/config/secrets/operations/`. Records are owner-private (0600), and
+the directory is 0700. Diagnostics can contain private machine details; keep
+backups private too. Pairing tokens are excluded: `t3-pair` is never accepted by
+the durable operation endpoint. The existing file-manager secret boundary covers
+these files and their ancestors.
+
+The same owner/origin gates protect creation, progress reads and retries. Revoking
+a trusted origin prevents further progress reads but does not cancel an already
+started action. Fixed server-side argv, shared action exclusion, bounded history,
+expiring new IDs and explicit unknown outcomes prevent automatic replay after
+connection loss or restart. This protocol currently covers console actions only;
+see [resumable operations](API.md#resumable-console-operations) for limits and
+recovery behavior.

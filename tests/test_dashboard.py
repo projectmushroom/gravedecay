@@ -148,7 +148,7 @@ class DashboardContractTests(unittest.TestCase):
                     self.assertEqual(response.headers["Content-Security-Policy"], "frame-ancestors 'none'")
                     self.assertEqual(response.headers["X-Frame-Options"], "DENY")
         command = [sys.executable, "-c", "print('policy test')"]
-        with mock.patch.dict(DASHBOARD.ACTIONS, {"frame-test": command}):
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(DASHBOARD, "ACTION_LOCK", DASHBOARD.operations.ActionLock(pathlib.Path(root) / "action.lock")), mock.patch.dict(DASHBOARD.ACTIONS, {"frame-test": command}):
             with self.get("/api/action-stream?action=frame-test") as response:
                 self.assertIn(b"event: done", response.read())
                 self.assertEqual(response.headers["Content-Security-Policy"], "frame-ancestors 'none'")
