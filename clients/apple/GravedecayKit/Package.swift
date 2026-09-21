@@ -9,6 +9,6 @@ let package = Package(
     ],
     targets: [
         .target(name: "GravedecayKit", resources: [.process("Resources")]),
-        .testTarget(name: "GravedecayKitTests", dependencies: ["GravedecayKit"]),
+        .testTarget(name: "GravedecayKitTests", dependencies: ["GravedecayKit"], resources: [.copy("Fixtures")]),
     ]
 )

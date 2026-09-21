@@ -106,6 +106,68 @@ companion data). The unattended updater preserves the mode.
 Gaming/torpor, firewall management, Docker management, and multi-user workspaces remain
 permanent non-goals on macOS.
 
+## Native management of saved graves
+
+The Mac app's **Graveyard → Save grave** accepts an HTTPS Tailscale machine
+name or its `/grave/` URL. Discovery and manual entries share the existing saved
+inventory (up to 128 graves); the selected grave survives relaunch. Saved entries
+remain selectable when offline, and discovery merges matching names without
+changing a manual entry's selection. **Forget plot** removes an entry; an online
+discoverable grave can appear again on the next scan.
+
+Select a grave, then choose **Manage** (or **Manage grave** in its details).
+The destination banner and picker identify every read and action. System health,
+services, containers, sessions and repositories come from that grave's structured
+v1 API. **This Mac**, **Work**, **Network**, local hosting and app settings still
+refer to the Mac running the client. Resources show their observation time,
+availability, collection errors and truncation; unknown measurements stay unknown.
+Use Refresh to read them again. Cached summary reachability is not owner access.
+
+Management requests go directly from the Mac to
+`https://<selected-grave>/grave/api/v1/` through the system Tailscale connection.
+No entry VM, web origin, gateway or browser login is needed. Tailscale Serve
+supplies the owner's identity; the app supplies only the `X-Grave-Client: 1`
+protocol marker. It never sets identity headers, follows redirects, or retries
+against the local Mac after a remote failure. Older, denied and unavailable
+graves stay selected with an explanation and a direct dashboard link. Capabilities
+control the available resources/actions; unsupported multi-user and portable
+deployments remain unavailable. See [API.md](API.md) for the shared contract.
+
+**Dashboard preferences** edits all nine supported preference fields. Saves send
+only changed fields and the revision originally read. On a conflict or lost save
+response, the draft remains visible and further saves require **Read current
+values**, review, and either **Keep my changed fields on this revision** or
+**Discard draft & use current**. Keeping changes preserves unrelated fields from
+the newer revision. Drafts survive grave switching while the app runs; unsaved
+drafts are not retained after quitting. A failed read never invokes legacy saves.
+
+**Management operations** lists only advertised durable actions (currently
+single-owner Linux: doctor, mode changes, T3 restart/update, Connect off and
+reboot). Confirm the destination before starting. The app atomically saves the ID
+and action before sending, then polls cursor-based progress while that view stays
+open. Closing the view, switching graves or quitting stops observation, not the
+server command. **Reconnect / view result** reads the same ID after relaunch;
+only a missing, never-acknowledged ID may be submitted again, with that same ID.
+An acknowledged missing/expired record is never recreated. **Stop tracking** does
+not cancel the command; check the grave before intentionally starting another.
+Interrupted operations have an unknown outcome, including a reboot that worked.
+
+Only the latest ID/action/acknowledgement/completion flags per grave are stored in
+`~/Library/Application Support/Gravedecay/management-operations.json` (0600).
+Output and credentials are not persisted. Unreadable tracking disables new starts
+instead of overwriting history. The server's retention and output limits still
+apply. These actions do not add new T3 or terminal transports: T3 remains a direct
+browser handoff and the existing native terminal still requires its advertised
+safe ttyd route. Pairing, appliance updates and benchmarks retain their existing
+interfaces; they are not added to the durable action panel.
+
+This completes the implementation scope for the current **macOS client + phone
+PWA** goal. The standalone iOS app is not developed by this phase. Scoped client
+enrollment, multi-user expansion, remaining legacy resource migration and deeper
+T3/terminal integration are optional future work. Real installed-iPhone PWA
+verification remains pending until performed; simulator and automated browser
+checks do not establish it.
+
 ## Native app hosting
 
 The macOS 15+ standalone app is an alternative way to host this Mac as a grave.
@@ -176,7 +238,8 @@ links remain usable from the native app.
 
 For verification, `macos/status.sh` recognizes native hosting and uses the
 installed app's bundled doctor. It checks real PWA routes, summary links,
-owner access and the network listener, plus the app's sleep assertion.
+owner access, management capability/build identity, revisioned preference shape
+and the network listener, plus the app's sleep assertion.
 Settings → **Open Host Log** shows startup errors. Verify `/grave/` from another
 device and close/reopen the Mac window; a healthy `/healthz` alone is not the
 hosting contract.

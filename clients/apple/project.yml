@@ -106,3 +106,28 @@ targets:
         # Sparkle's signed framework. Update archives and feeds use Ed25519.
         com.apple.security.cs.disable-library-validation: true
         com.apple.security.network.client: true
+
+  Gravedecay-macOSTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - App/Tests
+      - App/Sources/GraveMenuModel.swift
+      - App/Sources/MacManagementView.swift
+      - App/Sources/GraveTheme.swift
+      - path: GravedecayKit/Tests/GravedecayKitTests/Fixtures/management.json
+        buildPhase: resources
+    dependencies:
+      - package: GravedecayKit
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  Gravedecay-macOS:
+    build:
+      targets:
+        Gravedecay-macOS: all
+        Gravedecay-macOSTests: [test]
+    test:
+      targets: [Gravedecay-macOSTests]

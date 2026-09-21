@@ -21,6 +21,13 @@ public struct GravePlot: Identifiable, Codable, Sendable {
         reachable = true
     }
 
+    /// A manually saved destination stays selectable even before its first reply.
+    public init?(tailnetHost input: String) {
+        guard let host = ManagementAPI.tailnetHost(input) else { return nil }
+        candidate = GraveCandidate(id: "manual:" + host, dns: host, name: String(host.split(separator: ".")[0]))
+        summary = nil; lastSeen = Date(timeIntervalSince1970: 0)
+    }
+
     public static func restore(_ data: Data?) -> [Self] {
         guard let data, data.count <= 1_048_576,
               let plots = try? JSONDecoder().decode([Self].self, from: data) else { return [] }
@@ -29,7 +36,7 @@ public struct GravePlot: Identifiable, Codable, Sendable {
             !$0.id.isEmpty && $0.id.count <= 256 && $0.candidate.name.count <= 256 &&
             (0...1e12).contains($0.lastSeen.timeIntervalSince1970) && seen.insert($0.id).inserted &&
             GraveDiscovery.dnsName($0.candidate.dns) == $0.candidate.dns &&
-            $0.summary?.product == "gravedecay" && $0.summary?.api_version == 1
+            ($0.summary == nil || ($0.summary?.product == "gravedecay" && $0.summary?.api_version == 1))
         }
     }
 
@@ -37,6 +44,9 @@ public struct GravePlot: Identifiable, Codable, Sendable {
         var plots = saved.map { var plot = $0; plot.reachable = false; return plot }
         for plot in discovered {
             if let index = plots.firstIndex(where: { $0.id == plot.id }) { plots[index] = plot }
+            else if let index = plots.firstIndex(where: { $0.candidate.dns == plot.candidate.dns }), let summary = plot.summary {
+                plots[index] = Self(candidate: plots[index].candidate, summary: summary, lastSeen: plot.lastSeen)
+            }
             else if plots.count < 128 { plots.append(plot) }
         }
         return plots.sorted { $0.candidate.name.localizedStandardCompare($1.candidate.name) == .orderedAscending }

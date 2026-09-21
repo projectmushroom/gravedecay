@@ -1,8 +1,8 @@
 # Gravedecay for iOS & macOS
 
-iOS is a compact client for the box's web surfaces and native SwiftTerm
-terminal. macOS is a standalone, Universal 2 native application: it lives in
-the Dock and menu bar, renders Graveyard, This Mac, Work, Network, Terminal,
+The existing iOS sources are experimental; phones use the PWA for the current
+product goal. macOS is a standalone, Universal 2 native application: it lives in
+the Dock and menu bar, renders Graveyard, Manage, This Mac, Work, Network, Terminal,
 and Settings in SwiftUI. It can host the shared Mac web dashboard/PWA and
 network monitor using its bundled Python backend; no separate companion or
 Python installation is needed. Dashboard and T3 links open in the default browser.
@@ -11,7 +11,7 @@ Python installation is needed. Dashboard and T3 links open in the default browse
 
 | Piece | What |
 |---|---|
-| `GravedecayKit/` | SwiftPM package: ttyd protocol + flow control, box URL layout, websocket transport. Platform-independent, tested on Linux and macOS in CI. |
+| `GravedecayKit/` | SwiftPM package: typed management API, destination state/recovery, inventory, ttyd protocol + flow control, box URL layout, websocket transport. Platform-independent, tested on Linux and macOS in CI. |
 | `App/Sources/` | SwiftUI app (iOS 17+ / macOS 15+). iOS web panes; native macOS surfaces, menu bar, T3 hand-off, and SwiftTerm. |
 | `project.yml` | XcodeGen spec — base build, connectivity via the Tailscale VPN app. |
 | `project-embedded.yml` | Overlay adding TailscaleKit (in-app tailnet node). |
@@ -55,14 +55,21 @@ On launch, opening the menu, manual refresh, and about every 45 seconds it runs 
 `/usr/local/bin/tailscale` then the CLI inside Tailscale.app. It sets
 `TAILSCALE_BE_CLI=1` and never changes Tailscale login, Serve, or preferences.
 
-Only online Self/Peer nodes with a stable node ID and a strict DNS name are
-probed at `https://<dns>/grave/api/v1/summary`. Responses time out in three
+Online Self/Peer nodes with a stable node ID and a strict DNS name, plus saved
+destinations (including manually saved graves), are probed at `https://<dns>/grave/api/v1/summary`. Responses time out in three
 seconds and are capped at 64 KiB; the app displays only the versioned
 `gravedecay` summary contract. Up to 64 nodes are probed, eight at a time.
 Validated plots and last-seen summaries are saved in app preferences and
 restored as unreachable until discovery succeeds. Offline plots stay listed
-and selected; **Forget plot** removes an unreachable entry. Graveyard opens
+and selected; **Forget plot** removes an entry; discovery may find an online grave again. Graveyard opens
 with all plots, and the header and menu-bar pickers select a destination.
+**Save grave** adds an HTTPS Tailscale address even before it is reachable.
+**Manage** reads the selected grave's private system/services/containers/sessions/
+repositories, edits revision-checked dashboard preferences and starts/reconnects
+to advertised durable operations. It connects directly from this Mac and keeps
+local **This Mac**, **Work**, **Network**, hosting and settings separate. Read
+[native management](../../docs/MACOS.md#native-management-of-saved-graves) for
+owner access, draft conflicts, persistence and limits.
 See [Graveyard](../../docs/GRAVEYARD.md). Dashboard, T3, and Terminal actions are
 constructed only from the selected DNS name and safe same-host single-slash
 paths supplied by that contract. Graveyard selects remote graves only. A native
@@ -221,3 +228,21 @@ build; do not re-sign an already valid Developer ID-signed release.
 - iOS personal: development signing / TestFlight ($99 dev account).
 - iOS public (EU): AltStore PAL self-publishing — Apple notarization only,
   host the signed package ourselves.
+
+Management regression checks:
+
+```sh
+swift test --package-path GravedecayKit
+make project
+xcodebuild -project Gravedecay.xcodeproj -scheme Gravedecay-macOS \
+  -destination 'platform=macOS' test CODE_SIGN_IDENTITY=- ONLY_ACTIVE_ARCH=YES
+```
+
+Swift tests use intercepted HTTPS requests to cover destination isolation, owner
+errors, older capabilities, nullable resources, revision conflicts/lost responses,
+and durable operation recovery/cursors. Xcode tests exercise the app's inventory
+persistence/selection and render the management view using contract fixtures.
+Python validates the Swift fixtures against the shared
+OpenAPI; the native host doctor checks the live owner-gated management surface.
+Actual tailnet owner access and installed-iPhone PWA behavior remain separate
+device checks.
