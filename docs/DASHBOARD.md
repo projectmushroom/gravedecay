@@ -61,6 +61,25 @@ The latest-release notice remains a shortcut to the same updater. Existing
 `?tab=system` and `#t3-setup` links continue to work. Gaming mode retains System
 configuration and updates so the grave can still be managed.
 
+## The Gravekeeper
+
+**Summon the Keeper** in the header opens a chat drawer (full screen on
+phones) bound to the grave named in its header. Ask in plain words, or tap a
+chip: *What's wrong?*, *Run doctor*, *Anything to update?*. A failed service or
+container row offers **Ask the Keeper** with the prompt prefilled. Replies
+stream in; tool activity (resources, logs, doctor) sits in collapsible rows and
+the model's words render as plain text, never as markup or controls.
+
+**Stop** cancels the running turn and says what was cut short; a doctor run the
+Keeper had already started keeps going as its own operation. Closing the drawer
+only detaches: the turn finishes on the grave and reopening resumes it, also
+after a reload of the PWA. **Conversations** lists saved sessions; **New** starts
+another. A missing or logged-out provider and a turn interrupted by a dashboard
+restart are reported with the next step. Conversation identity is stored per
+grave in this browser, so switching graves never carries a pending turn along.
+Runner and limits: [API.md](API.md#gravekeeper-conversations),
+[SECURITY.md](SECURITY.md#the-gravekeeper).
+
 ## Host and access differences
 
 Portable workspaces label the second destination **Preferences** and retain
@@ -70,8 +89,8 @@ work and configuration controls. Public viewers see only the existing numeric
 status page; private navigation, content and configuration stay hidden and API
 authorization remains enforced by the server.
 
-`grave doctor` checks that the installed dashboard includes mobile navigation
-and configuration entry points, and separately verifies that the running process
+`grave doctor` checks that the installed dashboard includes mobile navigation,
+configuration entry points and the Keeper drawer, and separately verifies that the running process
 serves the installed shell hash. Browser coverage exercises phone/tablet layouts,
 expansion persistence, refresh stability, focused configuration, benchmark
 progress, portable workspaces and public access transitions.

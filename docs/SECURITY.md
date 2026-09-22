@@ -512,3 +512,10 @@ Conversation records live in owner-private `$GRAVE_ROOT/config/secrets/keeper/`
 file and the private storage, and reports whether the configured provider is
 installed and logged in (a post-raise owner step, not a failure). `GRAVEKEEPER.md` is the instruction file, not an authorization
 boundary: change what the Keeper may do by changing the CLI's own permissions.
+
+The dashboard drawer renders every event as text; its controls (chips, Stop,
+New) are application-owned and a reply cannot add or trigger one. The browser
+keeps only conversation and turn IDs, keyed by destination, so a pending turn
+cannot be replayed against another grave. Stop kills the provider process; a
+doctor operation it had already started is reported separately and keeps
+running under its own ID.

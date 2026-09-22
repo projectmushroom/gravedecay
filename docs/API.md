@@ -412,6 +412,12 @@ ten minutes. At most 64 conversations are kept for 30 days under owner-private
 `grave keeper ask "<prompt>"` and `grave keeper resume <id> "<prompt>"` drive the
 same endpoints from the shell using the local maintenance token.
 
+The dashboard drawer follows the console-operation rules: it keeps only the
+conversation ID and the current turn (ID, message, accepted flag) per
+destination in browser storage, retries an unacknowledged turn with the same
+ID, reads by cursor once a second while `state` is `running`, and treats a 404
+as an expired conversation rather than a reason to start another.
+
 # Existing dashboard API
 
 `GET /grave/api/v1/summary` is the stable, read-only appliance summary for
