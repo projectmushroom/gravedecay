@@ -101,6 +101,7 @@ Platform-specific handlers continue to validate runtime availability.
 | `session-kill`, `session-resume`, `session-capture`, `agent-job-cancel` | POST the existing named-session/job operation |
 | `linear-issue`, `linear-dispatch`, `notify-test` | POST existing integration operations |
 | `operations` | GET owner-private progress or health; POST a retry-safe console action (single-owner Linux) |
+| `keeper`, `keeper/turn`, `keeper/cancel` | GET conversation list or one conversation by cursor; POST create, send a turn, cancel (single-owner Linux; see [Gravekeeper conversations](#gravekeeper-conversations)) |
 | `action` | POST `{action: ...}` using the advertised fixed action names |
 | `action-stream?action=...` | **POST only**: SSE output (`data: <JSON string>`, then `event: done` with exit code) |
 
@@ -366,6 +367,50 @@ This is retry deduplication and durable observation, not a guarantee of exactly-
 side effects across a power failure. Reboot commonly produces an interrupted
 record even when the reboot itself succeeds. The store assumes one dashboard
 process per grave, as installed by systemd/LaunchAgent.
+
+## Gravekeeper conversations
+
+The Gravekeeper answers questions about this grave from live resources, logs and
+`grave doctor`. It exists only on single-owner Linux graves; elsewhere the routes
+are not advertised. `capabilities.keeper` names the provider (`claude` or `codex`,
+from `KEEPER_PROVIDER` in `grave.conf`), the model override and the tool names.
+
+A conversation is one provider session. Generate IDs like operation IDs (Unix
+seconds, a hyphen, 32 lowercase UUID hex digits), save them first, then:
+
+```http
+POST /grave/api/v1/keeper                {"id": "<conversation>", "provider": "claude"}
+POST /grave/api/v1/keeper/turn           {"conversation": "<id>", "turn": "<turn id>", "message": "What's wrong?"}
+GET  /grave/api/v1/keeper?id=<id>&after=<cursor>
+POST /grave/api/v1/keeper/cancel         {"conversation": "<id>"}
+GET  /grave/api/v1/keeper
+```
+
+A new conversation or turn returns 202; a known ID returns 200 with the current
+record and never launches the provider again. A second turn while one runs is
+409 `busy`; a message must be 1 to 8000 characters; a conversation that reached
+its event limit is 409 `conversation_full`. Conversations belong to the
+authenticated owner (or `local` for the maintenance token) and to this host; other
+identities get 404. Cancel kills the provider process group and reports
+`cancelled`; a doctor operation it already started keeps running under its own ID.
+
+Records carry `state` (`idle`, `running`, `succeeded`, `failed`, `timed_out`,
+`cancelled`, `interrupted`), the provider `session_id`, a `summary`, the current
+`turn` and ordered `events`:
+
+```json
+{"seq": 3, "type": "tool_call", "name": "mcp__keeper__get_logs", "text": "{\"target\": \"dash\"}", "at": 1790000000.5}
+```
+
+Event types are `text` (the owner's message has `name: "owner"`), `tool_call`,
+`tool_result`, `done` and `error`. Provider JSON never reaches the API. Text
+per event is capped at 16 KiB, a conversation at 256 KiB or 400 events, a turn at
+ten minutes. At most 64 conversations are kept for 30 days under owner-private
+`$GRAVE_ROOT/config/secrets/keeper/`. A dashboard restart marks a running turn
+`interrupted` and never reruns it; resume by sending a new turn.
+
+`grave keeper ask "<prompt>"` and `grave keeper resume <id> "<prompt>"` drive the
+same endpoints from the shell using the local maintenance token.
 
 # Existing dashboard API
 

@@ -48,6 +48,12 @@ TMUX_CONF="$GRAVE_ROOT/config/tmux.conf"
 # Agent configs (in $HOME) included in backups
 AGENT_CONFIG_DIRS=(.claude .codex .gemini)
 
+# The Gravekeeper (dashboard chat, `grave keeper ask`). The provider is the
+# installed CLI logged in as the appliance owner: claude or codex. An empty
+# model uses that CLI's default; set a fast one (e.g. haiku, gpt-5.5) here.
+KEEPER_PROVIDER="claude"
+KEEPER_MODEL=""
+
 # npm -g tools refreshed by `grave update`
 NPM_GLOBAL_TOOLS=(t3)
 

@@ -156,13 +156,14 @@ CLIENT_TRUST_PATH = os.path.join(GRAVE_ROOT, "config", "secrets", "dashboard-tru
 CLIENT_ROUTES = {
     "GET": frozenset(("state", "settings", "capabilities", "t3-activity",
                       "admin/benchmark", "admin/releases", "admin/update-status",
-                      "files", "download", "agent-log", "dispatch-pr", "operations", "openapi.json",
+                      "files", "download", "agent-log", "dispatch-pr", "operations", "openapi.json", "keeper",
                       "resources/system", "resources/services", "resources/containers", "resources/sessions",
                       "resources/repositories", "resources/preferences")),
     "POST": frozenset(("settings", "admin/benchmark", "admin/upgrade", "admin/update-check",
                        "action", "action-stream", "fs", "upload", "session-kill",
                        "session-resume", "session-capture", "agent-job-cancel",
-                       "linear-issue", "linear-dispatch", "notify-test", "operations", "resources/preferences")),
+                       "linear-issue", "linear-dispatch", "notify-test", "operations", "resources/preferences",
+                       "keeper", "keeper/turn", "keeper/cancel")),
 }
 
 
@@ -467,6 +468,22 @@ OPERATION_PATH = os.path.join(GRAVE_ROOT, "config", "secrets", "operations")
 ACTION_LOCK = (operations.ActionLock(os.path.join(OPERATION_PATH, "action.lock"))
                if client_api_supported() and not MACOS else threading.Lock())
 OPERATIONS = operations.Store(OPERATION_PATH, ACTION_LOCK)
+
+
+def keeper_supported():
+    return client_api_supported() and not MACOS
+
+
+# The Gravekeeper: single-owner Linux only, like durable operations. Other
+# deployments (macOS companion, portable Docker) do not ship keeper.py.
+keeper = KEEPER = None
+if keeper_supported():
+    _keeper_spec = importlib.util.spec_from_file_location("grave_keeper", os.path.join(os.path.dirname(__file__), "keeper.py"))
+    keeper = importlib.util.module_from_spec(_keeper_spec)
+    _keeper_spec.loader.exec_module(keeper)
+    KEEPER = keeper.Runner(os.path.join(GRAVE_ROOT, "config", "secrets", "keeper"), HOST,
+                           script=os.path.join(os.path.dirname(__file__), "keeper.py"), grave=GRAVE,
+                           api=f"http://127.0.0.1:{PORT}{BASE}", work_dir=os.path.join(GRAVE_ROOT, "config", "keeper"))
 
 
 def operation_actions():
@@ -3092,6 +3109,10 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
         self._send(code, json.dumps({"ok": False, "error": error, "output": message}))
 
+    def _keeper_owner(self):
+        # Conversations bind to the authenticated owner; local maintenance is its own owner.
+        return self.headers.get("Tailscale-User-Login") or "local"
+
     def do_OPTIONS(self):
         p = self._route()
         if p is None:
@@ -3203,6 +3224,7 @@ class Handler(BaseHTTPRequestHandler):
                 "host": HOST, "platform": PLATFORM, "routes": client_routes(),
                 "actions": sorted(ACTIONS), "operations": {"protocol": 1, "actions": operation_actions(),
                 "retention_seconds": operations.RETENTION, "new_id_max_age_seconds": operations.KEY_AGE},
+                "keeper": ({**keeper.conf(), "tools": [tool["name"] for tool in keeper.TOOLS]} if keeper_supported() else {}),
                 "resource_contract": {"version": api_contract.VERSION, "schema": "openapi.json", "sha256": API_DOCUMENT_HASH, "build": api_contract.BUILD_ID,
                                       "resources": [p.split("/", 1)[1] for p in client_routes()["GET"] if p.startswith("resources/")]}})); return
         if self._client_authorized and p == "/api/openapi.json":
@@ -3215,6 +3237,24 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self._client_authorized and p == "/api/settings":
             self._send(200, json.dumps({"settings": load_settings()})); return
+        if self._client_authorized and p == "/api/keeper":
+            if not keeper_supported():
+                self._client_error(501, "unsupported", "The Gravekeeper requires a single-owner Linux grave"); return
+            try:
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                if "id" in query:
+                    cursor = query.get("after", ["0"])[0]
+                    if not re.fullmatch(r"[0-9]{1,10}", cursor):
+                        raise keeper.KeeperError(400, "invalid_cursor", "Invalid progress cursor")
+                    result = KEEPER.get(query["id"][0], self._keeper_owner(), int(cursor))
+                else:
+                    result = {"conversations": KEEPER.list(self._keeper_owner()), **keeper.conf()}
+                self._send(200, json.dumps(result))
+            except keeper.KeeperError as error:
+                self._client_error(error.status, error.code, str(error))
+            except (OSError, ValueError, KeyError, AssertionError):
+                self._client_error(503, "history_unavailable", "Cannot read Keeper conversations; run grave doctor")
+            return
         if p == "/api/operations":
             if not client_api_supported() or MACOS:
                 self._client_error(501, "unsupported", "Durable actions require a single-owner Linux grave"); return
@@ -3442,6 +3482,37 @@ class Handler(BaseHTTPRequestHandler):
                 self._client_error(400, "invalid_preferences", str(error))
             except OSError:
                 self._client_error(503, "resource_unavailable", "Cannot read or save preferences; check the grave")
+            return
+        if self._client_authorized and p in ("/api/keeper", "/api/keeper/turn", "/api/keeper/cancel"):
+            if not keeper_supported():
+                self._client_error(501, "unsupported", "The Gravekeeper requires a single-owner Linux grave"); return
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                if not 0 < length <= 65536:
+                    raise ValueError("Invalid Keeper payload size")
+                data = json.loads(self.rfile.read(length))
+                if not isinstance(data, dict):
+                    raise ValueError("JSON object required")
+                owner, created = self._keeper_owner(), False
+                if p == "/api/keeper":
+                    if not set(data) <= {"id", "provider"} or "id" not in data:
+                        raise ValueError("Supply the conversation ID and optionally a provider")
+                    result, created = KEEPER.create(data["id"], owner, data.get("provider"))
+                elif p == "/api/keeper/turn":
+                    if set(data) != {"conversation", "turn", "message"}:
+                        raise ValueError("Supply conversation, turn and message")
+                    result, created = KEEPER.send(data["conversation"], data["turn"], data["message"], owner)
+                else:
+                    if set(data) != {"conversation"}:
+                        raise ValueError("Supply the conversation ID")
+                    result = KEEPER.cancel(data["conversation"], owner)
+                self._send(202 if created else 200, json.dumps(result))
+            except keeper.KeeperError as error:
+                self._client_error(error.status, error.code, str(error))
+            except (ValueError, TypeError) as error:
+                self._client_error(400, "invalid_request", str(error))
+            except OSError:
+                self._client_error(503, "history_unavailable", "Cannot save Keeper conversations; run grave doctor")
             return
         if p == "/api/operations":
             if not client_api_supported() or MACOS:
@@ -3734,6 +3805,11 @@ if __name__ == "__main__":
                     operation_health = json.load(response)
                     assert operation_health["ok"], "operation history is unreadable"
                     assert operation_health["build"] == operations.BUILD_ID, "operation runner is stale; restart dashboard"
+                assert "keeper" in capabilities["routes"]["GET"] and "keeper/turn" in capabilities["routes"]["POST"]
+                assert capabilities["keeper"]["provider"] in keeper.PROVIDERS, "Keeper provider is not configured"
+                with maintenance_request("/api/v1/keeper") as response:
+                    assert isinstance(json.load(response)["conversations"], list), "Keeper conversations are unreadable"
+                assert KEEPER.health()["build"] == keeper.BUILD_ID
             for authenticated, extra in ((False, {}), (True, {"Origin": "https://untrusted.invalid"})):
                 try:
                     maintenance_request("/api/v1/state", authenticated=authenticated, extra_headers=extra)

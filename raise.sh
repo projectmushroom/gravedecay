@@ -507,6 +507,12 @@ if [[ "$REPO_DIR" != "$CANON_REPO" && ! -e "$CANON_REPO" ]]; then
   ok "canonical repo path $CANON_REPO → $REPO_DIR"
 fi
 cp -n "$REPO_DIR/config/tmux.conf" "$GRAVE_ROOT/config/tmux.conf" 2>/dev/null || true
+# Gravekeeper instructions: owner-editable like tmux.conf. The provider CLIs
+# read them as CLAUDE.md / AGENTS.md from the Keeper's working directory.
+cp -n "$REPO_DIR/config/GRAVEKEEPER.md" "$GRAVE_ROOT/config/GRAVEKEEPER.md" 2>/dev/null || true
+mkdir -p "$GRAVE_ROOT/config/keeper"
+ln -sfn ../GRAVEKEEPER.md "$GRAVE_ROOT/config/keeper/CLAUDE.md"
+ln -sfn ../GRAVEKEEPER.md "$GRAVE_ROOT/config/keeper/AGENTS.md"
 cp "$REPO_DIR/docs/"*.md "$GRAVE_ROOT/docs/" 2>/dev/null || true
 ok "layout ready"
 
@@ -669,6 +675,7 @@ install -m 755 "$REPO_DIR/dashboard/gravedecay.py" "$GRAVE_ROOT/scripts/gravedec
 install -m 755 "$REPO_DIR/dashboard/benchmark.py" "$GRAVE_ROOT/scripts/benchmark.py"
 install -m 644 "$REPO_DIR/dashboard/operations.py" "$GRAVE_ROOT/scripts/operations.py"
 install -m 644 "$REPO_DIR/dashboard/api_contract.py" "$GRAVE_ROOT/scripts/api_contract.py"
+install -m 755 "$REPO_DIR/dashboard/keeper.py" "$GRAVE_ROOT/scripts/keeper.py"
 install -m 755 "$REPO_DIR/libexec/workspace-env.py" "$GRAVE_ROOT/scripts/workspace-env.py"
 install -m 755 "$REPO_DIR/libexec/backup-integrity.py" "$GRAVE_ROOT/scripts/backup-integrity.py"
 install -m 755 "$REPO_DIR/libexec/agent-task.py" "$GRAVE_ROOT/scripts/agent-task.py"

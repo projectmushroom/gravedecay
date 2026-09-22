@@ -58,7 +58,7 @@ Subscribe to the topic in the ntfy app, then `grave notify "hello"`.
 |---|---|---|---|
 | `session-exit` | an agent tmux session ends | tmux `session-closed` hook | `/term/` |
 | `bell` | an agent rings the terminal bell or asks for attention | tmux `alert-bell`, Claude `Notification` hook | that session's terminal, or T3 root |
-| `agent-done` | an agent CLI turn completes | Claude `Stop` hook, Codex `notify` | that session's terminal, or T3 root |
+| `agent-done` | an agent CLI turn completes, including a Gravekeeper turn | Claude `Stop` hook, Codex `notify` | that session's terminal, or T3 root |
 | `unit-failure` | a platform unit enters failed state (t3code, dashboard, terminal, gateway, upgrades, gamewatch, selfheal) | `OnFailure=gravedecay-notify@%n` | System tab |
 | `doctor` | a `grave doctor` run has failing checks | doctor itself | System tab |
 | `digest` | every morning ~08:00 — one summary of the graveyard shift: agent sessions, spend, doctor verdict, backup freshness | `gravedecay-digest.timer` → `grave digest` | dashboard |

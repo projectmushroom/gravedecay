@@ -483,3 +483,32 @@ The dashboard never retries a refused resource write through the older settings
 handler. Direct file edits and file-manager writes are outside this protocol.
 See [the resource contract](API.md#structured-resources-and-openapi) for coverage,
 compatibility, and the limits of legacy endpoint schemas.
+
+## The Gravekeeper
+
+`grave keeper` and the `keeper*` client routes run the installed provider CLI
+(`claude -p` or `codex exec`) headless as the appliance owner, one process per
+turn, in `$GRAVE_ROOT/config/keeper/`. The owner's own CLI login, settings,
+hooks and MCP servers apply, exactly as they do for scheduled agent jobs. No
+permission-bypass flag is added: Claude keeps the owner's permission rules and
+Codex runs in its read-only sandbox with approvals set to never. The provider's
+native tools remain whatever the CLI ships (Claude's read-only file tools under
+the owner's rules; Codex 0.155's built-in `exec` isolate, `view_image`,
+`apply_patch` and sub-agent tools, which no configuration removes). The Keeper
+is therefore an owner-level assistant, not a sandboxed one.
+
+On top of that it gets one MCP server, `keeper.py mcp`, with three tools:
+`get_resource` (the structured resources), `get_logs` (the `grave logs` targets
+that need no name, at most 500 lines) and `run_doctor` (a durable `doctor`
+operation, so it takes the shared action lock and appears in operation history).
+Every tool call goes through the dashboard's owner-gated API with the local
+maintenance token; the model never receives that token, and environment
+variables whose names look like secrets are removed before the provider starts.
+Model output is text only; the dashboard never renders it as HTML.
+
+Conversation records live in owner-private `$GRAVE_ROOT/config/secrets/keeper/`
+(0700/0600), bound to the owner identity and host, with the bounds listed in
+[the API](API.md#gravekeeper-conversations). Doctor verifies the instructions
+file, the private storage and that the configured provider is installed and
+logged in. `GRAVEKEEPER.md` is the instruction file, not an authorization
+boundary: change what the Keeper may do by changing the CLI's own permissions.
