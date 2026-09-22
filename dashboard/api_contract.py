@@ -213,16 +213,36 @@ SCHEMAS = {
                       'truncated': BOOL, 'message': STRING}),
     'OperationHealth': obj({'ok': {'const': True}, 'protocol': {'const': 1},
                             'records': {'type': 'integer', 'minimum': 0}, 'build': REVISION}),
+    'KeeperEvent': obj({'seq': {'type': 'integer', 'minimum': 1}, 'type': {'enum': ['text', 'tool_call', 'tool_result', 'done', 'error']},
+                        'name': {'type': 'string', 'description': '"owner" for the sent message, the tool name for tool events, else empty.'},
+                        'text': STRING, 'at': {'type': 'number'}}),
+    'KeeperSummary': obj({'id': ID, 'provider': {'enum': ['claude', 'codex']}, 'session_id': TEXT, 'host': STRING, 'owner': STRING,
+                          'created_at': {'type': 'number'}, 'updated_at': {'type': 'number'}, 'summary': STRING,
+                          'state': {'enum': ['idle', 'running', 'succeeded', 'failed', 'timed_out', 'cancelled', 'interrupted']}}),
+    'KeeperConversation': obj({'id': ID, 'provider': {'enum': ['claude', 'codex']}, 'model': STRING, 'session_id': TEXT, 'host': STRING,
+                               'owner': STRING, 'created_at': {'type': 'number'}, 'updated_at': {'type': 'number'}, 'summary': STRING,
+                               'state': {'enum': ['idle', 'running', 'succeeded', 'failed', 'timed_out', 'cancelled', 'interrupted']},
+                               'turn': {'anyOf': [obj({'id': ID, 'started_at': {'type': 'number'}, 'finished_at': nullable('number'),
+                                                       'exit_code': nullable('integer')}), {'type': 'null'}]},
+                               'cursor': {'type': 'integer', 'minimum': 0}, 'events': array(ref('KeeperEvent'), 400),
+                               'truncated': BOOL, 'message': STRING}),
+    'KeeperList': obj({'conversations': array(ref('KeeperSummary'), 64), 'provider': {'enum': ['claude', 'codex']}, 'model': STRING}),
+    'KeeperConversationRequest': obj({'id': ID, 'provider': {'enum': ['claude', 'codex']}}, required=['id'], closed=True),
+    'KeeperTurnRequest': obj({'conversation': ID, 'turn': ID, 'message': {'type': 'string', 'minLength': 1, 'maxLength': 8000}}, closed=True),
+    'KeeperCancelRequest': obj({'conversation': ID}, closed=True),
     'Capabilities': obj({'product': {'const': 'gravedecay'}, 'api_version': {'const': 1},
                          'host': STRING, 'platform': STRING,
                          'routes': obj({'GET': array(STRING), 'POST': array(STRING)}), 'actions': array(STRING),
                          'operations': obj({'protocol': {'const': 1}, 'actions': array(STRING),
                                             'retention_seconds': {'type': 'integer'}, 'new_id_max_age_seconds': {'type': 'integer'}}),
+                         'keeper': obj({'provider': {'enum': ['claude', 'codex']}, 'model': STRING,
+                                        'tools': array(STRING)}, required=[]),
                          'resource_contract': obj({'version': {'type':'string', 'pattern': r'^1\.[0-9]+\.[0-9]+$'}, 'schema': {'const': 'openapi.json'},
                                                    'sha256': REVISION, 'build': REVISION, 'resources': array(STRING)})}),
     'LegacyObject': {'type': 'object', 'additionalProperties': True,
                      'description': 'Transitional dashboard-shaped payload; see docs/API.md. Not a structured resource contract.'},
 }
+SCHEMAS['Capabilities']['required'].remove('keeper')  # absent on hosts without the Gravekeeper
 RESOURCE_DATA = {'system': ref('System'), 'services': array(ref('Service'), LIST_LIMIT),
                  'containers': array(ref('Container'), LIST_LIMIT), 'sessions': array(ref('Session'), LIST_LIMIT),
                  'repositories': array(ref('Repository'), LIST_LIMIT), 'preferences': ref('Preferences')}
@@ -282,6 +302,20 @@ def document(routes, base='/grave'):
                         {'name': 'after', 'in': 'query', 'schema': {'type': 'integer', 'minimum': 0, 'maximum': 9999999999}},
                         {'name': 'health', 'in': 'query', 'schema': {'type': 'string', 'const': '1'}, 'description': 'Use alone for the read-only doctor probe.'}]
                     entry['responses']['200'] = response({'oneOf': [ref('Operation'), ref('OperationHealth')]})
+            elif name.startswith('keeper'):
+                entry['x-grave-contract'] = VERSION
+                entry['description'] = 'Gravekeeper conversation on this grave only (single-owner Linux). Conversations bind to their owner and host.'
+                if name == 'keeper' and method == 'GET':
+                    entry['parameters'] += [
+                        {'name': 'id', 'in': 'query', 'schema': ID, 'description': 'Omit to list conversations.'},
+                        {'name': 'after', 'in': 'query', 'schema': {'type': 'integer', 'minimum': 0, 'maximum': 9999999999}}]
+                    entry['responses']['200'] = response({'oneOf': [ref('KeeperConversation'), ref('KeeperList')]})
+                else:
+                    body = {'keeper': 'KeeperConversationRequest', 'keeper/turn': 'KeeperTurnRequest', 'keeper/cancel': 'KeeperCancelRequest'}[name]
+                    entry['requestBody']['content']['application/json']['schema'] = ref(body)
+                    entry['responses']['200'] = response(ref('KeeperConversation'), 'Existing conversation or turn; never re-sent')
+                    if name != 'keeper/cancel':
+                        entry['responses']['202'] = response(ref('KeeperConversation'), 'New conversation or turn accepted')
             elif name == 'openapi.json':
                 entry['x-grave-contract'] = VERSION
                 entry['responses']['200'] = response({'type': 'object'}, 'This OpenAPI 3.1 document')

@@ -414,6 +414,171 @@
         }
       }
     },
+    "/keeper": {
+      "get": {
+        "operationId": "get_keeper",
+        "summary": "GET keeper",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{10}-[0-9a-f]{32}$"
+            },
+            "description": "Omit to list conversations."
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9999999999
+            }
+          }
+        ],
+        "x-grave-contract": "1.0.0",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/KeeperConversation"
+                    },
+                    {
+                      "$ref": "#/components/schemas/KeeperList"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Access, validation or availability error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Workspace gateway capability refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "description": "Gravekeeper conversation on this grave only (single-owner Linux). Conversations bind to their owner and host."
+      },
+      "post": {
+        "operationId": "post_keeper",
+        "summary": "POST keeper",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "1.0.0",
+        "responses": {
+          "200": {
+            "description": "Existing conversation or turn; never re-sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeeperConversation"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Access, validation or availability error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "New conversation or turn accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeeperConversation"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Workspace gateway capability refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeeperConversationRequest"
+              }
+            }
+          }
+        },
+        "description": "Gravekeeper conversation on this grave only (single-owner Linux). Conversations bind to their owner and host."
+      }
+    },
     "/openapi.json": {
       "get": {
         "operationId": "get_openapi_json",
@@ -1978,6 +2143,158 @@
         }
       }
     },
+    "/keeper/cancel": {
+      "post": {
+        "operationId": "post_keeper_cancel",
+        "summary": "POST keeper/cancel",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "1.0.0",
+        "responses": {
+          "200": {
+            "description": "Existing conversation or turn; never re-sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeeperConversation"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Access, validation or availability error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Workspace gateway capability refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeeperCancelRequest"
+              }
+            }
+          }
+        },
+        "description": "Gravekeeper conversation on this grave only (single-owner Linux). Conversations bind to their owner and host."
+      }
+    },
+    "/keeper/turn": {
+      "post": {
+        "operationId": "post_keeper_turn",
+        "summary": "POST keeper/turn",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "1.0.0",
+        "responses": {
+          "200": {
+            "description": "Existing conversation or turn; never re-sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeeperConversation"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Access, validation or availability error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "New conversation or turn accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeeperConversation"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Workspace gateway capability refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeeperTurnRequest"
+              }
+            }
+          }
+        },
+        "description": "Gravekeeper conversation on this grave only (single-owner Linux). Conversations bind to their owner and host."
+      }
+    },
     "/linear-dispatch": {
       "post": {
         "operationId": "post_linear_dispatch",
@@ -3091,6 +3408,307 @@
         ],
         "additionalProperties": true
       },
+      "KeeperEvent": {
+        "type": "object",
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "type": {
+            "enum": [
+              "text",
+              "tool_call",
+              "tool_result",
+              "done",
+              "error"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "description": "\"owner\" for the sent message, the tool name for tool events, else empty."
+          },
+          "text": {
+            "type": "string"
+          },
+          "at": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "seq",
+          "type",
+          "name",
+          "text",
+          "at"
+        ],
+        "additionalProperties": true
+      },
+      "KeeperSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9]{10}-[0-9a-f]{32}$"
+          },
+          "provider": {
+            "enum": [
+              "claude",
+              "codex"
+            ]
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "host": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "number"
+          },
+          "updated_at": {
+            "type": "number"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "idle",
+              "running",
+              "succeeded",
+              "failed",
+              "timed_out",
+              "cancelled",
+              "interrupted"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "provider",
+          "session_id",
+          "host",
+          "owner",
+          "created_at",
+          "updated_at",
+          "summary",
+          "state"
+        ],
+        "additionalProperties": true
+      },
+      "KeeperConversation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9]{10}-[0-9a-f]{32}$"
+          },
+          "provider": {
+            "enum": [
+              "claude",
+              "codex"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "host": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "number"
+          },
+          "updated_at": {
+            "type": "number"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "idle",
+              "running",
+              "succeeded",
+              "failed",
+              "timed_out",
+              "cancelled",
+              "interrupted"
+            ]
+          },
+          "turn": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[0-9]{10}-[0-9a-f]{32}$"
+                  },
+                  "started_at": {
+                    "type": "number"
+                  },
+                  "finished_at": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "exit_code": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "started_at",
+                  "finished_at",
+                  "exit_code"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cursor": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KeeperEvent"
+            },
+            "maxItems": 400
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "provider",
+          "model",
+          "session_id",
+          "host",
+          "owner",
+          "created_at",
+          "updated_at",
+          "summary",
+          "state",
+          "turn",
+          "cursor",
+          "events",
+          "truncated",
+          "message"
+        ],
+        "additionalProperties": true
+      },
+      "KeeperList": {
+        "type": "object",
+        "properties": {
+          "conversations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KeeperSummary"
+            },
+            "maxItems": 64
+          },
+          "provider": {
+            "enum": [
+              "claude",
+              "codex"
+            ]
+          },
+          "model": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "conversations",
+          "provider",
+          "model"
+        ],
+        "additionalProperties": true
+      },
+      "KeeperConversationRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9]{10}-[0-9a-f]{32}$"
+          },
+          "provider": {
+            "enum": [
+              "claude",
+              "codex"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "KeeperTurnRequest": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "string",
+            "pattern": "^[0-9]{10}-[0-9a-f]{32}$"
+          },
+          "turn": {
+            "type": "string",
+            "pattern": "^[0-9]{10}-[0-9a-f]{32}$"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8000
+          }
+        },
+        "required": [
+          "conversation",
+          "turn",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "KeeperCancelRequest": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "string",
+            "pattern": "^[0-9]{10}-[0-9a-f]{32}$"
+          }
+        },
+        "required": [
+          "conversation"
+        ],
+        "additionalProperties": false
+      },
       "Capabilities": {
         "type": "object",
         "properties": {
@@ -3159,6 +3777,28 @@
               "retention_seconds",
               "new_id_max_age_seconds"
             ],
+            "additionalProperties": true
+          },
+          "keeper": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "enum": [
+                  "claude",
+                  "codex"
+                ]
+              },
+              "model": {
+                "type": "string"
+              },
+              "tools": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [],
             "additionalProperties": true
           },
           "resource_contract": {

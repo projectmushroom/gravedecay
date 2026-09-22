@@ -1448,20 +1448,25 @@ cmd_upgrade() ( # subshell keeps the lock and EXIT trap scoped to this update
 )
 
 # ------------------------------------------------------------------ logs ----
-cmd_logs() {
+cmd_logs() { # grave logs [--tail <n>] [<target>]   (--tail: print n lines and exit instead of following)
+  local follow=(-f) n=100
+  if [[ "${1:-}" == --tail ]]; then
+    [[ "${2:-}" =~ ^[0-9]{1,4}$ ]] || { bad "usage: grave logs --tail <lines> <target>"; return 1; }
+    follow=(); n="$2"; shift 2
+  fi
   local target="${1:-grave}"
   case "$target" in
-    t3|t3code)  sudo journalctl -u t3code -n 100 -f ;;
-    dash|gravedecay) sudo journalctl -u gravedecay -n 100 -f ;;
-    term)       sudo journalctl -u gravedecay-term -n 100 -f ;;
-    ssh|sshd)   sudo journalctl -u sshd -n 100 -f ;;
-    tailscale)  sudo journalctl -u tailscaled -n 100 -f ;;
-    system)     sudo journalctl -p warning -n 100 -f ;;
-    grave)      tail -n 50 -f "$LOG_FILE" ;;
-    agent)      tail -n 100 -f "$GRAVE_ROOT"/agents/"${2:?agent name}"/session-*.log ;;
-    workspace)  sudo journalctl -u "gravedecay-t3@${2:?workspace}" -u "gravedecay-term@${2}" -u "gravedecay-dashboard@${2}" -n 150 -f ;;
-    *)          dk logs --tail 100 -f "$target" 2>/dev/null || \
-                sudo journalctl -u "$target" -n 100 -f ;;
+    t3|t3code)  sudo journalctl -u t3code -n "$n" ${follow[@]+"${follow[@]}"} ;;
+    dash|gravedecay) sudo journalctl -u gravedecay -n "$n" ${follow[@]+"${follow[@]}"} ;;
+    term)       sudo journalctl -u gravedecay-term -n "$n" ${follow[@]+"${follow[@]}"} ;;
+    ssh|sshd)   sudo journalctl -u sshd -n "$n" ${follow[@]+"${follow[@]}"} ;;
+    tailscale)  sudo journalctl -u tailscaled -n "$n" ${follow[@]+"${follow[@]}"} ;;
+    system)     sudo journalctl -p warning -n "$n" ${follow[@]+"${follow[@]}"} ;;
+    grave)      tail -n "$n" ${follow[@]+"${follow[@]}"} "$LOG_FILE" ;;
+    agent)      tail -n "$n" ${follow[@]+"${follow[@]}"} "$GRAVE_ROOT"/agents/"${2:?agent name}"/session-*.log ;;
+    workspace)  sudo journalctl -u "gravedecay-t3@${2:?workspace}" -u "gravedecay-term@${2}" -u "gravedecay-dashboard@${2}" -n "$n" ${follow[@]+"${follow[@]}"} ;;
+    *)          dk logs --tail "$n" ${follow[@]+"${follow[@]}"} "$target" 2>/dev/null || \
+                sudo journalctl -u "$target" -n "$n" ${follow[@]+"${follow[@]}"} ;;
   esac
 }
 
@@ -1546,6 +1551,12 @@ cmd_doctor() { # grave doctor [--no-page]
   if [[ "${MULTI_USER:-0}" == 0 ]]; then
     check "scheduled agent runner installed" test -r "$GRAVE_ROOT/scripts/agent-jobs.py"
     check "scheduled prompts and service valid" env GRAVE_ROOT="$GRAVE_ROOT" python3 "$GRAVE_ROOT/scripts/agent-jobs.py" check
+    check "keeper runner installed" test -r "$GRAVE_ROOT/scripts/keeper.py"
+    check "keeper instructions and private storage" env GRAVE_ROOT="$GRAVE_ROOT" GRAVE_CONF="$CONF" python3 "$GRAVE_ROOT/scripts/keeper.py" check files
+    # Provider login is a post-raise human step (AGENTS.md §2), so report it.
+    if keeper_status=$(env GRAVE_ROOT="$GRAVE_ROOT" GRAVE_CONF="$CONF" python3 "$GRAVE_ROOT/scripts/keeper.py" check provider 2>&1); then
+      ok "keeper provider installed and logged in"
+    else say "  ${YLW}– keeper provider not ready: ${keeper_status:-unknown} — log in as the appliance owner${RST}"; fi
   fi
   check "issue agent task runner installed" test -r "$GRAVE_ROOT/scripts/agent-task.py"
   check "issue tasks private and consistent with session metadata" agent_tasks_check
@@ -2822,7 +2833,9 @@ grave — gravedecay appliance control 🪦
   grave agents resume <n>       recreate a dead session in its old dir
 
   grave docker [ps|up <stack>|down <stack>|logs <c>|stacks|disk]
-  grave logs [t3|dash|ssh|tailscale|system|grave|agent <n>|<container/unit>]
+  grave logs [--tail <n>] [t3|dash|ssh|tailscale|system|grave|agent <n>|<container/unit>]
+  grave keeper ask "<prompt>"          🪦 ask the Gravekeeper about this box
+  grave keeper resume <id> "<prompt>"  continue a saved Keeper conversation
 
   grave preview <port>       expose a running dev server (e.g. :3000) to the
                              tailnet at https://<box>.ts.net:<port> — root path,
@@ -2902,6 +2915,7 @@ case "${1:-help}" in
   gamewatch)  shift || true; cmd_gamewatch "$@" ;;
   keepalive)  shift || true; cmd_keepalive "$@" ;;
   logs)       shift; cmd_logs "$@" ;;
+  keeper)     shift || true; exec env GRAVE_ROOT="$GRAVE_ROOT" GRAVE_CONF="$CONF" python3 "$GRAVE_ROOT/scripts/keeper.py" "$@" ;;
   notify)     shift || true; cmd_notify "$@" ;;
   digest)     shift || true; cmd_digest "$@" ;;
   bench)      shift; exec python3 "$GRAVE_ROOT/scripts/benchmark.py" --root "$GRAVE_ROOT" "$@" ;;
