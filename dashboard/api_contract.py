@@ -242,6 +242,7 @@ SCHEMAS = {
     'LegacyObject': {'type': 'object', 'additionalProperties': True,
                      'description': 'Transitional dashboard-shaped payload; see docs/API.md. Not a structured resource contract.'},
 }
+SCHEMAS['Capabilities']['required'].remove('keeper')  # absent on hosts without the Gravekeeper
 RESOURCE_DATA = {'system': ref('System'), 'services': array(ref('Service'), LIST_LIMIT),
                  'containers': array(ref('Container'), LIST_LIMIT), 'sessions': array(ref('Session'), LIST_LIMIT),
                  'repositories': array(ref('Repository'), LIST_LIMIT), 'preferences': ref('Preferences')}

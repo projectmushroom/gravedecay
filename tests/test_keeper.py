@@ -409,6 +409,8 @@ class KeeperAPI(unittest.TestCase):
         finally:
             process.stdin.close()
             process.wait(timeout=5)
+            process.stdout.close()
+            process.stderr.close()
 
 
 class Contracts(unittest.TestCase):

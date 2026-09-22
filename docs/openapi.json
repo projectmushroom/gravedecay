@@ -3844,7 +3844,6 @@
           "routes",
           "actions",
           "operations",
-          "keeper",
           "resource_contract"
         ],
         "additionalProperties": true
