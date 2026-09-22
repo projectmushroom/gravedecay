@@ -1553,7 +1553,10 @@ cmd_doctor() { # grave doctor [--no-page]
     check "scheduled prompts and service valid" env GRAVE_ROOT="$GRAVE_ROOT" python3 "$GRAVE_ROOT/scripts/agent-jobs.py" check
     check "keeper runner installed" test -r "$GRAVE_ROOT/scripts/keeper.py"
     check "keeper instructions and private storage" env GRAVE_ROOT="$GRAVE_ROOT" GRAVE_CONF="$CONF" python3 "$GRAVE_ROOT/scripts/keeper.py" check files
-    check "keeper provider installed and logged in" env GRAVE_ROOT="$GRAVE_ROOT" GRAVE_CONF="$CONF" python3 "$GRAVE_ROOT/scripts/keeper.py" check provider
+    # Provider login is a post-raise human step (AGENTS.md §2), so report it.
+    if keeper_status=$(env GRAVE_ROOT="$GRAVE_ROOT" GRAVE_CONF="$CONF" python3 "$GRAVE_ROOT/scripts/keeper.py" check provider 2>&1); then
+      ok "keeper provider installed and logged in"
+    else say "  ${YLW}– keeper provider not ready: ${keeper_status:-unknown} — log in as the appliance owner${RST}"; fi
   fi
   check "issue agent task runner installed" test -r "$GRAVE_ROOT/scripts/agent-task.py"
   check "issue tasks private and consistent with session metadata" agent_tasks_check

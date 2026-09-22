@@ -417,7 +417,8 @@ class Contracts(unittest.TestCase):
     def test_doctor_raise_and_cli_wire_the_keeper(self):
         self.assertIn('check "keeper runner installed" test -r "$GRAVE_ROOT/scripts/keeper.py"', GRAVE)
         self.assertIn('check "keeper instructions and private storage"', GRAVE)
-        self.assertIn('check "keeper provider installed and logged in"', GRAVE)
+        self.assertIn('ok "keeper provider installed and logged in"', GRAVE)
+        self.assertIn('keeper provider not ready: ${keeper_status:-unknown}', GRAVE)
         self.assertIn('keeper)     shift || true; exec env GRAVE_ROOT="$GRAVE_ROOT" GRAVE_CONF="$CONF" python3 "$GRAVE_ROOT/scripts/keeper.py" "$@" ;;', GRAVE)
         self.assertIn('install -m 755 "$REPO_DIR/dashboard/keeper.py" "$GRAVE_ROOT/scripts/keeper.py"', RAISE)
         self.assertIn('cp -n "$REPO_DIR/config/GRAVEKEEPER.md" "$GRAVE_ROOT/config/GRAVEKEEPER.md"', RAISE)
