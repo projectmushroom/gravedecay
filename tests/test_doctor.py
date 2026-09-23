@@ -64,6 +64,7 @@ class DoctorContractTests(unittest.TestCase):
             self.assertEqual(check(current), 0)
             self.assertNotEqual(check(current.replace('id="configuration"', 'id="legacy-settings"')), 0)
             self.assertNotEqual(check(current.replace('aria-label="Dashboard"', 'aria-label="Legacy"')), 0)
+            self.assertNotEqual(check(current.replace('id="keeper"', 'id="crypt"')), 0)
 
     def test_doctor_compares_the_worker_stamp_to_the_installed_offline_page(self):
         # sw.js embeds a digest of offline.html in its cache name; a mismatch

@@ -455,6 +455,36 @@ body.remote-pending #panels,body.remote-pending #launcher,body.remote-pending #a
 #remote-context{padding:10px 16px;overflow-wrap:anywhere;border-bottom:1px solid var(--ring);font-size:12px}
 #remote-context a{margin-right:12px}
 #trusted-origins{width:100%;box-sizing:border-box;min-height:90px}
+/* The Gravekeeper drawer: side panel on desktop, full screen on phones */
+#keeper-open{white-space:nowrap}
+#keeper{position:fixed;top:0;right:0;height:100dvh;width:min(460px,100%);z-index:120;display:flex;flex-direction:column;box-sizing:border-box;
+  background:var(--page);border-left:1px solid var(--ring);box-shadow:-12px 0 32px rgba(0,0,0,.5);
+  padding:calc(10px + env(safe-area-inset-top)) max(10px,env(safe-area-inset-right)) env(safe-area-inset-bottom) 10px}
+#keeper[hidden]{display:none}
+#keeper-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-bottom:8px;border-bottom:1px solid var(--ring)}
+#keeper-title{font-size:13px;font-weight:700;color:var(--title);letter-spacing:.06em;margin:0}
+#keeper-host{font-size:12px;font-weight:700;overflow-wrap:anywhere}
+#keeper-head .spacer{flex:1}
+#keeper-status{font-size:12px;color:var(--muted);margin:6px 0;overflow-wrap:anywhere}
+#keeper-list{border-bottom:1px solid var(--ring);padding-bottom:6px;max-height:40%;overflow-y:auto}
+#keeper-list button{display:block;width:100%;text-align:left;margin:4px 0;font-size:12px;overflow-wrap:anywhere}
+#keeper-list button[aria-current="true"]{border-color:var(--accent)}
+#keeper-log{flex:1;min-height:0;overflow-y:auto;padding:8px 0;font-size:13px;line-height:1.5;overscroll-behavior:contain}
+.keeper-msg{margin:6px 0;white-space:pre-wrap;overflow-wrap:anywhere}
+.keeper-msg.owner{color:var(--title);border-left:2px solid var(--accent);padding-left:8px}
+.keeper-msg.error{color:var(--crit)}
+.keeper-tool{margin:4px 0;font-size:12px;color:var(--muted)}
+.keeper-tool summary{cursor:pointer}
+.keeper-tool pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:200px;overflow:auto;margin:4px 0;font-size:11px}
+#keeper-chips{display:flex;gap:6px;flex-wrap:wrap;padding:6px 0}
+#keeper-form{display:flex;gap:6px;align-items:flex-end;padding:6px 0 8px}
+#keeper-input{flex:1;min-height:44px;max-height:30dvh;font-size:16px;font-family:inherit;background:var(--inset);color:var(--ink);
+  border:1px solid var(--hairline);padding:10px;resize:none;box-sizing:border-box}
+#keeper-input:focus{outline:1px solid var(--accent)}
+#keeper-chips button,#keeper-form button{min-height:44px}
+#keeper :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media(max-width:760px){#keeper{width:100%;border-left:0}}
+@media(max-width:520px){#keeper-open .keeper-word{display:none}}
 </style></head><body data-dashboard-layout="2">
 @OS_LOGOS@
 <div id="topcover"></div>
@@ -466,6 +496,7 @@ body.remote-pending #panels,body.remote-pending #launcher,body.remote-pending #a
   <span class="graveyard-switch" aria-hidden="true">▾</span>
 </button>
   <span class="meta" id="meta">connecting…</span>
+  <button class="mini" id="keeper-open" hidden aria-haspopup="dialog" aria-controls="keeper" aria-label="Summon the Keeper" title="Summon the Keeper">🕯 <span class="keeper-word">Summon the Keeper</span></button>
   <span class="badge" id="mode" role="button" title="Tap to switch mode" style="display:none;cursor:pointer">…</span>
 
 </div>
@@ -831,6 +862,29 @@ body.remote-pending #panels,body.remote-pending #launcher,body.remote-pending #a
   </div>
 </dialog>
 <footer id="foot">🪦 gravedecay © <span id="footyear"></span> — <span id="epitaph"></span></footer>
+<aside id="keeper" role="dialog" aria-modal="true" aria-labelledby="keeper-title" hidden>
+  <div id="keeper-head">
+    <h2 id="keeper-title">🕯 The Gravekeeper</h2>
+    <span id="keeper-host" title="This conversation speaks for one grave only"></span>
+    <span class="spacer"></span>
+    <button class="mini" id="keeper-conversations" aria-expanded="false" aria-controls="keeper-list">Conversations</button>
+    <button class="mini" id="keeper-new">New</button>
+    <button class="mini xbtn" id="keeper-x" title="close (Esc)" aria-label="close">✕</button>
+  </div>
+  <div id="keeper-list" hidden></div>
+  <p id="keeper-status" role="status" aria-live="polite"></p>
+  <div id="keeper-log" role="log" aria-live="polite" aria-label="Conversation with the Keeper"></div>
+  <div id="keeper-chips">
+    <button class="mini" data-keeper-chip="What's wrong?">What's wrong?</button>
+    <button class="mini" data-keeper-chip="Run doctor">Run doctor</button>
+    <button class="mini" data-keeper-chip="Anything to update?">Anything to update?</button>
+  </div>
+  <form id="keeper-form">
+    <textarea id="keeper-input" rows="1" maxlength="8000" placeholder="Ask about this grave…" aria-label="Message for the Keeper" enterkeyhint="send" autocomplete="off"></textarea>
+    <button class="mini" id="keeper-send" type="submit">Send</button>
+    <button class="mini" id="keeper-stop" type="button" hidden>■ Stop</button>
+  </form>
+</aside>
 <script>
 const $=id=>document.getElementById(id);
 const selectedGrave=new URLSearchParams(location.search).get('grave');
@@ -1709,14 +1763,16 @@ function render(s){
     sys.disks.map(d=>tile('Disk '+esc(d.label),d.pct+'%',
       `${fmtGB(d.used/1024)} used · ${s.backups.count} backups`,meter(d.pct))).join('');
   }
+  const askKeeper=(bad,prompt)=>keeperInfo&&bad?` <button class="mini" data-keeper-ask="${esc(prompt)}">🕯 Ask the Keeper</button>`:'';
   $('services').innerHTML=s.services.map(u=>`<tr>
     <td>${statusDot(u.active)}${esc(u.unit)}</td>
-    <td class="dim">${esc(u.active)} (${esc(u.sub)})</td></tr>`).join('');
+    <td class="dim">${esc(u.active)} (${esc(u.sub)})${askKeeper(u.active==='failed',`Service ${u.unit} is ${u.active} (${u.sub}). What's wrong?`)}</td></tr>`).join('');
   $('docker').innerHTML=s.docker.error
     ? `<tr><td class="dim">${esc(s.docker.error)}</td></tr>`
     : (s.docker.containers.map(c=>`<tr>
         <td>${statusDot(c.state==='running'?'active':'failed')}${esc(c.name)}</td>
-        <td class="dim">${esc(c.status)}</td></tr>`).join('')||'<tr><td class="dim">no containers</td></tr>');
+        <td class="dim">${esc(c.status)}${askKeeper(c.state!=='running'||/unhealthy/.test(c.status),`Container ${c.name} is ${c.status}. What's wrong?`)}</td></tr>`).join('')||'<tr><td class="dim">no containers</td></tr>');
+  document.querySelectorAll('[data-keeper-ask]').forEach(b=>b.onclick=()=>openKeeper(b.dataset.keeperAsk,b));
   $('tmux').innerHTML=s.tmux.length?s.tmux.map(x=>`<tr>
       <td>${statusDot('active')}<a href="${esc(appUrl('/term/?arg='+encodeURIComponent(x.name)))}">${esc(x.name)}</a>${x.worktree?`<div class="dim" title="${esc(x.worktree.dir||'')}">${esc(x.worktree.repo||'')} · ${esc(x.worktree.branch||'')}</div>`:''}${dispatchDetail(x)}</td>
       <td class="num">${esc(x.windows)} win</td>
@@ -1860,6 +1916,7 @@ async function poll(){
     }
     render(await r.json());
     if(!document.body.classList.contains('public-view'))pollT3Activity(); // deliberately detached: a remote T3 must not hold up vitals
+    if(!keeperInfo&&!portableCompanion&&Date.now()-keeperProbed>60000)paintKeeperEntry();
   }catch(e){pollFailures++;lastConnectionError=e.message;paintConnection();}
   finally{pollBusy=false;}
 }
@@ -1905,6 +1962,7 @@ function closeConsole(){
 }
 // Persist only the operation identity, never output or pairing credentials.
 const operationKey='grave-operation:'+targetLocation.href;
+const newId=()=>Math.floor(Date.now()/1000)+'-'+crypto.randomUUID().replaceAll('-','');
 let pendingOperation=null,choosingAction=false;
 try{const p=JSON.parse(localStorage.getItem(operationKey));
   if(p&&/^[0-9]{10}-[0-9a-f]{32}$/.test(p.id)&&typeof p.action==='string')pendingOperation=p;
@@ -1931,7 +1989,7 @@ async function runStream(act,title){
     try{info=await capabilities();}catch(e){if(!remoteGrave&&e.status===501)return runLegacyStream(act,title);throw e;}
     if(!info.operations?.actions?.includes(act))return runLegacyStream(act,title);
     if(pendingOperation&&!pendingOperation.done)return runOperation(pendingOperation);
-    pendingOperation={id:Math.floor(Date.now()/1000)+'-'+crypto.randomUUID().replaceAll('-',''),action:act,title,accepted:false,done:false};
+    pendingOperation={id:newId(),action:act,title,accepted:false,done:false};
     rememberOperation(); // Refuse to submit if this browser cannot retain its retry ID.
     return runOperation(pendingOperation,true);
   }catch(e){alert('Cannot start action: '+e.message);}
@@ -2084,7 +2142,7 @@ $('console').addEventListener('click',e=>{if(e.target.id==='console')closeConsol
 $('game-confirm').addEventListener('click',e=>{
   if(e.target.id==='game-confirm'){e.currentTarget.style.display='none';unlockBody();}});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){
-  closeConsole();$('game-confirm').style.display='none';
+  closeConsole();closeKeeper();$('game-confirm').style.display='none';
   closeSettings();$('kill-dlg').style.display='none';
   $('throttle-dlg').style.display='none';$('capture-dlg').style.display='none';
   closeDispatch();
@@ -2397,7 +2455,7 @@ function syncVis(){
 // the page underneath the modal ("intermixed" scrolling)
 const lockBody=()=>{document.body.style.overflow='hidden'};
 const unlockBody=()=>{
-  if(!document.querySelector('dialog[open]')&&![...document.querySelectorAll('.overlay')].some(o=>o.style.display==='block'))
+  if(!document.querySelector('dialog[open],#keeper:not([hidden])')&&![...document.querySelectorAll('.overlay')].some(o=>o.style.display==='block'))
     document.body.style.overflow='';
 };
 document.querySelectorAll('.sec-toggle').forEach(h=>{
@@ -2503,14 +2561,15 @@ function openT3Setup(){
 window.addEventListener('hashchange',openT3Setup);
 $('close-set').onclick=closeSettings;
 $('settings-x').onclick=closeSettings;
-$('settings-panel').addEventListener('keydown',e=>{
+function trapTab(e){
   if(e.key!=='Tab')return;
-  const nodes=[...e.currentTarget.querySelectorAll('button,a[href],input,select,[tabindex="0"]')]
+  const nodes=[...e.currentTarget.querySelectorAll('button,a[href],input,select,textarea,summary,[tabindex="0"]')]
     .filter(el=>!el.disabled&&el.getClientRects().length);
   const first=nodes[0],last=nodes[nodes.length-1];
   if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}
   else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}
-});
+}
+$('settings-panel').addEventListener('keydown',trapTab);
 $('settings-panel').addEventListener('click',e=>{
   if(e.target.id==='settings-panel')closeSettings();});
 // ---------- session history: transcript viewer + resume ----------
@@ -2820,6 +2879,209 @@ $('appframe-x').onclick=closeAppModal;
 $('appframe').addEventListener('click',e=>{if(e.target.id==='appframe')closeAppModal();});
 // ---------- boot ----------
 let timer=null;
+// ---------- The Gravekeeper: chat drawer over the keeper endpoints ----------
+// Same durable pattern as console operations: conversation and turn IDs are
+// generated here and saved before each request, so a lost response is retried
+// with the SAME ID and the server returns the existing record instead of
+// launching the provider again. Cursor polling only; closing the drawer
+// detaches, the turn finishes on the grave, reopening resumes it. Storage is
+// keyed by destination, so another grave never sees this conversation.
+const keeperKey='grave-keeper:'+targetLocation.href;
+const validId=v=>/^[0-9]{10}-[0-9a-f]{32}$/.test(v);
+let keeperSaved=null,keeperInfo=null,keeperProbed=0,keeperAborter=null,keeperRun=0,keeperReturn=null,keeperRecord=null,keeperCursor=0,keeperTools={},keeperLastOwner='';
+try{const k=JSON.parse(localStorage.getItem(keeperKey));
+  if(k&&validId(k.conversation))keeperSaved={conversation:k.conversation,
+    turn:k.turn&&validId(k.turn.id)&&typeof k.turn.message==='string'?{id:k.turn.id,message:k.turn.message,accepted:!!k.turn.accepted}:null};
+}catch(_){}
+function rememberKeeper(){if(keeperSaved)localStorage.setItem(keeperKey,JSON.stringify(keeperSaved));else localStorage.removeItem(keeperKey);}
+function keeperFetch(path,options={}){
+  // Local pages use the versioned owner-gated route directly, like preferenceFetch.
+  if(remoteGrave)return apiFetch('api/'+path,options);
+  return fetch('api/v1/'+path,{...options,signal:options.signal||AbortSignal.timeout(15000),headers:{...options.headers,'X-Grave-Client':'1'},cache:'no-store'});
+}
+async function keeperJSON(path,body,signal){
+  const options={signal:AbortSignal.any([AbortSignal.timeout(15000)].concat(signal||[]))};
+  if(body)Object.assign(options,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const response=await keeperFetch(path,options);
+  let data;try{data=await response.json();}catch(_){throw new Error('Unreadable Keeper response');}
+  if(!response.ok){const error=new Error(data.output||`HTTP ${response.status}`);error.status=response.status;error.code=data.error;throw error;}
+  return data;
+}
+async function keeperCapabilities(){
+  let info;
+  try{info=await capabilities();}catch(e){if(!remoteGrave&&e.status===501)return null;throw e;}
+  return info.keeper?.provider&&info.routes.GET.includes('keeper')&&info.routes.POST.includes('keeper/turn')?info.keeper:null;
+}
+async function paintKeeperEntry(){
+  keeperProbed=Date.now();
+  try{keeperInfo=await keeperCapabilities();}catch(_){keeperInfo=null;}
+  $('keeper-open').hidden=!keeperInfo;
+}
+function keeperStatus(text){$('keeper-status').textContent=text;}
+function keeperProviderLine(){return `${keeperInfo.provider}${keeperInfo.model?' · '+keeperInfo.model:''} · speaks only for ${targetLocation.hostname}`;}
+function keeperBusy(on){
+  $('keeper-send').hidden=on;$('keeper-stop').hidden=!on;$('keeper-stop').disabled=false;
+  ['keeper-new','keeper-conversations'].forEach(id=>$(id).disabled=on);
+  $('keeper-chips').querySelectorAll('button').forEach(b=>b.disabled=on);
+}
+function renderKeeperEvent(event){
+  // Model output is text only: textContent everywhere, never markup.
+  const log=$('keeper-log');let node;
+  const name=(event.name||'tool').replace(/^mcp__keeper__/,'');
+  if(event.type==='text'){
+    node=document.createElement('div');node.className='keeper-msg'+(event.name==='owner'?' owner':'');node.textContent=event.text;
+    if(event.name==='owner'){keeperTools={};keeperLastOwner=event.text;}
+  }else if(event.type==='error'){node=document.createElement('div');node.className='keeper-msg error';node.textContent='⚠ '+event.text;}
+  else if(event.type==='tool_call'||event.type==='tool_result'){
+    keeperTools[name]=(keeperTools[name]||0)+(event.type==='tool_call'?1:-1);
+    node=document.createElement('details');node.className='keeper-tool';
+    const summary=document.createElement('summary'),pre=document.createElement('pre');
+    summary.textContent=event.type==='tool_call'?`🔧 ${name}`:`↩ ${name} result`;
+    pre.textContent=event.text;node.append(summary,pre);
+  }else return;
+  log.appendChild(node);log.scrollTop=log.scrollHeight;
+}
+function applyKeeper(data){
+  if(data.id!==keeperSaved?.conversation)throw new Error('Conversation identity mismatch');
+  if(keeperRecord?.id!==data.id){$('keeper-log').replaceChildren();keeperCursor=0;keeperTools={};keeperLastOwner='';}
+  keeperRecord=data;
+  for(const event of data.events||[])if(event.seq>keeperCursor){renderKeeperEvent(event);keeperCursor=event.seq;}
+}
+function keeperFinal(data){
+  keeperSaved.turn=null;rememberKeeper();
+  const provider=keeperInfo?.provider||data.provider,host=targetLocation.hostname,message=data.message||'';
+  const pending=Object.keys(keeperTools).filter(k=>keeperTools[k]>0);
+  let text={
+    succeeded:'Reply complete.',
+    cancelled:`Stopped. Cancelled: “${keeperLastOwner.slice(0,80)}”${pending.length?` while running ${pending.join(', ')}`:''}.`+
+      (pending.includes('run_doctor')?` The doctor run it started is a separate operation and keeps running on ${host}; Diagnostics shows it.`:''),
+    interrupted:`${message||'The dashboard restarted during this turn; outcome unknown.'} Send again to resume this session.`,
+    timed_out:`${message||'The turn exceeded its time limit.'} Send again to continue.`,
+    failed:message+(/No such file|not found|ENOENT|not installed/i.test(message)?` Install the ${provider} CLI on ${host} as the appliance owner, then send again.`
+      :/401|log ?in|auth|credential|unauthori/i.test(message)?` Log the ${provider} CLI in as the owner on ${host} (Connections & integrations → provider setup), then send again.`
+      :' Send again to retry.'),
+  }[data.state]||data.state;
+  if(data.truncated)text+=' This conversation reached its size limit; use New to start another.';
+  keeperStatus(text);
+  if(['interrupted','timed_out'].includes(data.state)&&!$('keeper-input').value)$('keeper-input').value=keeperLastOwner;
+}
+async function followKeeper(turn){
+  if(keeperAborter||!keeperSaved)return;
+  const myRun=++keeperRun,controller=new AbortController(),conversation=keeperSaved.conversation;
+  keeperAborter=controller;keeperBusy(true);
+  const read=()=>keeperJSON('keeper?id='+encodeURIComponent(conversation)+'&after='+(keeperRecord?.id===conversation?keeperCursor:0),null,controller.signal);
+  try{
+    let data=await read();
+    if(turn&&data.turn?.id!==turn.id){
+      if(data.state==='running')throw Object.assign(new Error('A turn is already running in this conversation'),{status:409,code:'busy'});
+      // Unreceived submission: retry the SAME saved turn ID, never a new one.
+      data=await keeperJSON('keeper/turn',{conversation,turn:turn.id,message:turn.message},controller.signal);
+    }
+    while(!controller.signal.aborted){
+      applyKeeper(data);
+      if(keeperSaved.turn&&data.turn?.id===keeperSaved.turn.id&&!keeperSaved.turn.accepted){keeperSaved.turn.accepted=true;rememberKeeper();}
+      if(data.state!=='running'){if(data.state==='idle')keeperStatus(keeperProviderLine());else keeperFinal(data);break;}
+      keeperStatus(`The Keeper is working… closing this drawer leaves the turn running on ${targetLocation.hostname}.`);
+      await new Promise(resolve=>{const timer=setTimeout(done,1000);function done(){clearTimeout(timer);controller.signal.removeEventListener('abort',done);resolve();}controller.signal.addEventListener('abort',done,{once:true});});
+      if(controller.signal.aborted)break;
+      data=await read();
+    }
+  }catch(e){
+    if(controller.signal.aborted)return;
+    if(e.status===404){keeperSaved=null;keeperRecord=null;rememberKeeper();keeperStatus(e.message+' Start a new conversation.');}
+    else if(e.status>=400&&e.status<500){
+      if(keeperSaved?.turn&&!keeperSaved.turn.accepted){keeperSaved.turn=null;rememberKeeper();}
+      keeperStatus(e.message+(e.code==='conversation_full'?' Use New to start another.':''));
+    }else keeperStatus(e.message+' Reopen the drawer to reconnect; the saved conversation and turn will be reused.');
+  }finally{
+    if(keeperRun===myRun){keeperAborter=null;keeperBusy(false);}
+  }
+}
+async function sendKeeper(message){
+  message=message.trim();
+  if(!message||keeperAborter||!keeperInfo)return;
+  keeperBusy(true);
+  try{
+    if(!keeperSaved){keeperSaved={conversation:newId(),turn:null};rememberKeeper();} // saved before the request: a lost reply reuses it
+    if(keeperRecord?.id!==keeperSaved.conversation)applyKeeper(await keeperJSON('keeper',{id:keeperSaved.conversation}));
+    keeperSaved.turn={id:newId(),message,accepted:false};rememberKeeper();
+    $('keeper-input').value='';$('keeper-input').style.height='';
+  }catch(e){
+    if(e.code==='expired_id'){keeperSaved=null;rememberKeeper();}
+    keeperStatus(e.message);keeperBusy(false);return;
+  }
+  keeperBusy(false);
+  await followKeeper(keeperSaved.turn);
+}
+async function stopKeeper(){
+  if(!keeperSaved||!keeperAborter)return;
+  $('keeper-stop').disabled=true;keeperStatus('Stopping…');
+  try{await keeperJSON('keeper/cancel',{conversation:keeperSaved.conversation});} // the poll loop reports the cancelled outcome
+  catch(e){keeperStatus('Stop failed: '+e.message);$('keeper-stop').disabled=false;}
+}
+async function resumeKeeper(){
+  if(keeperAborter)return;
+  try{keeperInfo=await keeperCapabilities();}catch(e){keeperStatus(`Cannot reach ${targetLocation.hostname}: ${e.message}`);return;}
+  $('keeper-open').hidden=!keeperInfo;
+  $('keeper-form').querySelectorAll('textarea,button').forEach(el=>el.disabled=!keeperInfo);
+  if(!keeperInfo){keeperStatus(`The Gravekeeper is unavailable on ${targetLocation.hostname}: it needs a single-owner Linux grave on a release with the keeper routes.`);return;}
+  keeperStatus(keeperProviderLine());
+  if(keeperSaved)await followKeeper(keeperSaved.turn&&!keeperSaved.turn.accepted?keeperSaved.turn:null);
+}
+async function toggleKeeperList(){
+  const list=$('keeper-list'),open=list.hidden;
+  $('keeper-conversations').setAttribute('aria-expanded',String(open));
+  list.hidden=!open;if(!open)return;
+  list.textContent='Loading…';
+  try{
+    const rows=(await keeperJSON('keeper')).conversations;
+    list.replaceChildren(...(rows.length?rows.map(c=>{
+      const button=document.createElement('button');button.className='mini';
+      button.textContent=`${new Date(c.updated_at*1000).toLocaleString()} · ${c.state} · ${c.summary||'(no reply yet)'}`;
+      button.setAttribute('aria-current',String(c.id===keeperSaved?.conversation));
+      button.onclick=()=>{if(keeperAborter)return;keeperSaved={conversation:c.id,turn:null};rememberKeeper();toggleKeeperList();followKeeper(null);};
+      return button;
+    }):[Object.assign(document.createElement('p'),{className:'dim',textContent:`No saved conversations on ${targetLocation.hostname}.`})]));
+  }catch(e){list.textContent=e.message;}
+}
+function fitKeeper(){
+  // iOS keeps 100dvh under the software keyboard; follow the visual viewport so the composer stays in view.
+  const vv=window.visualViewport,drawer=$('keeper');
+  if(drawer.hidden||!vv)return;
+  drawer.style.height=vv.height+'px';drawer.style.top=vv.offsetTop+'px';
+  $('keeper-log').scrollTop=$('keeper-log').scrollHeight;
+}
+function openKeeper(prefill,returnTo=document.activeElement){
+  keeperReturn=returnTo;
+  $('keeper').hidden=false;lockBody();fitKeeper();
+  $('keeper-host').textContent=targetLocation.hostname;$('keeper-host').style.color=plotAccent(targetLocation.hostname);
+  if(prefill)$('keeper-input').value=prefill;
+  $('keeper-input').focus({preventScroll:true});
+  resumeKeeper();
+}
+function closeKeeper(){
+  if($('keeper').hidden)return;
+  if(keeperAborter){keeperAborter.abort();keeperAborter=null;keeperBusy(false);}
+  $('keeper').hidden=true;$('keeper').style.height='';$('keeper').style.top='';unlockBody();
+  if(keeperReturn?.isConnected)keeperReturn.focus({preventScroll:true});
+}
+$('keeper-open').onclick=()=>openKeeper('',$('keeper-open'));
+$('keeper-x').onclick=closeKeeper;
+$('keeper-stop').onclick=stopKeeper;
+$('keeper-new').onclick=()=>{
+  if(keeperAborter)return;
+  keeperSaved=null;rememberKeeper();keeperRecord=null;keeperCursor=0;keeperTools={};keeperLastOwner='';
+  $('keeper-log').replaceChildren();if(keeperInfo)keeperStatus(keeperProviderLine());$('keeper-input').focus({preventScroll:true});
+};
+$('keeper-conversations').onclick=toggleKeeperList;
+$('keeper-chips').querySelectorAll('[data-keeper-chip]').forEach(b=>b.onclick=()=>sendKeeper(b.dataset.keeperChip));
+$('keeper-form').onsubmit=e=>{e.preventDefault();sendKeeper($('keeper-input').value);};
+$('keeper-input').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();$('keeper-form').requestSubmit();}});
+$('keeper-input').addEventListener('input',e=>{e.target.style.height='';e.target.style.height=Math.min(e.target.scrollHeight,innerHeight*.3)+'px';});
+$('keeper').addEventListener('keydown',trapTab);
+window.visualViewport?.addEventListener('resize',fitKeeper);
+window.visualViewport?.addEventListener('scroll',fitKeeper);
+paintKeeperEntry();
 function schedule(){clearInterval(timer);
   // game mode: back off to 30s — the dashboard must not cost resources
   timer=setInterval(poll,lastMode==='gaming'?30000:((cfg&&cfg.poll_ms)||5000));}

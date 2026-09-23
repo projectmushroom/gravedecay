@@ -426,7 +426,8 @@ class Contracts(unittest.TestCase):
         self.assertIn('ln -sfn ../GRAVEKEEPER.md "$GRAVE_ROOT/config/keeper/AGENTS.md"', RAISE)
         self.assertTrue((ROOT / "config/GRAVEKEEPER.md").exists())
         self.assertIn('KEEPER_PROVIDER="claude"', (ROOT / "config/grave.conf.example").read_text())
-        for doc, needle in (("API.md", "keeper/turn"), ("SECURITY.md", "## The Gravekeeper"), ("NOTIFICATIONS.md", "Gravekeeper turn")):
+        for doc, needle in (("API.md", "keeper/turn"), ("SECURITY.md", "## The Gravekeeper"), ("NOTIFICATIONS.md", "Gravekeeper turn"),
+                            ("DASHBOARD.md", "Summon the Keeper")):
             self.assertIn(needle, (ROOT / "docs" / doc).read_text())
         spec = json.loads((ROOT / "docs/openapi.json").read_text())
         self.assertEqual({p for p in spec["paths"] if "keeper" in p}, {"/keeper", "/keeper/turn", "/keeper/cancel"})

@@ -1979,7 +1979,8 @@ dashboard_layout_ok() {
   local shell="$GRAVE_ROOT/scripts/dashboard-static/index.html"
   grep -q 'data-dashboard-layout="2"' "$shell" &&
     grep -q 'aria-label="Dashboard"' "$shell" &&
-    grep -q 'id="configuration"' "$shell"
+    grep -q 'id="configuration"' "$shell" &&
+    grep -q 'id="keeper"' "$shell"
 }
 dashboard_shell_ok() { [[ "$(sha256sum "$GRAVE_ROOT/scripts/dashboard-static/index.html" | cut -d' ' -f1)" == "$(dashboard_probe health | jq -r .shell)" ]]; }
 dashboard_manifest_ok() { dashboard_probe manifest | grep -q '"scope": "/"'; }
