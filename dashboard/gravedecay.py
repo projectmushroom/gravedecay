@@ -2132,8 +2132,14 @@ CLAUDE_PRICES = [
 ]
 
 
+def claude_price(model):
+    """$/MTok (input, output). A model missing from the table bills at the most
+    expensive known price, so an estimate for it errs high, never low."""
+    return next((v for k, v in CLAUDE_PRICES if k in (model or "")), max(v for _, v in CLAUDE_PRICES))
+
+
 def _claude_cost(model, u):
-    p = next((v for k, v in CLAUDE_PRICES if k in (model or "")), (5, 25))
+    p = claude_price(model)
     cc = u.get("cache_creation") or {}
     w5, w1 = cc.get("ephemeral_5m_input_tokens"), cc.get("ephemeral_1h_input_tokens")
     if w5 is None and w1 is None:
@@ -2144,12 +2150,76 @@ def _claude_cost(model, u):
             + (w5 or 0) * p[0] * 1.25 + (w1 or 0) * p[0] * 2) / 1e6
 
 
+def _codex_cost(model, u):
+    """Codex models are absent from the price table, so they bill at its most
+    expensive row; cached input counts as a cache read."""
+    p = claude_price(model)
+    cached_in = u.get("cached_input_tokens", 0)
+    return (max(0, u.get("input_tokens", 0) - cached_in) * p[0] + cached_in * p[0] * 0.1
+            + u.get("output_tokens", 0) * p[1]) / 1e6
+
+
+def claude_transcript(path, seen):
+    """Priced assistant messages in one Claude Code transcript as (timestamp,
+    model, usage, cwd), deduplicated across retries by message and request id."""
+    import datetime
+    with open(path) as fh:
+        for line in fh:
+            if '"usage"' not in line:
+                continue
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if d.get("type") != "assistant":
+                continue
+            m = d.get("message") or {}
+            u = m.get("usage") or {}
+            if not (u.get("output_tokens") or u.get("input_tokens")):
+                continue
+            key = (m.get("id"), d.get("requestId"))
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                ts = datetime.datetime.fromisoformat(
+                    d.get("timestamp", "").replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                continue
+            yield ts, m.get("model"), u, d.get("cwd")
+
+
+def codex_rollout(path):
+    """One Codex rollout as (cwd, model, cumulative usage, latest rate limits).
+    Totals are cumulative per session file, so the last token_count wins."""
+    cwd = model = last_u = last_rl = None
+    with open(path) as fh:
+        for line in fh:
+            if '"token_count"' not in line and '"session_meta"' not in line and '"turn_context"' not in line:
+                continue
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            p = d.get("payload") or {}
+            if d.get("type") == "session_meta":
+                cwd = p.get("cwd") or cwd
+            elif d.get("type") == "turn_context":
+                cwd, model = p.get("cwd") or cwd, p.get("model") or model
+            elif p.get("type") == "token_count":
+                info = p.get("info") or {}
+                if info.get("total_token_usage"):
+                    last_u = info["total_token_usage"]
+                if p.get("rate_limits"):
+                    last_rl = p["rate_limits"]
+    return cwd, model, last_u, last_rl
+
+
 def collect_agent_usage():
     """Local-first usage stats: Claude Code transcripts (~/.claude/projects,
     per-message usage with dedupe) and Codex rollouts (~/.codex/sessions,
     cumulative totals per session + the latest rate-limit windows)."""
     def fetch():
-        import datetime
         now = time.time()
         cutoffs = {"today": now - 86400, "week": now - 7 * 86400}
         claude = {k: {"in": 0, "out": 0, "cache": 0, "cost": 0.0, "msgs": 0}
@@ -2159,38 +2229,16 @@ def collect_agent_usage():
             try:
                 if os.path.getmtime(f) < cutoffs["week"]:
                     continue
-                with open(f) as fh:
-                    for line in fh:
-                        if '"usage"' not in line:
-                            continue
-                        try:
-                            d = json.loads(line)
-                        except ValueError:
-                            continue
-                        if d.get("type") != "assistant":
-                            continue
-                        m = d.get("message") or {}
-                        u = m.get("usage") or {}
-                        if not (u.get("output_tokens") or u.get("input_tokens")):
-                            continue
-                        key = (m.get("id"), d.get("requestId"))
-                        if key in seen:
-                            continue
-                        seen.add(key)
-                        try:
-                            ts = datetime.datetime.fromisoformat(
-                                d.get("timestamp", "").replace("Z", "+00:00")).timestamp()
-                        except ValueError:
-                            continue
-                        cost = _claude_cost(m.get("model"), u)
-                        for k, cut in cutoffs.items():
-                            if ts >= cut:
-                                b = claude[k]
-                                b["in"] += u.get("input_tokens", 0)
-                                b["out"] += u.get("output_tokens", 0)
-                                b["cache"] += u.get("cache_read_input_tokens", 0)
-                                b["cost"] += cost
-                                b["msgs"] += 1
+                for ts, model, u, _cwd in claude_transcript(f, seen):
+                    cost = _claude_cost(model, u)
+                    for k, cut in cutoffs.items():
+                        if ts >= cut:
+                            b = claude[k]
+                            b["in"] += u.get("input_tokens", 0)
+                            b["out"] += u.get("output_tokens", 0)
+                            b["cache"] += u.get("cache_read_input_tokens", 0)
+                            b["cost"] += cost
+                            b["msgs"] += 1
             except OSError:
                 continue
         codex = {k: {"in": 0, "cached": 0, "out": 0, "sessions": 0} for k in cutoffs}
@@ -2200,23 +2248,7 @@ def collect_agent_usage():
                 mt = os.path.getmtime(f)
                 if mt < cutoffs["week"]:
                     continue
-                last_u = last_rl = None
-                with open(f) as fh:
-                    for line in fh:
-                        if '"token_count"' not in line:
-                            continue
-                        try:
-                            d = json.loads(line)
-                        except ValueError:
-                            continue
-                        p = d.get("payload") or {}
-                        if p.get("type") != "token_count":
-                            continue
-                        info = p.get("info") or {}
-                        if info.get("total_token_usage"):
-                            last_u = info["total_token_usage"]
-                        if p.get("rate_limits"):
-                            last_rl = p["rate_limits"]
+                _cwd, _model, last_u, last_rl = codex_rollout(f)
                 if last_u:  # cumulative per session file — count the final total
                     for k, cut in cutoffs.items():
                         if mt >= cut:
@@ -2239,6 +2271,48 @@ def collect_agent_usage():
                               "resets_at": w.get("resets_at")}
         return {"claude": claude, "codex": codex, "codex_limits": slim}
     return cached("agent-usage", 300, fetch)
+
+
+def _modified_since(path, since):
+    try:
+        return os.path.getmtime(path) >= since
+    except OSError:
+        return False
+
+
+def transcript_cost(cwd, since=0):
+    """Estimated spend of the agent sessions that worked in one directory (a
+    scheduled run's worktree), from the same transcripts as the Usage panel.
+    None when no transcript ran there; otherwise always marked estimated."""
+    targets = {cwd, os.path.realpath(cwd)}
+    usd, models, seen = 0.0, {}, set()
+    # Claude Code files a transcript under a directory named after its cwd.
+    project = re.sub(r"[^A-Za-z0-9]", "-", cwd)
+    files = glob.glob(f"{HOME}/.claude/projects/{project}/*.jsonl") \
+        or [f for f in glob.glob(f"{HOME}/.claude/projects/*/*.jsonl") if _modified_since(f, since)]
+    for f in files:
+        try:
+            for _ts, model, u, where in claude_transcript(f, seen):
+                if where in targets:
+                    cost = _claude_cost(model, u)
+                    usd += cost
+                    models[model] = models.get(model, 0.0) + cost
+        except OSError:
+            continue
+    for f in glob.glob(f"{HOME}/.codex/sessions/*/*/*/rollout-*.jsonl"):
+        if not _modified_since(f, since):
+            continue
+        try:
+            where, model, last_u, _rl = codex_rollout(f)
+        except OSError:
+            continue
+        if where in targets and last_u:
+            cost = _codex_cost(model, last_u)
+            usd += cost
+            models[model] = models.get(model, 0.0) + cost
+    if not models:
+        return None
+    return {"usd": round(usd, 4), "estimated": True, "model": max(models, key=models.get)}
 
 
 def collect_backups():
@@ -2493,7 +2567,7 @@ def collect_scheduled_runs():
             for path in sorted(paths, key=os.path.basename, reverse=True)[:20]:
                 run = private_json(path)
                 row = {key: run.get(key) for key in ("name", "repo", "agent", "status", "reason",
-                    "started", "finished", "exit_code", "session", "log")}
+                    "started", "finished", "exit_code", "session", "log", "result")}
                 row["tail"] = ""
                 session, log = row.get("session"), row.get("log")
                 if isinstance(session, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,50}", session) and isinstance(log, str) and re.fullmatch(r"session-[0-9]{8}\.log", log):

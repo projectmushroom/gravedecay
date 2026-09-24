@@ -31,6 +31,7 @@ class DispatchTests(unittest.TestCase):
         scripts = self.root / "scripts"
         scripts.mkdir()
         shutil.copy(ROOT / "libexec/agent-task.py", scripts / "agent-task.py")
+        shutil.copy(ROOT / "libexec/providers.py", scripts / "providers.py")
         self.socket = "dispatch-" + self.root.name
         self.addCleanup(subprocess.run, ["tmux", "-L", self.socket, "kill-server"],
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -92,9 +93,11 @@ print("FAKE_AGENT_RAN", flush=True)
     def test_launch_passes_literal_issue_prompt_in_isolated_worktree(self):
         name = self.launch()
         call = json.loads(self.capture.read_text().splitlines()[0])
-        self.assertEqual(len(call["argv"]), 2)
-        self.assertIn("GRV-108", call["argv"][1])
-        self.assertIn("$(touch", call["argv"][1])
+        # The shared provider table sandboxes Codex to the worktree; the prompt stays one literal argument.
+        self.assertEqual(call["argv"][1:3], ["-c", 'sandbox_mode="workspace-write"'])
+        self.assertEqual(len(call["argv"]), 4)
+        self.assertIn("GRV-108", call["argv"][-1])
+        self.assertIn("$(touch", call["argv"][-1])
         self.assertEqual(call["cwd"], str(self.root / "worktrees/project" / name))
         self.assertTrue(call["tty"])
         self.assertFalse((self.root / "INJECTED").exists())

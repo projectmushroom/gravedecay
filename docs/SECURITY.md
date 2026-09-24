@@ -491,7 +491,10 @@ compatibility, and the limits of legacy endpoint schemas.
 turn, in `$GRAVE_ROOT/config/keeper/`. The owner's own CLI login, settings,
 hooks and MCP servers apply, exactly as they do for scheduled agent jobs. No
 permission-bypass flag is added: Claude keeps the owner's permission rules and
-Codex runs in its read-only sandbox with approvals set to never. The provider's
+Codex runs in its read-only sandbox with approvals set to never. The command
+line and sandbox come from the one provider table shared with scheduled jobs
+and issue dispatch (`scripts/providers.py`), which is where a change to this
+policy would be made and reviewed. The provider's
 native tools remain whatever the CLI ships (Claude's read-only file tools under
 the owner's rules; Codex 0.155's built-in `exec` isolate, `view_image`,
 `apply_patch` and sub-agent tools, which no configuration removes). The Keeper

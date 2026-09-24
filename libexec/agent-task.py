@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Validate and run a saved issue task inside an existing agent worktree."""
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,21 @@ import sys
 import time
 
 
+def _providers():
+    """The shared provider command table: beside this file when installed or in the repository."""
+    here = Path(__file__).resolve().parent
+    for candidate in (here / "providers.py", here.parent / "libexec" / "providers.py"):
+        if candidate.is_file():
+            spec = importlib.util.spec_from_file_location("grave_providers", candidate)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+    raise ValueError("providers.py is not installed beside the task runner; re-run raise.sh")
+
+
+providers = _providers()
+
+
 def read_task(path):
     path = Path(path)
     st = path.lstat()
@@ -19,7 +35,7 @@ def read_task(path):
     if st.st_size > 65536:
         raise ValueError("issue task is too large (maximum 64 KiB)")
     task = json.loads(path.read_text())
-    if not isinstance(task, dict) or task.get("agent") not in ("codex", "claude"):
+    if not isinstance(task, dict) or task.get("agent") not in providers.PROVIDERS:
         raise ValueError("choose Codex or Claude")
     issue = task.get("issue")
     if not isinstance(issue, dict) or not isinstance(issue.get("id"), str) or not re.fullmatch(r"[A-Z][A-Z0-9]{0,15}-[1-9][0-9]{0,9}", issue["id"]):
@@ -57,7 +73,8 @@ def run(path):
     started = int(time.time())
     result(status, status="running", started=started)
     try:
-        code = subprocess.call([binary, prompt_for(task["issue"])])
+        # One literal prompt argument; the sandbox comes from the shared provider table.
+        code = subprocess.call(providers.dispatch_command(task["agent"], prompt_for(task["issue"])))
     except OSError:
         code = 127
     result(status, status="exited", started=started, finished=int(time.time()), exit_code=code)
