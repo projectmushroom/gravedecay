@@ -13,7 +13,11 @@ starts an interactive agent in a new Git worktree. The source checkout's
 committed HEAD is the starting point; uncommitted changes are not copied.
 Open the session to handle repository trust, login, or permission prompts.
 Dispatch preserves the CLI's configured permissions and does not select a
-model or enable permission bypasses. See the [Codex CLI reference](https://developers.openai.com/codex/cli/reference/)
+model or enable permission bypasses. Its command line comes from the same
+provider table as scheduled jobs and the Gravekeeper (`scripts/providers.py`),
+so Codex is sandboxed to the worktree (`workspace-write`) and Claude keeps the
+owner's permission rules; see [SCHEDULES.md](SCHEDULES.md#provider-command-and-sandbox).
+See the [Codex CLI reference](https://developers.openai.com/codex/cli/reference/)
 and [Claude CLI reference](https://code.claude.com/docs/en/cli-reference).
 
 The session appears in Work with its issue link, repository, branch, agent,

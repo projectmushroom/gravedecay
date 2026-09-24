@@ -825,7 +825,8 @@ cmd_agents_unlocked() {
         [[ -d "$dir" ]] || dir="$GRAVE_ROOT/repos"
       fi
       cmd_agents_unlocked new "$name" "$dir" ;;
-    *) say "usage: grave agents [list|new|attach|kill|history|resume|prune|run|jobs]"; exit 1 ;;
+    *) say "usage: grave agents [list|new|attach|kill|history|resume|prune|run|jobs]"
+       say "       grave agents run <name> --prompt-file <file> [--repo <repo>] [--at HH:MM|--on 'Mon HH:MM'] [--agent codex|claude] [--timeout <s>] [--check '<cmd>']..."; exit 1 ;;
   esac
 }
 
@@ -1551,6 +1552,7 @@ cmd_doctor() { # grave doctor [--no-page]
   if [[ "${MULTI_USER:-0}" == 0 ]]; then
     check "scheduled agent runner installed" test -r "$GRAVE_ROOT/scripts/agent-jobs.py"
     check "scheduled prompts and service valid" env GRAVE_ROOT="$GRAVE_ROOT" python3 "$GRAVE_ROOT/scripts/agent-jobs.py" check
+    check "scheduled run records carry a valid verdict" env GRAVE_ROOT="$GRAVE_ROOT" python3 "$GRAVE_ROOT/scripts/agent-jobs.py" check results
     check "keeper runner installed" test -r "$GRAVE_ROOT/scripts/keeper.py"
     check "keeper instructions and private storage" env GRAVE_ROOT="$GRAVE_ROOT" GRAVE_CONF="$CONF" python3 "$GRAVE_ROOT/scripts/keeper.py" check files
     # Provider login is a post-raise human step (AGENTS.md §2), so report it.

@@ -4,6 +4,7 @@ Also the Keeper MCP server (``keeper.py mcp``), the doctor probe (``keeper.py ch
 and the shell client behind ``grave keeper ask|resume``. Stdlib only.
 """
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -20,7 +21,21 @@ import uuid
 from collections import deque
 from pathlib import Path
 
-PROVIDERS = ("claude", "codex")
+
+def _providers():
+    """The shared provider command table: beside this file when installed, libexec in the repository."""
+    here = Path(__file__).resolve().parent
+    for candidate in (here / "providers.py", here.parent / "libexec" / "providers.py"):
+        if candidate.is_file():
+            spec = importlib.util.spec_from_file_location("grave_providers", candidate)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+    raise ImportError("providers.py is not installed beside keeper.py; re-run raise.sh")
+
+
+providers = _providers()
+PROVIDERS = providers.PROVIDERS
 RETENTION = 30 * 86400
 KEY_AGE = 86400
 MAX_CONVERSATIONS = 64
@@ -319,18 +334,10 @@ class Runner:
         return [sys.executable, self.script, "mcp", "--root", GRAVE_ROOT, "--api", self.api, "--grave", self.grave]
 
     def command(self, record):
-        """The installed CLI, headless, with the Keeper MCP server added to the owner's own configuration."""
-        mcp, provider, model, session = self.mcp_command(), record["provider"], record.get("model") or "", record["session_id"]
-        if provider == "claude":
-            config = json.dumps({"mcpServers": {"keeper": {"command": mcp[0], "args": mcp[1:]}}})
-            argv = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--max-turns", "30",
-                    "--mcp-config", config, "--allowedTools", "mcp__keeper"]
-            return argv + (["--model", model] if model else []) + (["--resume", session] if session else [])
-        argv = ["codex", "exec"] + (["resume", session] if session else ["-C", self.work_dir])
-        argv += ["--json", "--skip-git-repo-check", "-c", 'approval_policy="never"', "-c", 'sandbox_mode="read-only"',
-                 "-c", f"mcp_servers.keeper.command={json.dumps(mcp[0])}", "-c", f"mcp_servers.keeper.args={json.dumps(mcp[1:])}",
-                 "-c", 'mcp_servers.keeper.default_tools_approval_mode="approve"']
-        return argv + (["-m", model] if model else []) + ["-"]
+        """The installed CLI, headless, with the Keeper MCP server added to the
+        owner's own configuration. Argv and sandbox come from the shared table."""
+        return providers.keeper_command(record["provider"], self.mcp_command(), self.work_dir,
+                                        record.get("model") or "", record["session_id"])
 
     def _append(self, record, event):
         text = event["text"].encode("utf-8")[:MAX_TEXT].decode("utf-8", "ignore")
