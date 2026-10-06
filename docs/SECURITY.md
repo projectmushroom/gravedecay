@@ -450,6 +450,18 @@ Scheduled jobs run as the single appliance owner, with private prompt snapshots
 and owner-gated reports. They inherit provider credentials and cannot overlap
 the same job; see [SCHEDULES.md](SCHEDULES.md) for isolation and cancellation.
 
+The result verdict is not agent-proof. The runner picks the check command
+from the owner's `--check` or from the base commit, so the agent cannot swap
+in `exit 0`, and a run with no check ends `unverified` rather than
+`ready-for-review`. But the command executes in the agent's worktree: tests,
+fixtures, `pytest` configuration, Makefile recipes and anything on
+`node_modules/.bin` are agent-writable and run inside the test process, as
+the same root-equivalent Unix account (`raise.sh` sudoers) that runs the
+scheduler and writes the run record. Read the verdict as "checks run by the
+runner with a command the agent did not choose", and review the diff. Owners
+who want test-tampering rules can add a tool such as gatekeep or tampercheck
+as a `--check`; `GRAVE_BASE` gives it the base SHA.
+
 ## Durable console action history
 
 Single-owner Linux graves keep bounded action progress in
@@ -491,7 +503,10 @@ compatibility, and the limits of legacy endpoint schemas.
 turn, in `$GRAVE_ROOT/config/keeper/`. The owner's own CLI login, settings,
 hooks and MCP servers apply, exactly as they do for scheduled agent jobs. No
 permission-bypass flag is added: Claude keeps the owner's permission rules and
-Codex runs in its read-only sandbox with approvals set to never. The provider's
+Codex runs in its read-only sandbox with approvals set to never. The command
+line and sandbox come from the one provider table shared with scheduled jobs
+and issue dispatch (`scripts/providers.py`), which is where a change to this
+policy would be made and reviewed. The provider's
 native tools remain whatever the CLI ships (Claude's read-only file tools under
 the owner's rules; Codex 0.155's built-in `exec` isolate, `view_image`,
 `apply_patch` and sub-agent tools, which no configuration removes). The Keeper
