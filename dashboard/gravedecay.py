@@ -2189,9 +2189,36 @@ def claude_transcript(path, seen):
             yield ts, m.get("model"), u, d.get("cwd")
 
 
+def codex_quota(limits):
+    """The account-wide ChatGPT-plan quota in one Codex `rate_limits` event, or
+    None. A rollout carries entries for several limits; only `limit_id`
+    "codex" with a non-null `primary` describes the plan (a trailing "premium"
+    or credits entry has no windows and must not replace it). Windows are
+    labelled by their `window_minutes` (a weekly-only plan reports the week as
+    `primary`, so the primary/secondary slots say nothing about the window).
+    Rollouts older than `limit_id` carry only the codex limit."""
+    if not isinstance(limits, dict) or limits.get("limit_id", "codex") != "codex" or not isinstance(limits.get("primary"), dict):
+        return None
+    windows = []
+    for name in ("primary", "secondary"):
+        w = limits.get(name)
+        if not isinstance(w, dict):
+            continue
+        minutes, pct, resets = w.get("window_minutes"), w.get("used_percent"), w.get("resets_at")
+        if type(minutes) is int and minutes > 0 and type(pct) in (int, float) and type(resets) is int and resets > 0:
+            windows.append({"window_minutes": minutes, "used_percent": pct, "resets_at": resets})
+    if not windows:
+        return None
+    windows.sort(key=lambda w: w["window_minutes"])
+    plan = limits.get("plan_type")
+    return {"provider": "codex", "account_wide": True, "windows": windows,
+            "plan": plan if isinstance(plan, str) else None}
+
+
 def codex_rollout(path):
-    """One Codex rollout as (cwd, model, cumulative usage, latest rate limits).
-    Totals are cumulative per session file, so the last token_count wins."""
+    """One Codex rollout as (cwd, model, cumulative usage, latest plan quota).
+    Totals are cumulative per session file, so the last token_count wins; the
+    quota is the newest `rate_limits` event that codex_quota() accepts."""
     cwd = model = last_u = last_rl = None
     with open(path) as fh:
         for line in fh:
@@ -2210,8 +2237,7 @@ def codex_rollout(path):
                 info = p.get("info") or {}
                 if info.get("total_token_usage"):
                     last_u = info["total_token_usage"]
-                if p.get("rate_limits"):
-                    last_rl = p["rate_limits"]
+                last_rl = codex_quota(p.get("rate_limits")) or last_rl
     return cwd, model, last_u, last_rl
 
 
@@ -2262,13 +2288,9 @@ def collect_agent_usage():
             except OSError:
                 continue
         slim = None
-        if limits:
-            slim = {"plan": limits.get("plan_type")}
-            for name in ("primary", "secondary"):
-                w = limits.get(name) or {}
-                slim[name] = {"pct": w.get("used_percent"),
-                              "mins": w.get("window_minutes"),
-                              "resets_at": w.get("resets_at")}
+        if limits:  # windows labelled by length, never by the primary/secondary slot they came from
+            slim = {"plan": limits["plan"], "windows": [{"pct": w["used_percent"], "mins": w["window_minutes"],
+                                                        "resets_at": w["resets_at"]} for w in limits["windows"]]}
         return {"claude": claude, "codex": codex, "codex_limits": slim}
     return cached("agent-usage", 300, fetch)
 
@@ -2280,17 +2302,23 @@ def _modified_since(path, since):
         return False
 
 
+def _claude_files(cwd, since):
+    """Claude Code files a transcript under a directory named after its cwd."""
+    project = re.sub(r"[^A-Za-z0-9]", "-", cwd)
+    return glob.glob(f"{HOME}/.claude/projects/{project}/*.jsonl") \
+        or [f for f in glob.glob(f"{HOME}/.claude/projects/*/*.jsonl") if _modified_since(f, since)]
+
+
 def transcript_cost(cwd, since=0):
     """Estimated spend of the agent sessions that worked in one directory (a
     scheduled run's worktree), from the same transcripts as the Usage panel.
-    None when no transcript ran there; otherwise always marked estimated."""
+    None when no transcript ran there; otherwise always marked estimated.
+    When the run's own Codex rollout carries a plan quota (codex_quota), the
+    newest one is returned under `quota`: an account-wide snapshot at the
+    time of the run, not this run's share of it."""
     targets = {cwd, os.path.realpath(cwd)}
     usd, models, seen = 0.0, {}, set()
-    # Claude Code files a transcript under a directory named after its cwd.
-    project = re.sub(r"[^A-Za-z0-9]", "-", cwd)
-    files = glob.glob(f"{HOME}/.claude/projects/{project}/*.jsonl") \
-        or [f for f in glob.glob(f"{HOME}/.claude/projects/*/*.jsonl") if _modified_since(f, since)]
-    for f in files:
+    for f in _claude_files(cwd, since):
         try:
             for _ts, model, u, where in claude_transcript(f, seen):
                 if where in targets:
@@ -2299,20 +2327,71 @@ def transcript_cost(cwd, since=0):
                     models[model] = models.get(model, 0.0) + cost
         except OSError:
             continue
+    quota, newest = None, 0
     for f in glob.glob(f"{HOME}/.codex/sessions/*/*/*/rollout-*.jsonl"):
         if not _modified_since(f, since):
             continue
         try:
-            where, model, last_u, _rl = codex_rollout(f)
+            where, model, last_u, last_rl = codex_rollout(f)
+            mt = os.path.getmtime(f)
         except OSError:
             continue
         if where in targets and last_u:
             cost = _codex_cost(model, last_u)
             usd += cost
             models[model] = models.get(model, 0.0) + cost
+            if last_rl and mt >= newest:
+                quota, newest = last_rl, mt
     if not models:
         return None
-    return {"usd": round(usd, 4), "estimated": True, "model": max(models, key=models.get)}
+    value = {"usd": round(usd, 4), "estimated": True, "model": max(models, key=models.get)}
+    if quota:
+        value["quota"] = quota
+    return value
+
+
+def claude_rate_limit(cwd, since=0):
+    """When the Claude Code session that worked in `cwd` ended on a usage-limit
+    429, the reset time it recorded: {"resets_at": epoch seconds, "window":
+    rateLimitType or None}. Claude Code writes the refused request as an
+    assistant message with isApiErrorMessage, error "rate_limit" and the
+    `quotaLimits` it read from the response headers (resetsAt). A later
+    priced assistant message in the same worktree means the session carried
+    on, so nothing is returned. The usage endpoint and the credential file are
+    never read: the transcript is the only source."""
+    targets = {cwd, os.path.realpath(cwd)}
+    latest, latest_ts = None, ""
+    for f in _claude_files(cwd, since):
+        try:
+            with open(f) as fh:
+                lines = fh.readlines()
+        except OSError:
+            continue
+        ended = None
+        for line in lines:
+            if '"assistant"' not in line:
+                continue
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if d.get("type") != "assistant" or d.get("cwd") not in targets:
+                continue
+            if d.get("isApiErrorMessage"):
+                if d.get("error") != "rate_limit" and d.get("apiErrorStatus") != 429:
+                    continue
+                limits = d.get("quotaLimits") if isinstance(d.get("quotaLimits"), dict) else {}
+                resets = limits.get("resetsAt", d.get("resetsAt"))
+                if type(resets) is int and resets > 0:
+                    window = limits.get("rateLimitType")
+                    ended = ({"resets_at": resets, "window": window if isinstance(window, str) else None}, d.get("timestamp") or "")
+                else:
+                    ended = None
+            elif ((d.get("message") or {}).get("usage") or {}).get("output_tokens"):
+                ended = None
+        if ended and ended[1] >= latest_ts:
+            latest, latest_ts = ended
+    return latest
 
 
 def collect_backups():
