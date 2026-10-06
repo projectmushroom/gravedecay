@@ -104,11 +104,15 @@ installed dependencies included), with the same working directory, process
 supervision and runtime budget as the provider. They are not run when the
 provider failed or made no changes. The command is the owner's or the
 base's, but what it executes is the worktree: agent-written tests, fixtures,
-`pytest` configuration and Makefile recipes all run, as the owner. See
+`pytest` configuration and Makefile recipes all run, as the owner. Checks are
+plain `/bin/sh -c` processes outside the Codex sandbox that confined the
+provider; the agent and the runner share one Unix account. See
 [SECURITY.md](SECURITY.md). Each check's full output is appended to the
-session transcript; the record keeps a tail of each (up to 4000 bytes,
-trimmed so all tails together fit 24 KiB of JSON, which keeps every run
-record under the 48 KiB doctor limit). A check still running when the job's
+session transcript; the record keeps the command and a tail of its output (up
+to 4000 bytes, trimmed so all commands and tails together fit 24 KiB of JSON,
+which keeps every run record under the 48 KiB doctor limit; a record that
+grows past it is skipped with a warning by the scheduler, listing and
+dashboard until doctor is run). A check still running when the job's
 timeout, a cancellation or gaming mode ends the run is terminated, recorded
 with a non-zero exit and a note in its tail, and the run's `status` reflects
 the stop as it would during the provider phase.

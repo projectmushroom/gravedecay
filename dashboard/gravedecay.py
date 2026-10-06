@@ -2565,6 +2565,9 @@ def collect_scheduled_runs():
                 if not os.path.islink(runs_dir):
                     paths.extend(glob.glob(os.path.join(runs_dir, "*.json")))
             for path in sorted(paths, key=os.path.basename, reverse=True)[:20]:
+                if os.lstat(path).st_size > 48 * 1024:  # doctor's run record limit; skip, never fail the report
+                    result["error"] = "Run record " + os.path.basename(path) + " is oversized; run grave doctor."
+                    continue
                 run = private_json(path)
                 row = {key: run.get(key) for key in ("name", "repo", "agent", "status", "reason",
                     "started", "finished", "exit_code", "session", "log", "result")}
