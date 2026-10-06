@@ -1378,10 +1378,16 @@ function updateLauncher(){
 // computed after the provider exits; a record from an older runner shows its
 // lifecycle status instead.
 const runVerdict=r=>r.result?.verdict||(r.status==='failed'?'provider-failed':r.status);
+// Quota windows are named by their length in minutes, never by the slot the provider put them in.
+const quotaWindow=m=>m===300?'5h window':m===10080?'weekly':m%1440===0?(m/1440)+'d window':Math.round(m/60)+'h window';
+const quotaReset=t=>t?new Date(t*1000).toLocaleString(undefined,{weekday:'short',hour:'2-digit',minute:'2-digit'}):'';
 function runCard(r){
   const res=r.result||{},verdict=runVerdict(r),ch=res.changes,checks=res.checks||[],tests=res.test_changes||[];
   const changes=ch?`${counted(ch.commits,'commit')} · ${counted(ch.files,'file')} · +${ch.insertions} −${ch.deletions}${ch.dirty?' · uncommitted work left in the worktree':''}`:'changes unknown';
   const cost=res.cost?`$${res.cost.usd.toFixed(2)}${res.cost.estimated?' estimated':''}${res.cost.model?' · '+res.cost.model:''}`:'cost unknown';
+  // Account-wide plan quota the provider reported at the end of this run (docs/SCHEDULES.md):
+  // windows are labelled by length; it is the account's position, not this run's share.
+  const quota=res.quota?.windows?.length?`${esc(res.quota.provider)} account quota at run end · ${res.quota.windows.map(w=>`${quotaWindow(w.window_minutes)} ${esc(String(w.used_percent))}% used, resets ${esc(quotaReset(w.resets_at))}`).join(' · ')} · account-wide snapshot, ChatGPT-plan sign-in only`:'';
   const when=esc(new Date(r.started*1000).toLocaleString());
   return `<div class="runcard" data-run="${esc(r.name+'-'+r.started)}" data-verdict="${esc(verdict)}">
     <div class="runhead"><b>${esc(r.name)}</b> <span class="verdict">${esc(verdict)}</span> <span class="dim2">· ${esc(r.status)}${r.exit_code!=null?' (exit '+esc(String(r.exit_code))+')':''} · ${when}</span></div>
@@ -1391,6 +1397,7 @@ function runCard(r){
       :(r.status==='succeeded'&&verdict!=='no-changes'?'<div class="dim">No checks ran; nothing verified the work.</div>':'')}
     ${tests.length?`<div class="testchanges">⚠ Test changes: ${tests.map(esc).join(' · ')}</div>`:''}
     <div class="dim">${esc(cost)}</div>
+    ${quota?`<div class="dim" data-quota>${quota}</div>`:''}
     <details data-report="${esc(r.name+'-'+r.started)}"><summary>Output</summary>${r.session&&r.log?`<a class="viewlog" href="#" data-log="${esc(r.session)}" data-file="${esc(r.log)}">Transcript</a> · <a class="viewdiff" href="#" data-diff="${esc(r.session)}">Diff</a> · <a href="${esc(appUrl('/term/?arg='+encodeURIComponent(r.session)))}">Open worktree</a>`:''}<pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto">${esc(r.tail||'No output recorded.')}</pre></details>
   </div>`;
 }
@@ -1428,8 +1435,8 @@ function renderOverview(s){
   const recent=(scheduled.runs||[])[0];
   panelSummary('scheduled',scheduled.error||`${(scheduled.jobs||[]).filter(j=>j.enabled).length} scheduled${recent?` · latest: ${recent.name} ${runVerdict(recent)}`:' · no reports yet'}`,!!scheduled.error||failedRuns.length);
   panelSummary('inbox',`${(s.inbox||[]).length} notifications${s.inbox?.[0]?` · ${s.inbox[0].title}`:''}`);
-  const limits=s.usage?.codex_limits;
-  panelSummary('usage',Number.isFinite(limits?.primary?.pct)?`Codex window ${limits.primary.pct}% used${Number.isFinite(limits.secondary?.pct)?` · weekly ${limits.secondary.pct}%`:''}`:s.usage?'Recent agent usage · details available':'Usage unavailable',limits?.primary?.pct>=90||limits?.secondary?.pct>=90);
+  const windows=(s.usage?.codex_limits?.windows||[]).filter(w=>Number.isFinite(w.pct));
+  panelSummary('usage',windows.length?`Codex ${windows.map(w=>`${quotaWindow(w.mins)} ${w.pct}% used`).join(' · ')}`:s.usage?'Recent agent usage · details available':'Usage unavailable',windows.some(w=>w.pct>=90));
   const sys=s.system,percent=n=>Number.isFinite(n)?Math.round(n)+'%':'unavailable';
   const memory=macosCompanion?sys.mem?.pressure_pct:sys.mem?.pct;
   const disk=Math.max(...(sys.disks||[]).map(d=>d.pct));
@@ -1898,19 +1905,17 @@ function render(s){
   const us=s.usage;
   if(us){
     const fk=n=>n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?Math.round(n/1e3)+'k':''+n;
-    const win=m=>m===300?'5h window':m===10080?'weekly':Math.round(m/60)+'h window';
-    const rst=t=>t?new Date(t*1000).toLocaleString(undefined,{weekday:'short',hour:'2-digit',minute:'2-digit'}):'';
     const lim=(w,label)=>w&&w.pct!=null?`<tr><td class="dim">${label}</td>
       <td><div class="meter ${meterClass(w.pct)}" style="margin-top:5px"><i style="width:${Math.min(w.pct,100)}%"></i></div></td>
-      <td class="num">${w.pct}%${w.resets_at?'<span class="dim"> · resets '+esc(rst(w.resets_at))+'</span>':''}</td></tr>`:'';
+      <td class="num">${w.pct}%${w.resets_at?'<span class="dim"> · resets '+esc(quotaReset(w.resets_at))+'</span>':''}</td></tr>`:'';
     const c=us.claude,x=us.codex,L=us.codex_limits;
     $('usage').innerHTML=
       `<tr><td>🤖 Claude 24h</td><td class="dim">${fk(c.today.in)} in · ${fk(c.today.out)} out · ${fk(c.today.cache)} cached</td><td class="num">≈$${c.today.cost.toFixed(2)}</td></tr>`
       +`<tr><td class="dim">&nbsp;&nbsp;7 days</td><td class="dim">${fk(c.week.in)} in · ${fk(c.week.out)} out · ${c.week.msgs} msgs</td><td class="num">≈$${c.week.cost.toFixed(2)}</td></tr>`
       +`<tr><td>🧠 Codex 24h</td><td class="dim">${fk(x.today.in)} in (${fk(x.today.cached)} cached) · ${fk(x.today.out)} out</td><td class="num">${x.today.sessions} sess</td></tr>`
       +`<tr><td class="dim">&nbsp;&nbsp;7 days</td><td class="dim">${fk(x.week.in)} in · ${fk(x.week.out)} out</td><td class="num">${x.week.sessions} sess</td></tr>`
-      +(L?lim(L.primary,`codex ${win(L.primary.mins)}`)+lim(L.secondary,`codex ${win(L.secondary.mins)}`)
-          +`<tr><td class="dim" colspan="3">plan: ${esc(L.plan||'?')} · $ = est. API value (subscriptions bill flat)</td></tr>`
+      +(L?(L.windows||[]).map(w=>lim(w,`codex ${quotaWindow(w.mins)}`)).join('')
+          +`<tr><td class="dim" colspan="3">plan: ${esc(L.plan||'?')} · account-wide, ChatGPT-plan sign-in · $ = est. API value (subscriptions bill flat)</td></tr>`
         :'<tr><td class="dim" colspan="3">$ = est. API value (subscriptions bill flat)</td></tr>');
   }
   const li=s.linear||{};

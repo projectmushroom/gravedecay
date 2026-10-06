@@ -44,7 +44,10 @@ its command, `source` (`owner` or the base commit), exit code and duration, an
 amber **Test changes** line when the runner saw deleted, renamed or trimmed
 tests, added skip/only/xfail markers, or a changed test script, CI, lockfile
 or snapshot path (informational; it never moves the verdict), and the
-estimated cost. A succeeded run with no check shows "No checks ran; nothing
+estimated cost and, when the run's own Codex rollout reported one, a
+line with the account-wide plan quota at the end of the run (windows
+labelled by length, ChatGPT-plan sign-in only; the Usage panel shows the
+same windows). A succeeded run with no check shows "No checks ran; nothing
 verified the work." **Output** expands the provider's output tail with
 **Transcript**, **Diff** and **Open worktree**. Diff opens the committed work
 since the run's base commit (`/api/run-diff`, owner-gated like the transcript,

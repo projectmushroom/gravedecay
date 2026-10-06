@@ -66,7 +66,9 @@ outcome in the run record under `result`:
   "verdict": "ready-for-review",
   "changes": {"commits": 2, "files": 3, "insertions": 41, "deletions": 7, "dirty": false},
   "checks": [{"cmd": "vitest run", "exit_code": 0, "seconds": 38, "tail": "…", "source": "base:3f9c…"}],
-  "cost": {"usd": 0.42, "estimated": true, "model": "claude-sonnet-4-5"}
+  "cost": {"usd": 0.42, "estimated": true, "model": "claude-sonnet-4-5"},
+  "quota": {"provider": "codex", "account_wide": true, "plan": "plus",
+            "windows": [{"window_minutes": 10080, "used_percent": 46.0, "resets_at": 1790757683}]}
 }
 ```
 
@@ -124,6 +126,21 @@ table does not know, every Codex model included, bills at the most expensive
 known price so the estimate errs high. `estimated` is always true. `cost` is
 null when no transcript for the worktree was found.
 
+`quota` is optional: when the run's own Codex rollout (`codex exec` under
+`~/.codex/sessions`, which carries `rate_limits` events) reports the plan
+quota, the newest entry with `limit_id: "codex"` and a non-null `primary`
+window is stored, one object per window labelled by its `window_minutes`
+(300 is the 5-hour window, 10080 the week); the `primary`/`secondary` slot
+names never appear, because a weekly-only plan reports the week as `primary`.
+Entries for other limits (a trailing `premium` entry has no windows) are
+ignored. It is an **account-wide snapshot at the end of the run**, the
+position of the ChatGPT-plan sign-in the box uses, not this run's share, and
+it exists only for ChatGPT-plan sign-in; an API-key sign-in, a Claude run or
+a run whose rollout was not found carries no `quota`. The card shows it as
+one line labelled that way. Claude has no documented headless quota source:
+the runner never reads Anthropic's OAuth usage endpoint or the Claude
+credential file, and a unit test fails on any reference to either.
+
 `test_changes` is an optional, informational list of short rows computed from
 the committed work (`base..HEAD` in the worktree) whenever the run made a
 commit: deleted or renamed test files, lines removed from existing tests,
@@ -153,6 +170,17 @@ current work; use `grave agents jobs cancel <name>` or the report's Cancel job
 button. Killing a terminal review shell does not cancel a headless job.
 Results and worktrees are retained after cancellation.
 
+A Claude run whose last request was refused with a usage-limit 429 is tried
+again when the limit resets. Claude Code writes the refusal to the transcript
+(an assistant message flagged `isApiErrorMessage` with `error: "rate_limit"`
+and the `quotaLimits.resetsAt` it read from the response headers); after the
+provider exits the runner reads that reset time, notes it in the record's
+`reason`, and when it is in the future, within eight days and sooner than
+the job's next scheduled occurrence (or the job has none), sets the job's
+`next_due` to it and records `deferred_to`. The run itself keeps its
+`provider-failed` verdict. A reset already in the past, a session that
+carried on after the refusal, or a Codex run defers nothing.
+
 Gaming mode is the agent freezer (`/sys/fs/cgroup/grave-torpor/cgroup.freeze`)
 and nothing else: the runner does not consult T3, so a job runs to a verdict
 with `t3code` stopped or masked, and `gravedecay-agents.service` neither orders
@@ -173,7 +201,8 @@ come from runners before this behaviour and stay valid.
 
 The dashboard Work tab's **Overnight report** shows one card for each of the
 latest 20 runs: verdict, change summary, every check with its source and exit
-code, the amber test-change line, cost, output tail, full transcript, the
+code, the amber test-change line, cost, the account-wide quota line when the
+run recorded one, output tail, full transcript, the
 committed diff against the base (`/api/run-diff`, owner-gated, plain text,
 256 KiB cap, no caching) and a link to open the worktree; the report API
 carries each run's `result`. **Needs attention** counts runs whose verdict is
@@ -190,8 +219,9 @@ mode cancelled was requeued, and the scheduler service when jobs exist
 (including that it does not order after or depend on `t3code.service`), and
 separately that every finished run record carries a
 valid result and verdict (including a well-formed `test_changes` list when
-present), that every check's `source` is `owner` or the record's own base
-commit, that the job command table adds no bypass flag, and that the
+present, and a `quota` snapshot whose every window has a positive
+`window_minutes` and reset time), that every check's `source` is `owner` or
+the record's own base commit, that the job command table adds no bypass flag, and that the
 installed dashboard carries the review card and its diff route.
 Restarting the service reconciles unfinished
 or verdict-less records left by an interrupted or older worker. Re-raise to

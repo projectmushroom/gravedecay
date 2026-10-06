@@ -39,7 +39,7 @@ class AgentJobTests(unittest.TestCase):
         self.home = self.root / "home"; self.home.mkdir()
         self.store = self.root / "config/secrets/agent-jobs"
         self.prompt = self.root / "prompt.txt"; self.prompt.write_text('Review $(touch PWNED); `echo nope` and "quoted text".\n')
-        self.env = dict(os.environ, HOME=str(self.home), GRAVE_ROOT=str(self.root), MULTI_USER="0",
+        self.env = dict(os.environ, HOME=str(self.home), GRAVE_ROOT=str(self.root), MULTI_USER="0", FIXTURES=str(ROOT / "tests/fixtures/quota"),
             GRAVE_FREEZE_FILE=str(self.root / "cgroup.freeze"),
             PATH=str(self.bin) + ":" + str(Path(sys.executable).parent) + ":" + os.environ["PATH"],
             GIT_AUTHOR_NAME="Test", GIT_AUTHOR_EMAIL="test@example.test",
@@ -86,6 +86,17 @@ if os.environ.get("FAKE_TRANSCRIPT"):
         json.dumps({"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":2000,"cached_input_tokens":1000,"output_tokens":100}}}})])+"\\n")
     (rollouts/"rollout-2026-09-24T01-00-00-def.jsonl").write_text(json.dumps({"type":"session_meta","payload":{"id":"def","cwd":"/elsewhere"}})+"\\n"
         + json.dumps({"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":9000,"cached_input_tokens":0,"output_tokens":9000}}}})+"\\n")
+fixtures=Path(os.environ["FIXTURES"])
+if os.environ.get("FAKE_QUOTA"):
+    # The run's own codex exec rollout, in the shape codex-cli 0.160.0 writes (tests/fixtures/quota).
+    cwd=os.getcwd(); rollouts=Path(os.environ["HOME"])/".codex/sessions/2026/10/06"; rollouts.mkdir(parents=True, exist_ok=True)
+    (rollouts/("rollout-2026-10-06T02-00-00-"+os.environ["FAKE_QUOTA"]+".jsonl")).write_text((fixtures/("rollout-"+os.environ["FAKE_QUOTA"]+".jsonl")).read_text().replace("__CWD__", cwd))
+if mode=="ratelimit":
+    # Claude Code refused with a usage-limit 429: the transcript records the reset time, the CLI exits 1.
+    cwd=os.getcwd(); project=Path(os.environ["HOME"])/".claude/projects"/re.sub(r"[^A-Za-z0-9]", "-", cwd); project.mkdir(parents=True, exist_ok=True)
+    text=(fixtures/"claude-429.jsonl").read_text().replace("__CWD__", cwd).replace("1790200800", os.environ.get("FAKE_RESETS", "1790200800"))
+    (project/"c429.jsonl").write_text(text)
+    print("You've hit your limit", flush=True); sys.exit(1)
 if mode=="clean": sys.exit(0)
 if mode=="weaken":
     Path("tests/test_a.py").unlink()
@@ -660,6 +671,63 @@ print("<script>literal output</script>", flush=True)
         module.recover("nightly")
         # Without a worktree to inspect, nothing is known about the work.
         self.assertEqual(self.records()[0]["result"], {"verdict": "unverified", "changes": None, "checks": [], "cost": None})
+
+    def test_codex_quota_snapshot_is_recorded_from_the_runs_own_rollout_and_checked_by_doctor(self):
+        self.add("nightly", "--agent", "codex", "--check", "echo ok")
+        self.call("worker", "nightly", env=dict(self.env, FAKE_AGENT="commit", FAKE_QUOTA="trailing-premium"))
+        record = self.records()[0]
+        self.assertEqual(record["result"]["verdict"], "ready-for-review")
+        self.assertEqual(record["result"]["cost"]["model"], "gpt-5.3-codex")
+        # The trailing `premium` entry has no windows; the codex entry before it is the snapshot, labelled by window length.
+        self.assertEqual(record["result"]["quota"], {"provider": "codex", "account_wide": True, "plan": "prolite",
+            "windows": [{"window_minutes": 10080, "used_percent": 70.0, "resets_at": 1790757683}]})
+        self.assertNotIn("primary", json.dumps(record["result"]["quota"]))
+        self.call("check", "results")
+        self.module().recover("nightly")
+        self.assertEqual(self.records()[0], record)
+        path = next((self.store / "nightly/runs").glob("*.json"))
+        good = record["result"]["quota"]
+        for broken in ({**good, "windows": []}, {**good, "windows": [{"primary": {"used_percent": 1}}]},
+                       {**good, "windows": [{"window_minutes": 0, "used_percent": 1.0, "resets_at": 1790757683}]},
+                       {**good, "windows": [{"window_minutes": "weekly", "used_percent": 1.0, "resets_at": 1790757683}]},
+                       {**good, "windows": [{"window_minutes": 10080, "used_percent": 1.0, "resets_at": None}]},
+                       {**good, "windows": [{"window_minutes": 10080, "used_percent": 1.0, "resets_at": "tomorrow"}]},
+                       {**good, "account_wide": False}, {**good, "provider": "claude"}, "46%"):
+            path.write_text(json.dumps({**record, "result": {**record["result"], "quota": broken}}))
+            self.assertIn("quota snapshot without a valid window_minutes and reset time", self.call("check", "results", ok=False).stderr)
+        # A run without a rollout of its own carries no snapshot and the older four-key record stays valid.
+        path.write_text(json.dumps({**record, "result": {k: v for k, v in record["result"].items() if k != "quota"}}))
+        self.call("check", "results")
+
+    def test_claude_run_ending_on_a_429_is_deferred_to_the_transcripts_reset_time(self):
+        resets = int(time.time()) + 3600
+        self.add("nightly", "--agent", "claude", "--on", "Mon 02:00")
+        path = self.store / "nightly/job.json"; value = self.job(); before = value["next_due"] = time.time() - 60
+        path.write_text(json.dumps(value))
+        self.call("worker", "nightly", env=dict(self.env, FAKE_AGENT="ratelimit", FAKE_RESETS=str(resets)))
+        record = self.records()[0]
+        self.assertEqual((record["status"], record["exit_code"]), ("failed", 1))
+        self.assertEqual(record["result"]["verdict"], "provider-failed")
+        self.assertEqual(record["deferred_to"], resets)
+        self.assertIn("Claude usage limit reached (five_hour); resets ", record["reason"])
+        self.assertEqual(self.job()["next_due"], resets)  # sooner than next Monday
+        self.assertIn("Claude usage limit reached", (self.root / "notifications").read_text())
+        self.call("check", "results")
+        # A reset already in the past, or too far out, defers nothing; a one-shot job gets its retry.
+        for stale in (int(time.time()) - 60, int(time.time()) + 30 * 86400):
+            self.add("once" + str(stale)[-5:], "--agent", "claude")
+            self.call("worker", "once" + str(stale)[-5:], env=dict(self.env, FAKE_AGENT="ratelimit", FAKE_RESETS=str(stale)))
+            self.assertNotIn("deferred_to", self.records("once" + str(stale)[-5:])[0])
+            self.assertIsNone(self.job("once" + str(stale)[-5:])["next_due"])
+        self.add("oneshot", "--agent", "claude")
+        self.call("worker", "oneshot", env=dict(self.env, FAKE_AGENT="ratelimit", FAKE_RESETS=str(resets)))
+        self.assertEqual(self.job("oneshot")["next_due"], resets)
+        self.assertEqual(self.records("oneshot")[0]["deferred_to"], resets)
+        # Codex is never deferred on the Claude transcript, and a plain failure without a 429 is not retried.
+        self.add("codexjob", "--agent", "codex")
+        self.call("worker", "codexjob", env=dict(self.env, FAKE_AGENT="ratelimit", FAKE_RESETS=str(resets)))
+        self.assertIsNone(self.job("codexjob")["next_due"])
+        self.assertNotIn("deferred_to", self.records("codexjob")[0])
 
     def test_unknown_models_bill_at_the_most_expensive_known_price(self):
         dash = load_dashboard(dict(self.env, GRAVEDECAY_ALLOWED_USERS="owner@example.test"))

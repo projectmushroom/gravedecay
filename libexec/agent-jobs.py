@@ -41,6 +41,7 @@ CHECK_LENGTH = 500   # characters per command
 TAIL = 4000          # bytes of one check's output read from its end
 TAIL_BUDGET = 24 * 1024   # JSON bytes of check commands and tails per run record, shared across checks
 RECORD_LIMIT = 48 * 1024  # bytes per run record on disk; doctor enforces it
+DEFER_LIMIT = 8 * 86400   # a usage-limit reset further out than this is not waited for
 SOURCE = re.compile(r"owner|base:[0-9a-f]{40}")
 TEST_CHANGE_ROWS = 20     # informational rows per run record; their JSON bytes come out of TAIL_BUDGET
 TEST_CHANGE_ROW = 160     # JSON bytes per row
@@ -489,12 +490,27 @@ def run_check(cmd, source, directory, base, log, stop, timeout, record, started,
 
 
 def cost_for(directory, since):
-    """Estimated spend: the dashboard's transcript parser, filtered to sessions
-    whose working directory was this run's worktree."""
+    """Estimated spend and, from the run's own Codex rollout, the newest
+    account-wide plan quota: the dashboard's transcript parser, filtered to
+    sessions whose working directory was this run's worktree. Returns
+    (cost, quota); either may be None."""
     try:
-        return shared("gravedecay.py").transcript_cost(str(directory), since)
+        value = shared("gravedecay.py").transcript_cost(str(directory), since)
     except Exception as error:  # a dashboard import problem must not lose the run record
         print("cost unavailable: " + str(error)[:200], file=sys.stderr, flush=True)
+        return None, None
+    if not value:
+        return None, None
+    return {key: value[key] for key in ("usd", "estimated", "model")}, value.get("quota")
+
+
+def rate_limit_for(directory, since):
+    """The reset time a Claude Code session in this worktree recorded when its
+    last request was refused with a usage-limit 429, read from the transcript."""
+    try:
+        return shared("gravedecay.py").claude_rate_limit(str(directory), since)
+    except Exception as error:
+        print("rate limit unavailable: " + str(error)[:200], file=sys.stderr, flush=True)
         return None
 
 
@@ -511,10 +527,12 @@ def verdict_for(record, changes=None, checks=()):
     return "ready-for-review" if checks else "unverified"
 
 
-def package(verdict, changes=None, checks=(), cost=None, test_changes=None):
+def package(verdict, changes=None, checks=(), cost=None, test_changes=None, quota=None):
     value = {"verdict": verdict, "changes": changes, "checks": list(checks), "cost": cost}
     if test_changes is not None:
         value["test_changes"] = test_changes
+    if quota is not None:
+        value["quota"] = quota
     return value
 
 
@@ -543,15 +561,31 @@ def result_package(job, record, directory, base, log, started, stop=lambda: None
             checks.append(run_check(cmd, source, directory, base, log, stop, job["timeout"], record, started, budget // len(commands)))
             if record["status"] != "succeeded":  # cancelled or out of time while checking
                 break
-    return package(verdict_for(record, changes, checks), changes, checks, cost_for(directory, started), tests)
+    cost, quota = cost_for(directory, started)
+    return package(verdict_for(record, changes, checks), changes, checks, cost, tests, quota)
+
+
+def valid_quota(value):
+    """An account-wide quota snapshot: the provider, at least one window with
+    a positive `window_minutes` (its label), a numeric `used_percent` and a
+    positive epoch `resets_at`; never a primary/secondary slot name."""
+    if not (isinstance(value, dict) and {"provider", "account_wide", "windows"} <= set(value) <= {"provider", "account_wide", "windows", "plan"}
+            and value["provider"] in ("codex",) and value["account_wide"] is True
+            and (value.get("plan") is None or isinstance(value["plan"], str))
+            and isinstance(value["windows"], list) and value["windows"]):
+        return False
+    return all(isinstance(w, dict) and set(w) == {"window_minutes", "used_percent", "resets_at"}
+               and type(w["window_minutes"]) is int and w["window_minutes"] > 0
+               and type(w["used_percent"]) in (int, float) and math.isfinite(w["used_percent"]) and w["used_percent"] >= 0
+               and type(w["resets_at"]) is int and w["resets_at"] > 0 for w in value["windows"])
 
 
 def valid_result(value, status="succeeded"):
     """Required keys with their shapes, and a verdict consistent with the run's
     status and checks; `test_changes` is optional and informational (a short
-    list of printable rows); unknown extra keys are tolerated so a newer
-    runner's record never reads as invalid, and `source` is optional for checks
-    recorded before it existed."""
+    list of printable rows); `quota` is optional and must satisfy valid_quota;
+    unknown extra keys are tolerated so a newer runner's record never reads as
+    invalid, and `source` is optional for checks recorded before it existed."""
     if not isinstance(value, dict) or not {"verdict", "changes", "checks", "cost"} <= set(value) or value["verdict"] not in VERDICTS:
         return False
     if status == "succeeded":
@@ -581,6 +615,8 @@ def valid_result(value, status="succeeded"):
     if cost is not None and not (isinstance(cost, dict) and set(cost) == {"usd", "estimated", "model"}
                                   and type(cost["usd"]) in (int, float) and cost["usd"] >= 0 and type(cost["estimated"]) is bool
                                   and (cost["model"] is None or isinstance(cost["model"], str))):
+        return False
+    if "quota" in value and not valid_quota(value["quota"]):
         return False
     return True
 
@@ -629,6 +665,33 @@ def requeue(path, record):
         job.update(next_due=time.time(), requeue={"run_id": new_run_id(), "of": record["run_id"]})
         write_json(path / "job.json", job)
         record["requeued"] = job["requeue"]["run_id"]
+
+
+def defer(path, record, now=None):
+    """A Claude run that ended on a usage-limit 429 is tried again when the
+    limit resets: the job's `next_due` moves to the transcript's reset time
+    when that is sooner than the next scheduled occurrence (or the job has
+    none), and the record carries `deferred_to`. Resets in the past or more
+    than DEFER_LIMIT away are left alone."""
+    if record.get("agent") != "claude" or record.get("status") not in ("failed", "succeeded") or not isinstance(record.get("dir"), str):
+        return
+    limit = rate_limit_for(Path(record["dir"]), record.get("started", 0))
+    if not limit:
+        return
+    now = time.time() if now is None else now
+    resets = limit["resets_at"]
+    if not record.get("reason"):
+        record["reason"] = "Claude usage limit reached" + (" (" + limit["window"] + ")" if limit["window"] else "") \
+            + "; resets " + dt.datetime.fromtimestamp(resets).isoformat(" ", "minutes")
+    if not now < resets <= now + DEFER_LIMIT:
+        return
+    with locked(path / ".config.lock"):
+        job = read_job(record["name"])
+        if not job["enabled"] or STOP or (job["next_due"] is not None and job["next_due"] <= resets):
+            return
+        job["next_due"] = resets
+        write_json(path / "job.json", job)
+        record["deferred_to"] = resets
 
 
 def worker(name):
@@ -689,6 +752,7 @@ def worker(name):
                 record["result"] = package(verdict_for(record))  # succeeded without a result is unverified
             try:
                 requeue(path, record)
+                defer(path, record)
             except (OSError, ValueError) as error:
                 print(name + ": could not requeue: " + str(error)[:200], file=sys.stderr, flush=True)
             record["finished"] = time.time()
@@ -764,7 +828,8 @@ def scheduler():
 def check(what=None):
     """Doctor: `check` covers definitions, storage, gaming-cancelled runs being
     requeued and the service (which must not wait on T3); `check results`
-    requires every finished run record to carry a valid result and verdict."""
+    requires every finished run record to carry a valid result and verdict,
+    and any quota snapshot a window label and reset time."""
     for name in names():
         private_dir(job_dir(name), create=False)
         read_job(name)
@@ -782,6 +847,8 @@ def check(what=None):
                     if record.get("reason") == GAMING_REASON and not (record.get("requeued") or record.get("requeue_of")):
                         raise ValueError(name + ": run " + path.name + " was cancelled by gaming mode and never requeued")
                     if what == "results":
+                        if isinstance(record.get("result"), dict) and "quota" in record["result"] and not valid_quota(record["result"]["quota"]):
+                            raise ValueError(name + ": run " + path.name + " carries a quota snapshot without a valid window_minutes and reset time")
                         if not valid_result(record.get("result"), record["status"]):
                             raise ValueError(name + ": run " + path.name + " has no valid verdict; restart gravedecay-agents to reconcile it")
                         for check_ in record["result"]["checks"]:
