@@ -1915,7 +1915,7 @@ function render(s){
       +`<tr><td>🧠 Codex 24h</td><td class="dim">${fk(x.today.in)} in (${fk(x.today.cached)} cached) · ${fk(x.today.out)} out</td><td class="num">${x.today.sessions} sess</td></tr>`
       +`<tr><td class="dim">&nbsp;&nbsp;7 days</td><td class="dim">${fk(x.week.in)} in · ${fk(x.week.out)} out</td><td class="num">${x.week.sessions} sess</td></tr>`
       +(L?(L.windows||[]).map(w=>lim(w,`codex ${quotaWindow(w.mins)}`)).join('')
-          +`<tr><td class="dim" colspan="3">plan: ${esc(L.plan||'?')} · account-wide, ChatGPT-plan sign-in · $ = est. API value (subscriptions bill flat)</td></tr>`
+          +`<tr><td class="dim" colspan="3" style="white-space:normal">plan: ${esc(L.plan||'?')} · account-wide, ChatGPT-plan sign-in · $ = est. API value (subscriptions bill flat)</td></tr>`
         :'<tr><td class="dim" colspan="3">$ = est. API value (subscriptions bill flat)</td></tr>');
   }
   const li=s.linear||{};

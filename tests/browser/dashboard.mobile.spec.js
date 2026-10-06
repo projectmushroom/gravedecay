@@ -59,8 +59,7 @@ async function renderLongMobileRecords(page) {
       },
       codex_limits: {
         plan: 'plus',
-        primary: { pct: 46, mins: 300, resets_at: 1783877854 },
-        secondary: { pct: 28, mins: 10080, resets_at: 1784409683 },
+        windows: [{ pct: 46, mins: 300, resets_at: 1783877854 }, { pct: 28, mins: 10080, resets_at: 1784409683 }],
       },
     };
     render(state);
