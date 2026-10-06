@@ -145,9 +145,10 @@ reports it and `grave developer` cancels it.
 Automatic transitions are an independent gamewatch policy. The durable
 `config/gamewatch.preference` (`on`/`off`) is synchronized to the watcher's
 hot-reloaded flag. First raises default it on only for detected stock SteamOS
-and off elsewhere. Detection is ordered and configurable (`gamescope`, active
-Steam app cgroups, Feral GameMode, then an exact process name), so a profile can
-tune signals without changing mode semantics.
+and off elsewhere. Detection is ordered and configurable (active Steam app
+cgroups, Feral GameMode, then an exact process name; `gamescope` only
+corroborates, since on SteamOS it is the session itself), so a profile can tune
+signals without changing mode semantics.
 
 ## Always alive (tailnet keepalive)
 
@@ -234,6 +235,8 @@ and any matching GitHub PR. See [DISPATCH.md](DISPATCH.md) for authorization,
 platform scope, retry behavior, and recovery.
 
 `gravedecay-agents.service` supervises persistent owner schedules through
-`libexec/agent-jobs.py`. Each headless run gets a fresh Git worktree, private
-transcript and atomic result record. The dashboard exposes bounded reports
+`libexec/agent-jobs.py`, independently of T3 (no unit ordering or dependency on
+`t3code.service`; gaming mode is read from the agent freezer alone). Each
+headless run gets a fresh Git worktree, private transcript and atomic result
+record. The dashboard exposes bounded reports
 only after owner authorization. See [SCHEDULES.md](SCHEDULES.md).

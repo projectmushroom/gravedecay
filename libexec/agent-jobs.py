@@ -22,12 +22,17 @@ import uuid
 ROOT = Path(os.environ.get("GRAVE_ROOT", "/srv/dev"))
 STORE = ROOT / "config/secrets/agent-jobs"
 GRAVE = os.environ.get("GRAVE_BIN", "/usr/local/bin/grave")
+# Gaming mode is the agent freezer and nothing else: `grave gaming` freezes this
+# cgroup. T3's unit state is not consulted, so a job runs to a verdict with
+# t3code stopped or masked. Tests point the path at a file they control.
+FREEZE = Path(os.environ.get("GRAVE_FREEZE_FILE", "/sys/fs/cgroup/grave-torpor/cgroup.freeze"))
 STOP = False
 DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 # `status` is the process lifecycle: how the provider ended. `result.verdict`
 # is what the runner concluded about the work afterwards, with a command the
 # agent did not choose. `unverified` is the fail-closed default: a succeeded
 # run with no check executed, or a result that is missing or malformed.
+# `skipped` is kept for records written before gaming mode deferred jobs instead of skipping them.
 STATUSES = ("running", "succeeded", "failed", "skipped", "cancelled", "timed-out", "interrupted")
 VERDICTS = ("ready-for-review", "no-changes", "checks-failed", "unverified", "provider-failed",
             "timed-out", "cancelled", "interrupted", "skipped")
@@ -174,6 +179,10 @@ def read_job(name):
         raise ValueError("invalid due time")
     if not valid_checks(value.get("checks")):
         raise ValueError("invalid check commands")
+    pending = value.get("requeue")
+    if pending is not None and not (isinstance(pending, dict) and set(pending) == {"run_id", "of"}
+                                    and all(isinstance(pending[key], str) and re.fullmatch(r"[0-9]{8}T[0-9]{6}-[0-9a-f]{6}", pending[key]) for key in pending)):
+        raise ValueError("invalid requeue marker")
     prompt = read_private(path / "prompt.txt")
     if not prompt.strip() or "\x00" in prompt:
         raise ValueError("prompt must contain text without NUL bytes")
@@ -188,12 +197,10 @@ def names():
 
 
 def gaming():
-    result = subprocess.run(["systemctl", "is-active", "--quiet", "t3code"], timeout=5)
     try:
-        frozen = Path("/sys/fs/cgroup/grave-torpor/cgroup.freeze").read_text().strip() == "1"
+        return FREEZE.read_text().strip() == "1"
     except OSError:
-        frozen = False
-    return result.returncode != 0 or frozen
+        return False
 
 
 def add(args):
@@ -315,22 +322,35 @@ def terminate(proc):
         pass
 
 
-def supervise(proc, name, started, timeout, record):
-    """Wait for a child in its own process group. Cancellation, the runtime
-    limit and gaming mode end the run: the record is updated and False returned."""
+GAMING_REASON = "gaming mode entered during run"
+
+
+def stopper(name):
+    """The stop predicate for one run: None to keep going, else the (status,
+    reason) that ends it. Gaming mode is polled every two seconds."""
     mode_check = time.monotonic()
-    while proc.poll() is None:
+    def stop():
+        nonlocal mode_check
         if STOP or not read_job(name)["enabled"]:
-            record.update(status="cancelled", reason="job or scheduler stopped")
+            return "cancelled", "job or scheduler stopped"
+        if time.monotonic() >= mode_check:
+            mode_check = time.monotonic() + 2
+            if gaming():
+                return "cancelled", GAMING_REASON
+        return None
+    return stop
+
+
+def supervise(proc, stop, started, timeout, record):
+    """Wait for a child in its own process group. The stop predicate, or the
+    runtime limit, ends the run: the record is updated and False returned."""
+    while proc.poll() is None:
+        if why := stop():
+            record.update(status=why[0], reason=why[1])
             return False
         if time.time() - started >= timeout:
             record.update(status="timed-out", reason="configured runtime limit reached")
             return False
-        if time.monotonic() >= mode_check:
-            if gaming():
-                record.update(status="cancelled", reason="gaming mode entered during run")
-                return False
-            mode_check = time.monotonic() + 2
         time.sleep(.2)
     return True
 
@@ -431,10 +451,10 @@ def fit(text, budget, head=False):
     return text
 
 
-def run_check(cmd, source, directory, base, log, job, record, started, budget=TAIL_BUDGET):
-    """One check in the worktree: same directory, supervision and runtime budget
-    as the provider, with GRAVE_BASE and the worktree's node_modules/.bin on
-    PATH. Output goes to the transcript; the command (its head, up to half of
+def run_check(cmd, source, directory, base, log, stop, timeout, record, started, budget=TAIL_BUDGET):
+    """One check in the worktree: same directory, stop predicate and runtime
+    budget as the provider, with GRAVE_BASE and the worktree's node_modules/.bin
+    on PATH. Output goes to the transcript; the command (its head, up to half of
     `budget`) and a tail of the output together fit `budget` JSON bytes."""
     began = time.monotonic()
     env = dict(os.environ, GRAVE_BASE=base, PATH=str(directory / "node_modules/.bin") + ":" + os.environ.get("PATH", ""))
@@ -442,7 +462,7 @@ def run_check(cmd, source, directory, base, log, job, record, started, budget=TA
         proc = subprocess.Popen(["/bin/sh", "-c", cmd], cwd=directory, env=env, stdin=subprocess.DEVNULL,
                                 stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
         try:
-            supervise(proc, job["name"], started, job["timeout"], record)
+            supervise(proc, stop, started, timeout, record)
         finally:
             terminate(proc)
         seconds = round(time.monotonic() - began, 1)
@@ -498,7 +518,7 @@ def package(verdict, changes=None, checks=(), cost=None, test_changes=None):
     return value
 
 
-def result_package(job, record, directory, base, log, started):
+def result_package(job, record, directory, base, log, started, stop=lambda: None):
     """Computed by the runner after the provider exits. The check command comes
     from the owner's --check or from the base commit, never from the worktree;
     it still executes agent-written code in the worktree, as the owner."""
@@ -520,7 +540,7 @@ def result_package(job, record, directory, base, log, started):
         if commands is None:
             commands, source = detect_checks(repo_path(job["repo"]), base), "base:" + base
         for cmd in commands:
-            checks.append(run_check(cmd, source, directory, base, log, job, record, started, budget // len(commands)))
+            checks.append(run_check(cmd, source, directory, base, log, stop, job["timeout"], record, started, budget // len(commands)))
             if record["status"] != "succeeded":  # cancelled or out of time while checking
                 break
     return package(verdict_for(record, changes, checks), changes, checks, cost_for(directory, started), tests)
@@ -592,29 +612,51 @@ def notify(record):
         pass  # Results remain durable even if a notification channel is unavailable.
 
 
+def new_run_id():
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:6]
+
+
+def requeue(path, record):
+    """A run that gaming mode cancelled is queued again once: the job's next
+    due time becomes now, the cancelled record names the run that replaces it,
+    and that run carries `requeue_of` so a second gaming cancel is final."""
+    if record.get("reason") != GAMING_REASON or "requeue_of" in record:
+        return
+    with locked(path / ".config.lock"):
+        job = read_job(record["name"])
+        if not job["enabled"] or STOP:
+            return
+        job.update(next_due=time.time(), requeue={"run_id": new_run_id(), "of": record["run_id"]})
+        write_json(path / "job.json", job)
+        record["requeued"] = job["requeue"]["run_id"]
+
+
 def worker(name):
     path = job_dir(name)
     with locked(path / ".run.lock", blocking=False):
         with locked(path / ".config.lock"):
             job = read_job(name)
             now = time.time()
-            if not job["enabled"] or job["next_due"] is None or job["next_due"] > now:
+            # Due while gaming: keep next_due and start after the thaw. Nothing is recorded.
+            if not job["enabled"] or job["next_due"] is None or job["next_due"] > now or gaming():
                 return
             due = job["next_due"]
             job["next_due"] = next_due(job["schedule"], now)
-            run_id = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:6]
+            pending = job.pop("requeue", None)
+            run_id = pending["run_id"] if pending else new_run_id()
             target = path / "runs" / (run_id + ".json")
             record = dict(name=name, agent=job["agent"], repo=job["repo"], due=due,
                           started=now, status="running", run_id=run_id)
+            if pending:
+                record["requeue_of"] = pending["of"]
             write_json(target, record)
             write_json(path / "job.json", job)
         proc = None
         run_lock = None
+        stop = stopper(name)
         try:
-            if gaming():
-                record.update(status="skipped", reason="gaming mode or developer services unavailable")
-            elif not read_job(name)["enabled"] or STOP:
-                record.update(status="cancelled", reason="cancelled before launch")
+            if why := stop():
+                record.update(status=why[0], reason=why[1])
             else:
                 session = "job-" + name + "-" + run_id
                 directory, history, run_lock, base = worktree(job, session)
@@ -626,21 +668,18 @@ def worker(name):
                           "and report results. Do not merge or deploy.\n\n" + read_private(path / "prompt.txt"))
                 with tempfile.TemporaryFile() as stdin, open(history / log, "xb") as output:
                     stdin.write(prompt.encode()); stdin.seek(0)
-                    if STOP or not read_job(name)["enabled"]:
-                        record.update(status="cancelled", reason="cancelled before provider launch")
-                        return
-                    if gaming():
-                        record.update(status="skipped", reason="gaming mode entered before provider launch")
+                    if why := stop():
+                        record.update(status=why[0], reason=why[1])
                         return
                     proc = subprocess.Popen(command, cwd=directory, stdin=stdin, stdout=output,
                                             stderr=subprocess.STDOUT, start_new_session=True)
-                    supervise(proc, name, now, job["timeout"], record)
+                    supervise(proc, stop, now, job["timeout"], record)
                     terminate(proc)
                     record["exit_code"] = proc.returncode
                     if record["status"] == "running":
                         record["status"] = "succeeded" if proc.returncode == 0 else "failed"
                     proc = None  # Process group has already been reaped.
-                record["result"] = result_package(job, record, directory, base, history / log, now)
+                record["result"] = result_package(job, record, directory, base, history / log, now, stop)
         except Exception as error:
             record.update(status="failed", reason=fit(str(error), 1024, head=True))
         finally:
@@ -648,6 +687,10 @@ def worker(name):
                 terminate(proc)
             if not valid_result(record.get("result"), record["status"]):
                 record["result"] = package(verdict_for(record))  # succeeded without a result is unverified
+            try:
+                requeue(path, record)
+            except (OSError, ValueError) as error:
+                print(name + ": could not requeue: " + str(error)[:200], file=sys.stderr, flush=True)
             record["finished"] = time.time()
             write_json(target, record)
             if run_lock is not None:
@@ -719,7 +762,8 @@ def scheduler():
 
 
 def check(what=None):
-    """Doctor: `check` covers definitions, storage and the service; `check results`
+    """Doctor: `check` covers definitions, storage, gaming-cancelled runs being
+    requeued and the service (which must not wait on T3); `check results`
     requires every finished run record to carry a valid result and verdict."""
     for name in names():
         private_dir(job_dir(name), create=False)
@@ -735,6 +779,8 @@ def check(what=None):
                         raise ValueError(name + ": invalid run record " + path.name)
                     if record.get("status") == "running":
                         raise ValueError(name + ": abandoned run; restart gravedecay-agents to reconcile it")
+                    if record.get("reason") == GAMING_REASON and not (record.get("requeued") or record.get("requeue_of")):
+                        raise ValueError(name + ": run " + path.name + " was cancelled by gaming mode and never requeued")
                     if what == "results":
                         if not valid_result(record.get("result"), record["status"]):
                             raise ValueError(name + ": run " + path.name + " has no valid verdict; restart gravedecay-agents to reconcile it")
@@ -751,6 +797,10 @@ def check(what=None):
     elif names():
         subprocess.run(["systemctl", "is-enabled", "--quiet", "gravedecay-agents.service"], check=True)
         subprocess.run(["systemctl", "is-active", "--quiet", "gravedecay-agents.service"], check=True)
+        shown = subprocess.run(["systemctl", "show", "gravedecay-agents.service", "-p", "After", "-p", "Requires", "-p", "Wants",
+                                "-p", "BindsTo", "-p", "Requisite", "-p", "PartOf"], check=True, capture_output=True, text=True).stdout
+        if "t3code.service" in shown:
+            raise ValueError("gravedecay-agents.service orders after or depends on t3code.service; re-run raise.sh")
 
 
 def main():

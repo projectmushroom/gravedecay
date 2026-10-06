@@ -36,7 +36,7 @@ ALWAYS_ON=(tailscaled sshd NetworkManager gravedecay gravedecay-term)
 # preference under $GRAVE_ROOT/config (first raise: on only on stock SteamOS,
 # off elsewhere). These values tune detection in preference order.
 GAME_POLL_SECONDS=8
-GAME_SIGNALS=(gamescope steam-cgroup gamemode process)
+GAME_SIGNALS=(steam-cgroup gamemode process)   # gamescope alone is Game Mode, not a game; never list it first
 GAME_CGROUP_SAMPLE_SECONDS=0.25
 GAME_CGROUP_MIN_CPU_USEC=10000
 GAME_PROC="reaper"        # last-resort exact process-name match

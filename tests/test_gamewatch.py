@@ -52,15 +52,53 @@ class GamewatchDetectorTests(unittest.TestCase):
         )
 
     def test_probe_uses_configured_signal_order(self):
-        self.configure(["gamescope", "gamemode", "process"])
+        # gamescope listed (after steam-cgroup) wins the order only when a GameMode
+        # client or a Steam scope corroborates it.
+        self.configure(["steam-cgroup", "gamescope", "gamemode", "process"])
         self.executable("gamescope", "exit 0\n")
         self.executable("pgrep", "exit 0\n")
+        self.executable("systemctl", "exit 1\n")
         self.executable("busctl", "printf 'u 1\\n'\n")
 
         result = self.run_watcher("probe")
 
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual(result.stdout.strip(), "gamescope")
+
+    def test_gamescope_alone_is_game_mode_not_a_game(self):
+        # #233: SteamOS Game Mode always runs gamescope. No Steam scope with CPU
+        # progress and GameMode ClientCount 0 must read as idle, with gamescope
+        # listed and with the default list.
+        self.executable("gamescope", "exit 0\n")
+        self.executable("pgrep", '[[ "$*" == *gamescope* ]]\n')
+        self.executable("systemctl", 'if [[ "$*" == *list-units* ]]; then exit 0; elif [[ "$*" == *show-environment* ]]; then exit 0; fi; exit 1\n')
+        self.executable("busctl", "printf 'u 0\\n'\n")
+        for signals in (["steam-cgroup", "gamescope", "gamemode", "process"], None):
+            if signals:
+                self.configure(signals)
+            else:
+                self.conf.write_text(f'GRAVE_ROOT="{self.root}"\nGAME_PROC="reaper"\n')
+            result = self.run_watcher("probe")
+            self.assertEqual(result.returncode, 1, result.stdout)
+            self.assertEqual(result.stdout.strip(), "")
+        self.assertIn("GAME_SIGNALS=(steam-cgroup gamemode process)", (ROOT / "config/grave.conf.example").read_text())
+        self.assertIn("|| GAME_SIGNALS=(steam-cgroup gamemode process)", WATCHER.read_text())
+
+    def test_doctor_rejects_gamescope_before_steam_cgroup(self):
+        self.executable("pgrep", "exit 1\n")
+        self.executable("gamescope", "exit 0\n")
+        self.executable("systemctl", 'exit 0\n')
+        self.executable("busctl", "printf 'u 0\\n'\n")
+        cgroup = pathlib.Path(self.tmp.name) / "cgroup"; cgroup.mkdir()
+        for signals in (["gamescope", "steam-cgroup", "gamemode", "process"], ["gamescope", "process"]):
+            self.configure(signals, f'GAME_CGROUP_ROOT="{cgroup}"\n')
+            result = self.run_watcher("doctor")
+            self.assertEqual(result.returncode, 1, result.stdout)
+            self.assertIn("gamescope is listed before steam-cgroup", result.stdout)
+        self.configure(["steam-cgroup", "gamescope", "gamemode", "process"], f'GAME_CGROUP_ROOT="{cgroup}"\n')
+        self.assertEqual(self.run_watcher("doctor").returncode, 0)
+        self.configure(["steam-cgroup", "gamemode", "process"], f'GAME_CGROUP_ROOT="{cgroup}"\n')
+        self.assertEqual(self.run_watcher("doctor").returncode, 0)
 
     def test_probe_falls_back_to_gamemode_then_exact_process(self):
         self.configure(["gamescope", "gamemode", "process"])

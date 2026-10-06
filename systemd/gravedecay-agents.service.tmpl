@@ -1,7 +1,8 @@
 [Unit]
 Description=gravedecay - scheduled owner agent jobs
 Documentation=https://github.com/projectmushroom/gravedecay
-After=network.target t3code.service
+# Never after or wanting the T3 unit: a job runs to a verdict with T3 stopped or masked (doctor checks).
+After=network.target
 OnFailure=gravedecay-notify@%n.service
 
 [Service]

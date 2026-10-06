@@ -25,7 +25,11 @@ printf 'base\n' >"$repo/base.txt"
 git -C "$repo" add base.txt
 git -C "$repo" commit -qm 'fixture base'
 printf 'Exercise the fake scheduled provider.\n' >"$prompt"
-grave agents run ci-schedule --repo scheduled-smoke --prompt-file "$prompt"
+# The runner must not need T3 (#230 M4): stop it for the whole run and restore it afterwards.
+# (mask is not possible here: the unit is a real file under /etc/systemd/system.)
+sudo systemctl stop t3code.service
+trap 'rm -f "$fake" "$prompt"; sudo systemctl start t3code.service' EXIT
+grave agents run ci-schedule --repo scheduled-smoke --prompt-file "$prompt" --check 'test -f scheduled-result.txt'
 record=""
 for _ in $(seq 1 45); do
   for file in "$GRAVE_ROOT/config/secrets/agent-jobs/ci-schedule/runs/"*.json; do
@@ -37,7 +41,9 @@ for _ in $(seq 1 45); do
   sleep 1
 done
 [[ -n "$record" ]] || { echo 'scheduler never produced a result'; exit 1; }
-jq -e '.status == "succeeded" and .exit_code == 0' "$record"
+jq -e '.status == "succeeded" and .exit_code == 0 and .result.verdict == "ready-for-review"' "$record"
+systemctl is-active --quiet t3code.service && { echo 't3code should still be stopped during the smoke'; exit 1; }
+sudo systemctl start t3code.service
 worktree=$(jq -r .dir "$record")
 [[ -f "$worktree/scheduled-result.txt" && ! -e "$repo/scheduled-result.txt" ]]
 grave agents jobs cancel ci-schedule

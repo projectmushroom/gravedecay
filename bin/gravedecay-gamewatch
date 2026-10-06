@@ -20,8 +20,10 @@ GAME_PROC="${GAME_PROC:-reaper}"   # Steam's per-game wrapper process
 : "${GAME_CGROUP_SAMPLE_SECONDS:=0.25}"
 : "${GAME_CGROUP_MIN_CPU_USEC:=10000}"
 : "${GAME_CGROUP_ROOT:=/sys/fs/cgroup}"
+# gamescope is not in the default list: SteamOS Game Mode runs it as the
+# session compositor, so its presence alone says nothing about a game (#233).
 declare -p GAME_SIGNALS >/dev/null 2>&1 \
-  || GAME_SIGNALS=(gamescope steam-cgroup gamemode process)
+  || GAME_SIGNALS=(steam-cgroup gamemode process)
 mkdir -p "$GRAVE_ROOT/config" "$GRAVE_ROOT/logs" 2>/dev/null || true
 
 [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]] && eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv bash)" 2>/dev/null || true
@@ -31,9 +33,11 @@ export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNT
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$LOG"; }
 
 signal_gamescope() {
-  # gamescope is the most stable SteamOS boundary: unlike Steam's wrapper names,
-  # its process name is part of the compositor's public interface.
-  pgrep -x gamescope >/dev/null 2>&1
+  # gamescope alone never means gaming: on SteamOS it is the Game Mode session
+  # itself and is always running. Require a Steam scope making CPU progress or
+  # a GameMode client alongside it.
+  pgrep -x gamescope >/dev/null 2>&1 || return 1
+  signal_steam_cgroup || signal_gamemode
 }
 
 steam_scope_units() {
@@ -111,8 +115,16 @@ signal_evaluable() {
 }
 
 doctor_signals() {
-  local signal available=() robust=() unknown=()
+  local signal available=() robust=() unknown=() seen_scope=0
   for signal in "${GAME_SIGNALS[@]}"; do
+    # Ordering gamescope ahead of steam-cgroup is the pre-#233 configuration
+    # that read Game Mode itself as a game; refuse it even though the signal
+    # now corroborates, so a stale grave.conf is noticed.
+    [[ "$signal" == steam-cgroup ]] && seen_scope=1
+    if [[ "$signal" == gamescope && $seen_scope == 0 ]]; then
+      printf 'gamescope is listed before steam-cgroup in GAME_SIGNALS; SteamOS Game Mode would read as gaming\n'
+      return 1
+    fi
     case "$signal" in
       gamescope|steam-cgroup|gamemode|process)
         if signal_evaluable "$signal"; then
