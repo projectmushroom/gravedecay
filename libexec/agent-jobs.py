@@ -34,7 +34,7 @@ VERDICTS = ("ready-for-review", "no-changes", "checks-failed", "unverified", "pr
 CHECK_LIMIT = 8      # commands per job
 CHECK_LENGTH = 500   # characters per command
 TAIL = 4000          # bytes of one check's output read from its end
-TAIL_BUDGET = 24 * 1024   # JSON bytes of check tails per run record, shared across checks
+TAIL_BUDGET = 24 * 1024   # JSON bytes of check commands and tails per run record, shared across checks
 RECORD_LIMIT = 48 * 1024  # bytes per run record on disk; doctor enforces it
 SOURCE = re.compile(r"owner|base:[0-9a-f]{40}")
 LOG_COPY = 1 << 20   # bytes of check output copied into the session transcript
@@ -237,9 +237,12 @@ def cancel(name):
 
 
 def git(*args):
+    """Every git call ignores refs/replace: the worktree shares the source
+    checkout's refs, so an agent could otherwise `git replace` the base commit
+    and have its own files read as the base's."""
     command = ["git", *map(str, args)]
-    proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True, start_new_session=True)
+    proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                            start_new_session=True, env=dict(os.environ, GIT_NO_REPLACE_OBJECTS="1"))
     try:
         output, _ = proc.communicate(timeout=30)
         if proc.returncode:
@@ -358,18 +361,21 @@ def detect_checks(source, base):
     return []
 
 
-def fit(text, budget):
-    """Drop leading characters until the JSON encoding fits the byte budget;
-    json escapes control and non-ASCII characters to six bytes each."""
+def fit(text, budget, head=False):
+    """Drop leading (or, with head=True, trailing) characters until the JSON
+    encoding fits the byte budget; json escapes control and non-ASCII
+    characters to six bytes each, twelve for an emoji."""
     while text and (size := len(json.dumps(text))) > budget:
-        text = text[len(text) - len(text) * budget // size:]
+        keep = len(text) * budget // size
+        text = text[:keep] if head else text[len(text) - keep:]
     return text
 
 
 def run_check(cmd, source, directory, base, log, job, record, started, budget=TAIL_BUDGET):
     """One check in the worktree: same directory, supervision and runtime budget
     as the provider, with GRAVE_BASE and the worktree's node_modules/.bin on
-    PATH. Output goes to the transcript; a tail within `budget` JSON bytes is kept."""
+    PATH. Output goes to the transcript; the command (its head, up to half of
+    `budget`) and a tail of the output together fit `budget` JSON bytes."""
     began = time.monotonic()
     env = dict(os.environ, GRAVE_BASE=base, PATH=str(directory / "node_modules/.bin") + ":" + os.environ.get("PATH", ""))
     with tempfile.TemporaryFile() as output:
@@ -398,7 +404,8 @@ def run_check(cmd, source, directory, base, log, job, record, started, budget=TA
             transcript.write(f"\n(exit {proc.returncode}, {seconds}s)\n".encode())
     if record["status"] != "succeeded":
         tail += "\n[check stopped: " + str(record.get("reason")) + "]"
-    return {"cmd": cmd, "exit_code": proc.returncode, "seconds": seconds, "tail": fit(tail, budget), "source": source}
+    shown = fit(cmd, budget // 2, head=True)
+    return {"cmd": shown, "exit_code": proc.returncode, "seconds": seconds, "tail": fit(tail, budget - len(json.dumps(shown))), "source": source}
 
 
 def cost_for(directory, since):
@@ -449,11 +456,17 @@ def result_package(job, record, directory, base, log, started):
     return package(verdict_for(record, changes, checks), changes, checks, cost_for(directory, started))
 
 
-def valid_result(value):
-    """Required keys with their shapes; unknown extra keys are tolerated so a
-    newer runner's record never reads as invalid, and `source` is optional for
-    checks recorded before it existed."""
+def valid_result(value, status="succeeded"):
+    """Required keys with their shapes, and a verdict consistent with the run's
+    status and checks; unknown extra keys are tolerated so a newer runner's
+    record never reads as invalid, and `source` is optional for checks recorded
+    before it existed."""
     if not isinstance(value, dict) or not {"verdict", "changes", "checks", "cost"} <= set(value) or value["verdict"] not in VERDICTS:
+        return False
+    if status == "succeeded":
+        if value["verdict"] not in ("ready-for-review", "no-changes", "checks-failed", "unverified"):
+            return False
+    elif value["verdict"] != verdict_for({"status": status}):
         return False
     changes = value["changes"]
     if changes is not None and not (isinstance(changes, dict) and set(changes) == {"commits", "files", "insertions", "deletions", "dirty"}
@@ -466,6 +479,8 @@ def valid_result(value):
             and type(check["seconds"]) in (int, float) and isinstance(check["tail"], str)
             and ("source" not in check or isinstance(check["source"], str) and SOURCE.fullmatch(check["source"]))
             for check in value["checks"]):
+        return False
+    if value["verdict"] == "ready-for-review" and not (value["checks"] and all(check["exit_code"] == 0 for check in value["checks"])):
         return False
     cost = value["cost"]
     if cost is not None and not (isinstance(cost, dict) and set(cost) == {"usd", "estimated", "model"}
@@ -552,11 +567,11 @@ def worker(name):
                     proc = None  # Process group has already been reaped.
                 record["result"] = result_package(job, record, directory, base, history / log, now)
         except Exception as error:
-            record.update(status="failed", reason=str(error)[:500])
+            record.update(status="failed", reason=fit(str(error), 1024, head=True))
         finally:
             if proc is not None:
                 terminate(proc)
-            if not valid_result(record.get("result")):
+            if not valid_result(record.get("result"), record["status"]):
                 record["result"] = package(verdict_for(record))  # succeeded without a result is unverified
             record["finished"] = time.time()
             write_json(target, record)
@@ -565,19 +580,32 @@ def worker(name):
             notify(record)
 
 
+def read_record(path):
+    """A run record, or None with a warning when it is larger than doctor allows:
+    an oversized record is doctor's to flag, never a reason to wedge the job."""
+    if path.lstat().st_size > RECORD_LIMIT:
+        print(path.parent.parent.name + ": run record " + path.name + " exceeds " + str(RECORD_LIMIT) + " bytes; run grave doctor",
+              file=sys.stderr, flush=True)
+        return None
+    value = json.loads(read_private(path))
+    if not isinstance(value, dict):
+        raise ValueError("invalid run record")
+    return value
+
+
 def recover(name):
     path = job_dir(name)
     try:
         with locked(path / ".run.lock", blocking=False):
             for target in (path / "runs").glob("*.json"):
-                value = json.loads(read_private(target))
-                if not isinstance(value, dict):
-                    raise ValueError("invalid run record")
+                value = read_record(target)
+                if value is None:
+                    continue
                 if value.get("status") == "running":
                     value.update(status="interrupted", reason="previous worker ended without a result", finished=time.time())
                     value["result"] = package("interrupted")
                     write_json(target, value)
-                elif not valid_result(value.get("result")):  # a valid verdict is never rewritten
+                elif not valid_result(value.get("result"), value.get("status")):  # a valid verdict is never rewritten
                     value["result"] = legacy_result(value)
                     write_json(target, value)
     except BlockingIOError:
@@ -633,7 +661,7 @@ def check(what=None):
                     if record.get("status") == "running":
                         raise ValueError(name + ": abandoned run; restart gravedecay-agents to reconcile it")
                     if what == "results":
-                        if not valid_result(record.get("result")):
+                        if not valid_result(record.get("result"), record["status"]):
                             raise ValueError(name + ": run " + path.name + " has no valid verdict; restart gravedecay-agents to reconcile it")
                         for check_ in record["result"]["checks"]:
                             if check_.get("source", "owner") not in ("owner", "base:" + str(record.get("base"))):
@@ -688,7 +716,7 @@ def main():
             values = [read_job(name) for name in names()]
             for job in values:
                 records = sorted((job_dir(job["name"]) / "runs").glob("*.json"))
-                last = json.loads(read_private(records[-1])) if records else {}
+                last = (read_record(records[-1]) if records else None) or {}
                 job["last_status"] = last.get("status")
                 job["last_verdict"] = (last.get("result") or {}).get("verdict")
             if args.json:

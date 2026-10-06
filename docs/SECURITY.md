@@ -457,7 +457,9 @@ in `exit 0`, and a run with no check ends `unverified` rather than
 fixtures, `pytest` configuration, Makefile recipes and anything on
 `node_modules/.bin` are agent-writable and run inside the test process, as
 the same root-equivalent Unix account (`raise.sh` sudoers) that runs the
-scheduler and writes the run record. Read the verdict as "checks run by the
+scheduler and writes the run record. Checks run as the owner outside the
+Codex sandbox that confined the provider (`run_check` is a plain `/bin/sh -c`),
+and the agent and the runner share one Unix account. Read the verdict as "checks run by the
 runner with a command the agent did not choose", and review the diff. Owners
 who want test-tampering rules can add a tool such as gatekeep or tampercheck
 as a `--check`; `GRAVE_BASE` gives it the base SHA.
