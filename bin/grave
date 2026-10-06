@@ -1760,6 +1760,7 @@ cmd_doctor() { # grave doctor [--no-page]
   if systemctl is-active --quiet gravedecay; then
     check "dashboard refuses framing" dashboard_frame_policy_ok
     check "dashboard mobile navigation installed" dashboard_layout_ok
+    check "overnight review card installed" dashboard_review_card_ok
     if [[ "${MULTI_USER:-0}" == 1 ]]; then
       check "gravedecay maintenance health" sudo -n "$0" __dashboard-health
       check "dashboard summary API contract" dashboard_summary_ok
@@ -1985,6 +1986,12 @@ dashboard_layout_ok() {
     grep -q 'id="keeper"' "$shell"
 }
 dashboard_shell_ok() { [[ "$(sha256sum "$GRAVE_ROOT/scripts/dashboard-static/index.html" | cut -d' ' -f1)" == "$(dashboard_probe health | jq -r .shell)" ]]; }
+# The overnight review card and its diff route ship together (docs/DASHBOARD.md):
+# a shell without the card shows verdicts nobody can see.
+dashboard_review_card_ok() {
+  grep -q 'data-verdict=' "$GRAVE_ROOT/scripts/dashboard-static/index.html" &&
+    grep -q '"/api/run-diff"' "$GRAVE_ROOT/scripts/gravedecay.py"
+}
 dashboard_manifest_ok() { dashboard_probe manifest | grep -q '"scope": "/"'; }
 dashboard_sw_ok() { dashboard_probe sw | grep -qi '^Service-Worker-Allowed: /'; }
 dashboard_offline_ok() { [[ "$(sha256sum "$GRAVE_ROOT/scripts/dashboard-static/offline.html" | cut -d' ' -f1 | cut -c-12)" == "$(dashboard_probe health | jq -r .sw)" ]]; }

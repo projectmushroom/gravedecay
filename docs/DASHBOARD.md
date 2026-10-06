@@ -10,10 +10,11 @@ The quick launcher shows T3 and Terminal when available, falling back to the
 first available apps. **More apps** exposes the rest. Launcher visibility is
 editable under **System → Dashboard preferences**. Apps remain in Work.
 
-**Needs attention** links to requested reviews, failed CI runs, failed overnight
-runs and failed services reported by the available data sources. These are
-reported states, not inferred agent liveness. Selecting a notice opens its
-section, including a normally hidden widget, without changing saved visibility.
+**Needs attention** links to requested reviews, failed CI runs, overnight runs
+whose verdict is `checks-failed`, `provider-failed` or `unverified`, and failed
+services reported by the available data sources. These are reported states,
+not inferred agent liveness. Selecting a notice opens its section, including a
+normally hidden widget, without changing saved visibility.
 
 The default order is active work (T3 and terminal sessions), work queue (PRs,
 Linear and CI), repositories and usage, then recent activity (overnight reports,
@@ -32,6 +33,24 @@ reopening sections or reordering them. Explicit expansion choices survive
 reload. The existing shared widget visibility and order are preserved; order
 is applied within the new groups. The old stock ordering adopts the new default
 without rewriting its settings file.
+
+### Overnight report
+
+One card per scheduled run, newest first ([SCHEDULES.md](SCHEDULES.md)). The
+card leads with the runner's verdict (green `ready-for-review`, red
+`checks-failed` and `provider-failed`, amber `unverified`), then the change
+summary (commits, files, lines, uncommitted work left behind), each check with
+its command, `source` (`owner` or the base commit), exit code and duration, an
+amber **Test changes** line when the runner saw deleted, renamed or trimmed
+tests, added skip/only/xfail markers, or a changed test script, CI, lockfile
+or snapshot path (informational; it never moves the verdict), and the
+estimated cost. A succeeded run with no check shows "No checks ran; nothing
+verified the work." **Output** expands the provider's output tail with
+**Transcript**, **Diff** and **Open worktree**. Diff opens the committed work
+since the run's base commit (`/api/run-diff`, owner-gated like the transcript,
+plain text, capped at 256 KiB, never cached); uncommitted work is only in the
+worktree. Records written by an older runner show their lifecycle status in
+place of a verdict.
 
 ## System
 
@@ -90,10 +109,12 @@ status page; private navigation, content and configuration stay hidden and API
 authorization remains enforced by the server.
 
 `grave doctor` checks that the installed dashboard includes mobile navigation,
-configuration entry points and the Keeper drawer, and separately verifies that the running process
+configuration entry points, the Keeper drawer and the overnight review card
+with its diff route, and separately verifies that the running process
 serves the installed shell hash. Browser coverage exercises phone/tablet layouts,
 expansion persistence, refresh stability, focused configuration, benchmark
-progress, portable workspaces and public access transitions.
+progress, the overnight review card, portable workspaces and public access
+transitions.
 
 ## Phone examples
 

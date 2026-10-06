@@ -124,6 +124,17 @@ table does not know, every Codex model included, bills at the most expensive
 known price so the estimate errs high. `estimated` is always true. `cost` is
 null when no transcript for the worktree was found.
 
+`test_changes` is an optional, informational list of short rows computed from
+the committed work (`base..HEAD` in the worktree) whenever the run made a
+commit: deleted or renamed test files, lines removed from existing tests,
+added skip/only/xfail markers, a changed `package.json` test script or test
+runner config, and touched CI, lockfile or snapshot paths. It is capped at 20
+rows of 160 JSON bytes, its size comes out of the 24 KiB check budget, and it
+never affects the verdict: the dashboard shows it in amber on the run's card
+and the owner decides. Doctor rejects a record whose rows do not fit that
+shape. If GitHub ships native test-integrity checks for agent PRs, this list
+is the first thing to delete.
+
 `grave agents jobs` shows each job's last status and verdict; `--json` adds
 `last_verdict`. A run record without a valid result (written before results
 existed, or malformed) receives one when the scheduler next reconciles it: a
@@ -154,19 +165,26 @@ claimed occurrence.
 
 ## Report, notifications and doctor
 
-The dashboard Work tab's **Overnight report** shows the latest 20 runs, exit
-status, output tail, full transcript and a link to open the worktree; the
-report API carries each run's `result`. Reports and cancellation are
-owner-gated. Saved prompt files are not exposed by the report API; provider
-output can include task text.
-Completion, failure and skips use the existing `agent-done` notification event.
+The dashboard Work tab's **Overnight report** shows one card for each of the
+latest 20 runs: verdict, change summary, every check with its source and exit
+code, the amber test-change line, cost, output tail, full transcript, the
+committed diff against the base (`/api/run-diff`, owner-gated, plain text,
+256 KiB cap, no caching) and a link to open the worktree; the report API
+carries each run's `result`. **Needs attention** counts runs whose verdict is
+`checks-failed`, `provider-failed` or `unverified` ([DASHBOARD.md](DASHBOARD.md)).
+Reports, the diff and cancellation are owner-gated. Saved prompt files are not
+exposed by the report API; provider output can include task text.
+Completion, failure and skips use the existing `agent-done` notification event;
+its deep link stays on the dashboard origin.
 Enable a channel in dashboard settings or follow [NOTIFICATIONS.md](NOTIFICATIONS.md).
 
 `grave doctor` checks saved prompt ownership, permissions, schema, source repo,
 run consistency, a 48 KiB size limit per run record and the scheduler service
 when jobs exist, and separately that every finished run record carries a
-valid result and verdict, that every check's `source` is `owner` or the
-record's own base commit, and that the job command table adds no bypass flag.
+valid result and verdict (including a well-formed `test_changes` list when
+present), that every check's `source` is `owner` or the record's own base
+commit, that the job command table adds no bypass flag, and that the
+installed dashboard carries the review card and its diff route.
 Restarting the service reconciles unfinished
 or verdict-less records left by an interrupted or older worker. Re-raise to
 install or update the runner; no individual root-owned timer files need to be

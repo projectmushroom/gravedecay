@@ -83,6 +83,13 @@ if os.environ.get("FAKE_TRANSCRIPT"):
     (rollouts/"rollout-2026-09-24T01-00-00-def.jsonl").write_text(json.dumps({"type":"session_meta","payload":{"id":"def","cwd":"/elsewhere"}})+"\\n"
         + json.dumps({"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":9000,"cached_input_tokens":0,"output_tokens":9000}}}})+"\\n")
 if mode=="clean": sys.exit(0)
+if mode=="weaken":
+    Path("tests/test_a.py").unlink()
+    Path("tests/test_b.py").write_text("import pytest\\n@pytest.mark.skip\\ndef test_b(): pass\\n")
+    Path("package-lock.json").write_text("{}\\n")
+    subprocess.run(["git","add","-A"], check=True)
+    subprocess.run(["git","commit","-q","-m","weaken"], check=True)
+    sys.exit(0)
 Path("result.txt").write_text("finished\\n")
 if mode=="commit":
     subprocess.run(["git","add","result.txt"], check=True)
@@ -237,6 +244,64 @@ print("<script>literal output</script>", flush=True)
         subprocess.run(["git", "-C", str(self.repo), "commit", "-q", "--allow-empty", "-m", message], env=self.env, check=True)
         return subprocess.run(["git", "-C", str(self.repo), "rev-parse", "HEAD"], env=self.env, check=True,
                               capture_output=True, text=True).stdout.strip()
+
+    def test_test_changes_are_informational_capped_and_counted_into_the_budget(self):
+        module = self.module()
+        (self.repo / "tests").mkdir(); (self.repo / ".github/workflows").mkdir(parents=True); (self.repo / "__snapshots__").mkdir()
+        (self.repo / "tests/test_a.py").write_text("def test_a():\n    assert 1\n    assert 2\n")
+        (self.repo / "tests/test_b.py").write_text("def test_b(): pass\n")
+        (self.repo / "tests/test_c.py").write_text("def test_c(): pass\n")
+        (self.repo / "src.test.js").write_text("it('x', () => {});\n")
+        (self.repo / "package.json").write_text(json.dumps({"scripts": {"test": "vitest run"}}))
+        (self.repo / ".github/workflows/ci.yml").write_text("on: push\n")
+        (self.repo / "package-lock.json").write_text("{}\n")
+        (self.repo / "__snapshots__/a.snap").write_text("snap\n")
+        base = self.commit()
+        self.assertEqual(module.test_changes(self.repo, base), [])
+        (self.repo / "tests/test_a.py").write_text("def test_a():\n    assert 1\n")
+        (self.repo / "tests/test_b.py").unlink()
+        (self.repo / "tests/test_c.py").rename(self.repo / "tests/test_d.py")
+        (self.repo / "src.test.js").write_text("it.skip('x', () => {});\nit.only('y', () => {});\n")
+        (self.repo / "package.json").write_text(json.dumps({"scripts": {"test": "vitest run --passWithNoTests"}}))
+        (self.repo / ".github/workflows/ci.yml").write_text("on: pull_request\n")
+        (self.repo / "package-lock.json").write_text("{\"x\":1}\n")
+        (self.repo / "__snapshots__/a.snap").unlink()
+        (self.repo / "lib.py").write_text("x = 1\n")  # ordinary code is never a row
+        self.commit("weaken")
+        self.assertEqual(module.test_changes(self.repo, base), [
+            "deleted test tests/test_b.py", "renamed test tests/test_c.py → tests/test_d.py",
+            "trimmed test src.test.js (−1 lines)", "trimmed test tests/test_a.py (−1 lines)",
+            "skip/only/xfail added in src.test.js (+2)", "test script changed in package.json",
+            "CI changed .github/workflows/ci.yml", "snapshot removed __snapshots__/a.snap", "lockfile changed package-lock.json"])
+        for n in range(30):
+            (self.repo / f"tests/test_{n:02}.py").write_text("x\n")
+        middle = self.commit("many")
+        for n in range(30):
+            (self.repo / f"tests/test_{n:02}.py").unlink()
+        self.commit("delete many")
+        rows = module.test_changes(self.repo, middle)
+        self.assertEqual(len(rows), module.TEST_CHANGE_ROWS)
+        self.assertEqual(rows[-1], "… 11 more")
+        self.assertTrue(all(len(json.dumps(row)) <= module.TEST_CHANGE_ROW for row in rows))
+        # A full run: the rows ride in the record, cost the checks budget, and never move the verdict.
+        self.add("nightly", "--check", str(self.bin / "fakecheck"))
+        self.call("worker", "nightly", env=dict(self.env, FAKE_AGENT="weaken"))
+        record = self.records()[0]
+        self.assertEqual(record["result"]["verdict"], "ready-for-review")
+        self.assertEqual(record["result"]["test_changes"], [
+            "deleted test tests/test_a.py", "skip/only/xfail added in tests/test_b.py (+1)", "lockfile changed package-lock.json"])
+        self.assertEqual(record["result"]["checks"][0]["exit_code"], 0)
+        self.call("check", "results")
+        self.assertTrue(module.valid_result(record["result"]))
+        for broken in ("rows", ["ok", 3], ["a\nb"], ["x" * 200], ["r"] * (module.TEST_CHANGE_ROWS + 1)):
+            self.assertFalse(module.valid_result({**record["result"], "test_changes": broken}), broken)
+        with patch.object(module, "test_changes", return_value=["r" * 100] * module.TEST_CHANGE_ROWS):
+            budget = {}
+            with patch.object(module, "run_check", side_effect=lambda *a: budget.update(b=a[-1]) or {"cmd": "x", "exit_code": 0, "seconds": 0, "tail": "", "source": "owner"}):
+                result = module.result_package(module.read_job("nightly"), {"status": "succeeded"}, Path(record["dir"]), record["base"], Path(record["dir"]) / "log", 0)
+        self.assertEqual(budget["b"], module.TAIL_BUDGET - len(json.dumps(result["test_changes"])))
+        # No commits: nothing to inspect, so the key is absent and the budget whole.
+        self.assertNotIn("test_changes", module.package("no-changes"))
 
     def test_checks_are_detected_from_the_base_commit_when_none_are_scheduled(self):
         module = self.module()
@@ -428,6 +493,41 @@ print("<script>literal output</script>", flush=True)
         dash._state = lambda headers: {"tmux": [], "agent_history": []}
         self.assertNotIn("scheduled", dash.state({}))
         self.assertIn("scheduled", dash.state({"Tailscale-User-Login": "owner@example.test"}))
+
+    def test_diff_route_is_owner_gated_plain_text_and_capped(self):
+        self.add(); self.call("worker", "nightly", env=dict(self.env, FAKE_AGENT="commit"))
+        record = self.records()[0]
+        dash = load_dashboard(dict(self.env, GRAVEDECAY_ALLOWED_USERS="owner@example.test"))
+        server = dash.ThreadingHTTPServer(("127.0.0.1", 0), dash.Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        self.addCleanup(lambda: (server.shutdown(), server.server_close(), thread.join()))
+        def get(query, owner=True):
+            request = urllib.request.Request(f"http://127.0.0.1:{server.server_port}/api/run-diff?{query}",
+                                             headers={"Tailscale-User-Login": "owner@example.test"} if owner else {})
+            try:
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    return response.status, dict(response.headers), response.read().decode()
+            except urllib.error.HTTPError as error:
+                return error.code, dict(error.headers), error.read().decode()
+        code, headers, text = get("name=" + record["session"])
+        self.assertEqual(code, 200, text)
+        self.assertEqual(headers["Content-Type"], "text/plain; charset=utf-8")
+        self.assertEqual(headers["Cache-Control"], "no-store")
+        self.assertIn("+finished", text)
+        self.assertIn("result.txt", text)
+        self.assertEqual(get("name=" + record["session"], owner=False)[0], 403)
+        self.assertEqual(get("name=../" + record["session"])[0], 400)
+        self.assertEqual(get("name=" + record["session"] + "x")[0], 404)
+        # A non-scheduled session directory (no scheduled_job in meta.json) is refused.
+        (self.root / "agents/job-manual").mkdir()
+        (self.root / "agents/job-manual/meta.json").write_text(json.dumps({"dir": record["dir"], "base": record["base"]}))
+        (self.root / "agents/job-manual/meta.json").chmod(0o600)
+        self.assertEqual(get("name=job-manual")[0], 404)
+        dash.DIFF_LIMIT = 16
+        code, _, text = get("name=" + record["session"])
+        self.assertEqual(code, 200)
+        self.assertEqual(len(text.split("\n[diff truncated")[0]), 16)
+        self.assertIn("[diff truncated at 256 KiB", text)
 
     def module(self):
         with patch.dict(os.environ, self.env):

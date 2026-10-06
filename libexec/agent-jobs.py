@@ -37,6 +37,16 @@ TAIL = 4000          # bytes of one check's output read from its end
 TAIL_BUDGET = 24 * 1024   # JSON bytes of check commands and tails per run record, shared across checks
 RECORD_LIMIT = 48 * 1024  # bytes per run record on disk; doctor enforces it
 SOURCE = re.compile(r"owner|base:[0-9a-f]{40}")
+TEST_CHANGE_ROWS = 20     # informational rows per run record; their JSON bytes come out of TAIL_BUDGET
+TEST_CHANGE_ROW = 160     # JSON bytes per row
+TEST_FILE = re.compile(r"(^|/)(tests?|__tests__|specs?|e2e)/|(^|/)(test_[^/]*\.py|[^/]*_test\.(py|go|rb|rs|exs?)"
+                       r"|[^/]*\.(test|spec)\.[cm]?[jt]sx?|[^/]*Tests?\.(java|kt|swift|cs|php)|[^/]*_spec\.rb|conftest\.py)$")
+SKIP_MARK = re.compile(r"\.(skip|only|todo|fixme)\b|\b(xit|xdescribe|xtest|fit|fdescribe|fcontext|skipTest|t\.Skip|pytest\.skip|unittest\.skip)\b"
+                       r"|\bmark\.(skip|skipif|xfail)\b|#\[ignore\]|@Ignore\b|@Disabled\b")
+TEST_CONFIG = re.compile(r"(^|/)(pytest\.ini|tox\.ini|setup\.cfg|pyproject\.toml|noxfile\.py|(jest|vitest|playwright|karma|mocha|ava)\.config\.[cm]?[jt]sx?|\.mocharc(\.[a-z]+)?)$")
+CI_PATH = re.compile(r"^(\.github/workflows/|\.gitlab-ci\.yml$|\.circleci/|Jenkinsfile$|\.travis\.yml$|azure-pipelines\.yml$|\.buildkite/|bitbucket-pipelines\.yml$|\.drone\.yml$)")
+LOCKFILE = re.compile(r"(^|/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|poetry\.lock|uv\.lock|Pipfile\.lock|Cargo\.lock|go\.sum|Gemfile\.lock|composer\.lock|mix\.lock|flake\.lock)$")
+SNAPSHOT = re.compile(r"(^|/)__snapshots__/|\.snap$|(^|/)snapshots?/")
 LOG_COPY = 1 << 20   # bytes of check output copied into the session transcript
 _SHARED = {}
 
@@ -361,6 +371,56 @@ def detect_checks(source, base):
     return []
 
 
+def test_changes(directory, base):
+    """Informational only: ways the committed work since `base` could narrow what
+    the checks verify. Deleted or renamed test files, lines removed from existing
+    tests, added skip/only/xfail markers, a changed test script or runner config,
+    and touched CI, lockfile or snapshot paths. Shown in amber; never a verdict."""
+    removed, renamed, modified, touched, paths = [], [], [], [], []
+    for line in git("-C", directory, "diff", "--name-status", "-M", base, "HEAD").splitlines():
+        parts = line.split("\t")
+        code, path = parts[0][:1], parts[-1]
+        paths.append(path)
+        if code == "D" and TEST_FILE.search(path):
+            removed.append("deleted test " + path)
+        elif code == "R" and (TEST_FILE.search(parts[1]) or TEST_FILE.search(path)):
+            renamed.append("renamed test " + parts[1] + " → " + path)
+        elif code in "MA" and TEST_FILE.search(path):
+            modified.append((code, path))
+        for label, pattern in (("test config", TEST_CONFIG), ("CI", CI_PATH), ("lockfile", LOCKFILE), ("snapshot", SNAPSHOT)):
+            if pattern.search(path):
+                touched.append(label + (" removed " if code == "D" else " changed ") + path)
+    trimmed, skipped = [], []
+    existing = [path for code, path in modified if code == "M"]
+    if existing:
+        for line in git("-C", directory, "diff", "--numstat", base, "HEAD", "--", *existing).splitlines():
+            added, deleted, path = line.split("\t", 2)
+            if deleted.isdigit() and int(deleted):
+                trimmed.append("trimmed test " + path + " (−" + deleted + " lines)")
+    if modified:
+        counts, current = {}, None
+        for line in git("-C", directory, "diff", "-U0", "--no-color", base, "HEAD", "--", *(path for _, path in modified)).splitlines():
+            if line.startswith("+++ "):
+                current = line[4:].removeprefix("b/")
+            elif line.startswith("+") and SKIP_MARK.search(line):
+                counts[current] = counts.get(current, 0) + 1
+        skipped = ["skip/only/xfail added in " + path + " (+" + str(n) + ")" for path, n in counts.items()]
+    script = []
+    if "package.json" in paths:
+        def test_script(rev):
+            try:
+                package = json.loads(git("-C", directory, "show", rev + ":package.json"))
+            except (subprocess.CalledProcessError, ValueError):
+                return None
+            return (package.get("scripts") or {}).get("test") if isinstance(package, dict) else None
+        if test_script(base) != test_script("HEAD"):
+            script = ["test script changed in package.json"]
+    rows = [fit(row, TEST_CHANGE_ROW, head=True) for row in removed + renamed + trimmed + skipped + script + touched]
+    if len(rows) > TEST_CHANGE_ROWS:
+        rows = rows[:TEST_CHANGE_ROWS - 1] + ["… " + str(len(rows) - TEST_CHANGE_ROWS + 1) + " more"]
+    return rows
+
+
 def fit(text, budget, head=False):
     """Drop leading (or, with head=True, trailing) characters until the JSON
     encoding fits the byte budget; json escapes control and non-ASCII
@@ -431,8 +491,11 @@ def verdict_for(record, changes=None, checks=()):
     return "ready-for-review" if checks else "unverified"
 
 
-def package(verdict, changes=None, checks=(), cost=None):
-    return {"verdict": verdict, "changes": changes, "checks": list(checks), "cost": cost}
+def package(verdict, changes=None, checks=(), cost=None, test_changes=None):
+    value = {"verdict": verdict, "changes": changes, "checks": list(checks), "cost": cost}
+    if test_changes is not None:
+        value["test_changes"] = test_changes
+    return value
 
 
 def result_package(job, record, directory, base, log, started):
@@ -444,23 +507,31 @@ def result_package(job, record, directory, base, log, started):
         changes = change_summary(directory, base)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print(job["name"] + ": could not summarise changes: " + str(error)[:200], file=sys.stderr, flush=True)
+    tests = None
+    if changes and changes["commits"]:
+        try:
+            tests = test_changes(directory, base)
+        except (OSError, ValueError, subprocess.CalledProcessError) as error:
+            print(job["name"] + ": could not inspect test changes: " + str(error)[:200], file=sys.stderr, flush=True)
+    budget = TAIL_BUDGET - (len(json.dumps(tests)) if tests else 0)
     checks = []
     if record["status"] == "succeeded" and verdict_for(record, changes) != "no-changes":
         commands, source = job.get("checks"), "owner"
         if commands is None:
             commands, source = detect_checks(repo_path(job["repo"]), base), "base:" + base
         for cmd in commands:
-            checks.append(run_check(cmd, source, directory, base, log, job, record, started, TAIL_BUDGET // len(commands)))
+            checks.append(run_check(cmd, source, directory, base, log, job, record, started, budget // len(commands)))
             if record["status"] != "succeeded":  # cancelled or out of time while checking
                 break
-    return package(verdict_for(record, changes, checks), changes, checks, cost_for(directory, started))
+    return package(verdict_for(record, changes, checks), changes, checks, cost_for(directory, started), tests)
 
 
 def valid_result(value, status="succeeded"):
     """Required keys with their shapes, and a verdict consistent with the run's
-    status and checks; unknown extra keys are tolerated so a newer runner's
-    record never reads as invalid, and `source` is optional for checks recorded
-    before it existed."""
+    status and checks; `test_changes` is optional and informational (a short
+    list of printable rows); unknown extra keys are tolerated so a newer
+    runner's record never reads as invalid, and `source` is optional for checks
+    recorded before it existed."""
     if not isinstance(value, dict) or not {"verdict", "changes", "checks", "cost"} <= set(value) or value["verdict"] not in VERDICTS:
         return False
     if status == "succeeded":
@@ -481,6 +552,10 @@ def valid_result(value, status="succeeded"):
             for check in value["checks"]):
         return False
     if value["verdict"] == "ready-for-review" and not (value["checks"] and all(check["exit_code"] == 0 for check in value["checks"])):
+        return False
+    rows = value.get("test_changes", [])
+    if not (isinstance(rows, list) and len(rows) <= TEST_CHANGE_ROWS
+            and all(isinstance(row, str) and row.isprintable() and len(json.dumps(row)) <= TEST_CHANGE_ROW for row in rows)):
         return False
     cost = value["cost"]
     if cost is not None and not (isinstance(cost, dict) and set(cost) == {"usd", "estimated", "model"}

@@ -415,6 +415,16 @@ body[data-view="system"] #launcher,body[data-view="system"] #attention{display:n
 #attention{border-left:3px solid var(--warn);padding:8px 10px;margin-bottom:16px;background:var(--surface)}
 #attention[hidden]{display:none}#attention h2{font-size:12px;color:var(--warn)}
 #attention button{border:0;text-align:left;display:block;width:100%;padding:8px 0;font-size:12px}
+.runcard{border:1px solid var(--hairline);border-radius:8px;padding:8px 10px;margin-top:10px;font-size:13px}
+.runcard .runhead{display:flex;gap:6px;flex-wrap:wrap;align-items:baseline}
+.runcard .verdict{font-weight:600}
+.runcard[data-verdict="ready-for-review"] .verdict{color:var(--good)}
+.runcard[data-verdict="checks-failed"] .verdict,.runcard[data-verdict="provider-failed"] .verdict{color:var(--crit)}
+.runcard[data-verdict="unverified"] .verdict{color:var(--warn)}
+.runcard .checks{list-style:none;padding:0;margin:4px 0}
+.runcard .checks li,.runcard .testchanges{overflow-wrap:anywhere}
+.runcard .testchanges{color:var(--warn)}
+.runcard details{margin-top:6px}
 #panels{gap:10px 12px;align-items:start}.group-heading{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin:12px 0 0}
 .panel{padding:0;scroll-margin-top:90px;overflow:hidden}
 .panel h2{position:static;max-width:none;background:transparent;white-space:normal;padding:0;overflow:visible;font-size:13px;letter-spacing:0;text-transform:none}
@@ -1364,6 +1374,26 @@ function updateLauncher(){
   $('apps-more').textContent=appsExpanded?'Fewer apps':`More apps (${apps.length-2})`;
   $('apps-more').setAttribute('aria-expanded',String(appsExpanded));
 }
+// One card per scheduled run (docs/DASHBOARD.md). The verdict is the runner's,
+// computed after the provider exits; a record from an older runner shows its
+// lifecycle status instead.
+const runVerdict=r=>r.result?.verdict||(r.status==='failed'?'provider-failed':r.status);
+function runCard(r){
+  const res=r.result||{},verdict=runVerdict(r),ch=res.changes,checks=res.checks||[],tests=res.test_changes||[];
+  const changes=ch?`${counted(ch.commits,'commit')} · ${counted(ch.files,'file')} · +${ch.insertions} −${ch.deletions}${ch.dirty?' · uncommitted work left in the worktree':''}`:'changes unknown';
+  const cost=res.cost?`$${res.cost.usd.toFixed(2)}${res.cost.estimated?' estimated':''}${res.cost.model?' · '+res.cost.model:''}`:'cost unknown';
+  const when=esc(new Date(r.started*1000).toLocaleString());
+  return `<div class="runcard" data-run="${esc(r.name+'-'+r.started)}" data-verdict="${esc(verdict)}">
+    <div class="runhead"><b>${esc(r.name)}</b> <span class="verdict">${esc(verdict)}</span> <span class="dim2">· ${esc(r.status)}${r.exit_code!=null?' (exit '+esc(String(r.exit_code))+')':''} · ${when}</span></div>
+    ${r.reason?`<p class="dim">${esc(r.reason)}</p>`:''}
+    <div class="dim">${esc(r.repo||'')} · ${esc(changes)}</div>
+    ${checks.length?`<ul class="checks">${checks.map(c=>`<li><code>${esc(c.cmd)}</code> <span class="dim2">· ${esc(String(c.source||'owner').replace(/^(base:[0-9a-f]{12})[0-9a-f]{28}$/,'$1'))} · ${c.exit_code==null?'stopped':'exit '+esc(String(c.exit_code))} · ${esc(String(c.seconds))}s</span></li>`).join('')}</ul>`
+      :(r.status==='succeeded'&&verdict!=='no-changes'?'<div class="dim">No checks ran; nothing verified the work.</div>':'')}
+    ${tests.length?`<div class="testchanges">⚠ Test changes: ${tests.map(esc).join(' · ')}</div>`:''}
+    <div class="dim">${esc(cost)}</div>
+    <details data-report="${esc(r.name+'-'+r.started)}"><summary>Output</summary>${r.session&&r.log?`<a class="viewlog" href="#" data-log="${esc(r.session)}" data-file="${esc(r.log)}">Transcript</a> · <a class="viewdiff" href="#" data-diff="${esc(r.session)}">Diff</a> · <a href="${esc(appUrl('/term/?arg='+encodeURIComponent(r.session)))}">Open worktree</a>`:''}<pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto">${esc(r.tail||'No output recorded.')}</pre></details>
+  </div>`;
+}
 function renderOverview(s){
   updateLauncher();
   activePreview('tmux',(s.tmux||[]).length);
@@ -1371,11 +1401,11 @@ function renderOverview(s){
   const gh=s.github||{},prs=gh.prs||[],ci=s.ci||{},li=s.linear||{},scheduled=s.scheduled||{};
   const failedCI=(ci.rows||[]).filter(r=>r.status==='completed'&&['failure','timed_out','action_required','startup_failure'].includes(r.conclusion));
   const reviews=prs.filter(p=>p.mine);
-  const failedRuns=(scheduled.runs||[]).filter(r=>r.status==='failed');
+  const failedRuns=(scheduled.runs||[]).filter(r=>['checks-failed','provider-failed','unverified'].includes(runVerdict(r)));
   const notices=[];
   if(reviews.length)notices.push(['prs',`${counted(reviews.length,'review')} requested`]);
   if(failedCI.length)notices.push(['ci',`${failedCI.length} failed CI runs`]);
-  if(failedRuns.length)notices.push(['scheduled',`${failedRuns.length} failed overnight runs`]);
+  if(failedRuns.length)notices.push(['scheduled',`${counted(failedRuns.length,'overnight run')} need${failedRuns.length===1?'s':''} attention`]);
   const services=s.services||[],containers=s.docker?.containers||[];
   const failedServices=services.filter(u=>u.active==='failed');
   if(failedServices.length)notices.push(['services',`${failedServices.length} failed services`]);
@@ -1396,7 +1426,7 @@ function renderOverview(s){
   panelSummary('repos',s.repo_scan?.error||`${counted((s.repos||[]).length,'repository','repositories')} · ${(s.repos||[]).filter(r=>r.dirty).length} with local changes`,!!s.repo_scan?.error);
   panelSummary('sessions',`${(s.agent_history||[]).length} saved sessions`);
   const recent=(scheduled.runs||[])[0];
-  panelSummary('scheduled',scheduled.error||`${(scheduled.jobs||[]).filter(j=>j.enabled).length} scheduled${recent?` · latest: ${recent.name} ${recent.status}`:' · no reports yet'}`,!!scheduled.error||failedRuns.length);
+  panelSummary('scheduled',scheduled.error||`${(scheduled.jobs||[]).filter(j=>j.enabled).length} scheduled${recent?` · latest: ${recent.name} ${runVerdict(recent)}`:' · no reports yet'}`,!!scheduled.error||failedRuns.length);
   panelSummary('inbox',`${(s.inbox||[]).length} notifications${s.inbox?.[0]?` · ${s.inbox[0].title}`:''}`);
   const limits=s.usage?.codex_limits;
   panelSummary('usage',Number.isFinite(limits?.primary?.pct)?`Codex window ${limits.primary.pct}% used${Number.isFinite(limits.secondary?.pct)?` · weekly ${limits.secondary.pct}%`:''}`:s.usage?'Recent agent usage · details available':'Usage unavailable',limits?.primary?.pct>=90||limits?.secondary?.pct>=90);
@@ -1785,7 +1815,7 @@ function render(s){
   report.closest('[data-panel]').hidden=!scheduled.available;
   report.innerHTML=(scheduled.error?`<p>${esc(scheduled.error)}</p>`:'')+
     (scheduled.jobs||[]).map(j=>`<div class="setrow" style="flex-wrap:wrap"><span class="setlabel">${esc(j.name)} · ${esc(j.schedule||'once')} · ${j.enabled?(j.next_due?'next '+esc(new Date(j.next_due*1000).toLocaleString()):'complete'):'cancelled'}</span>${j.enabled?`<button class="mini" data-job-cancel="${esc(j.name)}">Cancel job</button>`:''}</div>`).join('')+
-    (scheduled.runs||[]).map(r=>`<details data-report="${esc(r.name+'-'+r.started)}" style="margin-top:10px"><summary>${esc(r.name)} · ${esc(r.status)}${r.exit_code!=null?' (exit '+esc(String(r.exit_code))+')':''} · ${esc(new Date(r.started*1000).toLocaleString())}</summary><p class="dim">${esc(r.reason||r.repo||'')}</p>${r.session&&r.log?`<a class="viewlog" href="#" data-log="${esc(r.session)}" data-file="${esc(r.log)}">Transcript</a> · <a href="${esc(appUrl('/term/?arg='+encodeURIComponent(r.session)))}">Open worktree</a>`:''}<pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto">${esc(r.tail||'No output recorded.')}</pre></details>`).join('')+
+    (scheduled.runs||[]).map(runCard).join('')+
     (!(scheduled.jobs||[]).length?'<p class="dim">No scheduled jobs yet. Add one with grave agents run.</p>':'');
   report.querySelectorAll('[data-report]').forEach(el=>el.open=openReports.has(el.dataset.report));
   report.querySelectorAll('[data-job-cancel]').forEach(button=>button.onclick=async()=>{
@@ -2582,10 +2612,21 @@ async function openLog(name,file){
     $('log-text').textContent=r.ok?(r.text||'(empty log)'):r.output;
   }catch(e){$('log-text').textContent='failed to load: '+e;}
 }
+async function openDiff(name){
+  $('log-title').textContent=`± ${name} — committed work since the base commit`;
+  $('log-text').textContent='loading…';
+  $('log-dlg').style.display='block';lockBody();
+  try{
+    const r=await apiFetch(`api/run-diff?name=${encodeURIComponent(name)}`);
+    $('log-text').textContent=await r.text();
+  }catch(e){$('log-text').textContent='failed to load: '+e;}
+}
 $('log-x').onclick=()=>{$('log-dlg').style.display='none';unlockBody();};
 document.addEventListener('click',async e=>{
   const v=e.target.closest('a.viewlog');
   if(v){e.preventDefault();openLog(v.dataset.log,v.dataset.file);return;}
+  const d=e.target.closest('a.viewdiff');
+  if(d){e.preventDefault();openDiff(d.dataset.diff);return;}
   const r=e.target.closest('a.resume');
   if(r){e.preventDefault();r.textContent='…';
     const res=await apiFetch('api/session-resume',{method:'POST',

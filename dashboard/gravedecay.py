@@ -2532,6 +2532,51 @@ def t3_activity():
     return cached("t3-activity", 3, fetch)
 
 
+def private_json(path):
+    """An owner-private (0600, regular, not a symlink) JSON object of at most 64 KiB."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd) as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > 65536:
+            raise ValueError("invalid job report file")
+        value = json.load(stream)
+        if not isinstance(value, dict):
+            raise ValueError("invalid job report object")
+        return value
+
+
+DIFF_LIMIT = 256 * 1024
+
+
+def run_diff(session):
+    """The committed work of one scheduled run (base..HEAD of its worktree) as
+    text, capped at DIFF_LIMIT. The worktree and base come from the run's own
+    private meta.json, never from the request. Git runs in the worktree as the
+    owner, like the runner's own base reads: no external diff or textconv
+    drivers, no replace refs."""
+    directory = os.path.join(GRAVE_ROOT, "agents", session)
+    if os.path.islink(directory):
+        raise ValueError("no such run")
+    meta = private_json(os.path.join(directory, "meta.json"))
+    worktree, base = meta.get("dir"), meta.get("base")
+    if (not meta.get("scheduled_job") or not isinstance(worktree, str) or not isinstance(base, str)
+            or not re.fullmatch(r"[0-9a-f]{40}", base) or os.path.islink(worktree)
+            or os.path.dirname(os.path.dirname(worktree)) != os.path.join(GRAVE_ROOT, "worktrees")):
+        raise ValueError("not a scheduled run")
+    command = ["git", "-C", worktree, "-c", "core.pager=cat", "diff", "--no-color", "--no-ext-diff", "--no-textconv", base, "HEAD"]
+    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                          env=dict(os.environ, GIT_NO_REPLACE_OBJECTS="1")) as proc:
+        data = proc.stdout.read(DIFF_LIMIT + 1)
+        if len(data) > DIFF_LIMIT:
+            proc.kill()
+        elif proc.wait(timeout=30):
+            raise ValueError("diff unavailable")
+    text = data[:DIFF_LIMIT].decode("utf-8", "replace")
+    if len(data) > DIFF_LIMIT:
+        text += "\n[diff truncated at 256 KiB; open the worktree for the rest]\n"
+    return text or "(no committed changes since the base commit)\n"
+
+
 def collect_scheduled_runs():
     """Owner-only metadata and output; saved prompt files stay in the secret store."""
     if not dispatch_supported():
@@ -2540,16 +2585,6 @@ def collect_scheduled_runs():
         result = {"available": os.path.isfile(os.path.join(GRAVE_ROOT, "scripts", "agent-jobs.py")),
                   "jobs": [], "runs": []}
         root = os.path.join(GRAVE_ROOT, "config", "secrets", "agent-jobs")
-        def private_json(path):
-            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-            with os.fdopen(fd) as stream:
-                info = os.fstat(stream.fileno())
-                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > 65536:
-                    raise ValueError("invalid job report file")
-                value = json.load(stream)
-                if not isinstance(value, dict):
-                    raise ValueError("invalid job report object")
-                return value
         paths = []
         try:
             for name in os.listdir(root):
@@ -3475,6 +3510,23 @@ class Handler(BaseHTTPRequestHandler):
             text = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", text)
             self._send(200, json.dumps({"ok": True, "name": name, "file": fname,
                                         "text": text}))
+        elif p == "/api/run-diff":
+            # Review card diff (docs/DASHBOARD.md): one scheduled run's committed
+            # work against its recorded base. Owner-gated like the transcript;
+            # the session name is allowlisted and everything else comes from
+            # the run's private meta.json. text/plain, 256 KiB cap, no-store.
+            if self._forbidden():
+                return
+            name = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("name", [""])[0]
+            if not re.fullmatch(r"job-[A-Za-z0-9_-]{1,46}", name):
+                self._send(400, json.dumps({"ok": False, "output": "bad session name"}))
+                return
+            try:
+                text = run_diff(name)
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                self._send(404, json.dumps({"ok": False, "output": "no diff for this run"}))
+                return
+            self._send(200, text, ctype="text/plain; charset=utf-8")
         elif p == "/api/push-key":
             # The VAPID public key a device needs to subscribe. Gated like the
             # file manager: only allowed viewers (and authenticated local maintenance) may enroll.

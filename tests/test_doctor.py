@@ -11,6 +11,14 @@ RAISE = (ROOT / "raise.sh").read_text()
 
 
 class DoctorContractTests(unittest.TestCase):
+    def test_review_card_and_diff_route_are_checked_together(self):
+        # Night Shift M3: a verdict nobody can see is worth nothing, so doctor
+        # requires the installed shell to carry the card and the dashboard the
+        # diff route it links to.
+        self.assertIn('check "overnight review card installed" dashboard_review_card_ok', GRAVE)
+        self.assertIn("grep -q 'data-verdict=' \"$GRAVE_ROOT/scripts/dashboard-static/index.html\"", GRAVE)
+        self.assertIn("grep -q '\"/api/run-diff\"' \"$GRAVE_ROOT/scripts/gravedecay.py\"", GRAVE)
+
     def test_firewall_check_requires_default_deny_not_just_running(self):
         # Regression #55: a running firewall that defaults to allow-in still
         # violates the 127.0.0.1+tailnet boundary. The check must assert the
