@@ -163,10 +163,12 @@ print("<script>literal output</script>", flush=True)
         self.assertIn("literal output", (history / record["log"]).read_text())
         for path in (self.store / "nightly/prompt.txt", self.store / "nightly/job.json", history / record["log"]):
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
-        self.assertIn("Scheduled nightly: succeeded", (self.root / "notifications").read_text())
-        # Uncommitted work is still work to review; nothing to check was detected.
-        self.assertEqual(record["result"], {"verdict": "ready-for-review", "checks": [], "cost": None,
+        # Uncommitted work is work to review, but nothing checked it: the run is unverified and says so.
+        self.assertEqual(record["result"], {"verdict": "unverified", "checks": [], "cost": None,
             "changes": {"commits": 0, "files": 0, "insertions": 0, "deletions": 0, "dirty": True}})
+        notification = (self.root / "notifications").read_text()
+        self.assertIn("Scheduled nightly: succeeded, unverified", notification)
+        self.assertIn("No checks ran", notification)
         self.assertIsNone(self.job()["checks"])
         self.call("check"); self.call("check", "results")
 
@@ -190,6 +192,7 @@ print("<script>literal output</script>", flush=True)
         self.assertEqual(result["changes"], {"commits": 1, "files": 1, "insertions": 1, "deletions": 0, "dirty": False})
         self.assertEqual([c["cmd"] for c in result["checks"]], [str(self.bin / "fakecheck"), "echo second check"])
         self.assertEqual([c["exit_code"] for c in result["checks"]], [0, 0])
+        self.assertEqual([c["source"] for c in result["checks"]], ["owner", "owner"])
         self.assertIn("check output line", result["checks"][0]["tail"])
         self.assertIn("second check", result["checks"][1]["tail"])
         self.assertTrue(all(c["seconds"] >= 0 for c in result["checks"]))
@@ -213,8 +216,11 @@ print("<script>literal output</script>", flush=True)
         self.assertEqual(record["result"]["verdict"], "checks-failed")
         self.assertEqual(record["result"]["checks"][0]["exit_code"], 3)
         self.assertEqual(record["result"]["changes"]["commits"], 1)
-        self.assertIn("Scheduled nightly: succeeded", (self.root / "notifications").read_text())
+        self.assertIn("Scheduled nightly: succeeded, checks-failed", (self.root / "notifications").read_text())
         self.call("check", "results")
+        # Reconciliation never rewrites a record that already carries a valid verdict.
+        self.module().recover("nightly")
+        self.assertEqual(self.records()[0], record)
 
     def test_clean_tree_without_commits_is_no_changes_and_skips_checks(self):
         self.add("nightly", "--check", str(self.bin / "fakecheck"))
@@ -226,34 +232,91 @@ print("<script>literal output</script>", flush=True)
         self.assertEqual(record["result"]["checks"], [])
         self.assertFalse((self.root / "checked").exists())
 
-    def test_checks_are_detected_from_the_project_when_none_are_scheduled(self):
+    def commit(self, message="base"):
+        subprocess.run(["git", "-C", str(self.repo), "add", "-A"], env=self.env, check=True)
+        subprocess.run(["git", "-C", str(self.repo), "commit", "-q", "--allow-empty", "-m", message], env=self.env, check=True)
+        return subprocess.run(["git", "-C", str(self.repo), "rev-parse", "HEAD"], env=self.env, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    def test_checks_are_detected_from_the_base_commit_when_none_are_scheduled(self):
         module = self.module()
-        with tempfile.TemporaryDirectory() as tmp:
-            project = Path(tmp)
-            self.assertEqual(module.detect_checks(project), [])
-            (project / "package.json").write_text(json.dumps({"scripts": {"test": 'echo "Error: no test specified" && exit 1'}}))
-            self.assertEqual(module.detect_checks(project), [])
-            (project / "package.json").write_text(json.dumps({"scripts": {"test": "vitest run"}}))
-            self.assertEqual(module.detect_checks(project), ["npm test"])
-            (project / "package.json").unlink()
-            (project / "pyproject.toml").write_text("[project]\nname='x'\n")
-            self.assertEqual(module.detect_checks(project), ["pytest"])
-            (project / "pyproject.toml").unlink()
-            (project / "Makefile").write_text("build:\n\ttrue\ntest:\n\ttrue\n")
-            self.assertEqual(module.detect_checks(project), ["make test"])
-            (project / "Makefile").write_text("build:\n\ttrue\n")
-            self.assertEqual(module.detect_checks(project), [])
-        self.exe("npm", 'import json,os,sys\nfrom pathlib import Path\n(Path(os.environ["GRAVE_ROOT"])/"npm-argv").write_text(json.dumps(sys.argv[1:]))\nprint("1 passing")\n')
+        self.assertEqual(module.detect_checks(self.repo, self.commit()), [])
+        (self.repo / "package.json").write_text(json.dumps({"scripts": {"test": 'echo "Error: no test specified" && exit 1'}}))
+        self.assertEqual(module.detect_checks(self.repo, self.commit()), [])
         (self.repo / "package.json").write_text(json.dumps({"scripts": {"test": "vitest run"}}))
-        subprocess.run(["git", "-C", str(self.repo), "add", "."], env=self.env, check=True)
-        subprocess.run(["git", "-C", str(self.repo), "commit", "-q", "-m", "node"], env=self.env, check=True)
+        self.assertEqual(module.detect_checks(self.repo, self.commit()), ["vitest run"])
+        (self.repo / "package.json").unlink()
+        (self.repo / "pyproject.toml").write_text("[project]\nname='x'\n")
+        self.assertEqual(module.detect_checks(self.repo, self.commit()), ["pytest"])
+        (self.repo / "pyproject.toml").unlink()
+        (self.repo / "Makefile").write_text("build:\n\ttrue\ntest:\n\ttrue\n")
+        self.assertEqual(module.detect_checks(self.repo, self.commit()), ["make test"])
+        (self.repo / "Makefile").write_text("build:\n\ttrue\n")
+        base = self.commit()
+        self.assertEqual(module.detect_checks(self.repo, base), [])
+        # The checkout is not consulted: an uncommitted package.json detects nothing.
+        (self.repo / "package.json").write_text(json.dumps({"scripts": {"test": "vitest run"}}))
+        self.assertEqual(module.detect_checks(self.repo, base), [])
+
+    def test_runner_runs_the_base_test_script_not_the_agents(self):
+        # The base's script string runs directly with the worktree's node_modules/.bin on PATH and GRAVE_BASE set.
+        (self.repo / "node_modules/.bin").mkdir(parents=True)
+        self.exe("vitest", 'import os,sys\nprint("vitest", os.environ["GRAVE_BASE"], flush=True)\nsys.exit(1 if "FAIL" in open("file.txt").read() else 0)\n')
+        (self.repo / "node_modules/.bin/vitest").symlink_to(self.bin / "vitest")
+        (self.repo / "package.json").write_text(json.dumps({"scripts": {"test": "vitest run"}}))
+        base = self.commit("node")
+        self.exe("codex", 'import json,subprocess\nfrom pathlib import Path\n'
+                 'Path("file.txt").write_text("FAIL\\n")\n'
+                 'Path("package.json").write_text(json.dumps({"scripts": {"test": "exit 0"}}))\n'
+                 'subprocess.run(["git","commit","-qam","weaken"], check=True)\n')
         self.add()
-        self.call("worker", "nightly", env=dict(self.env, FAKE_AGENT="commit"))
+        self.call("worker", "nightly")
+        record = self.records()[0]
+        self.assertEqual(record["base"], base)
+        self.assertEqual(record["result"]["verdict"], "checks-failed")
+        check = record["result"]["checks"][0]
+        self.assertEqual((check["cmd"], check["exit_code"], check["source"]), ("vitest run", 1, "base:" + base))
+        self.assertIn("vitest " + base, check["tail"])
+        self.call("check", "results")
+        # Doctor refuses a check that came from anywhere else.
+        path = next((self.store / "nightly/runs").glob("*.json"))
+        for source in ("base:" + "0" * 40, "head"):
+            path.write_text(json.dumps({**record, "result": {**record["result"], "checks": [{**check, "source": source}]}}))
+            self.assertIn("valid verdict" if source == "head" else "not the owner", self.call("check", "results", ok=False).stderr)
+
+    def test_test_entry_point_added_by_the_agent_is_not_a_check(self):
+        self.exe("codex", 'import json,subprocess\nfrom pathlib import Path\n'
+                 'Path("package.json").write_text(json.dumps({"scripts": {"test": "exit 0"}}))\n'
+                 'subprocess.run(["git","add","package.json"], check=True)\nsubprocess.run(["git","commit","-qm","add tests"], check=True)\n')
+        self.add()
+        self.call("worker", "nightly")
         result = self.records()[0]["result"]
-        self.assertEqual(result["verdict"], "ready-for-review")
-        self.assertEqual((result["checks"][0]["cmd"], result["checks"][0]["exit_code"]), ("npm test", 0))
-        self.assertIn("1 passing", result["checks"][0]["tail"])
-        self.assertEqual(json.loads((self.root / "npm-argv").read_text()), ["test"])
+        self.assertEqual((result["verdict"], result["checks"], result["changes"]["commits"]), ("unverified", [], 1))
+        self.assertIn("No checks ran", (self.root / "notifications").read_text())
+
+    def test_check_tails_share_one_budget_and_records_stay_under_the_doctor_limit(self):
+        module = self.module()
+        self.assertEqual(module.fit("", 2), "")
+        self.assertEqual(module.fit("abc", 2), "")
+        self.assertEqual(module.fit("abcdef", 6), "cdef")
+        self.assertLessEqual(len(json.dumps(module.fit("\x1b[31m\u00e9" * 2000, 3000))), 3000)
+        self.exe("noisy", 'import sys\nsys.stdout.write("\\x1b[31m\\u00e9\\ufffd" * 1000)\n')
+        self.add("nightly", *[arg for _ in range(8) for arg in ("--check", str(self.bin / "noisy"))])
+        self.call("worker", "nightly", env=dict(self.env, FAKE_AGENT="commit"))
+        path = next((self.store / "nightly/runs").glob("*.json"))
+        self.assertLess(path.stat().st_size, 48 * 1024)
+        checks = self.records()[0]["result"]["checks"]
+        self.assertEqual(len(checks), 8)
+        self.assertLessEqual(len(json.dumps([c["tail"] for c in checks])), 24 * 1024 + 20)
+        self.assertTrue(all(c["tail"].endswith("\ufffd") for c in checks))
+        self.call("check", "results")
+        # The job is launched again afterwards rather than wedged on its own record.
+        value = self.job(); value["next_due"] = time.time() - 1
+        (self.store / "nightly/job.json").write_text(json.dumps(value))
+        self.call("worker", "nightly", env=dict(self.env, FAKE_AGENT="commit"))
+        self.assertEqual(len(self.records()), 2)
+        path.write_text(path.read_text()[:-2] + ', "pad": "' + "x" * (48 * 1024) + '"}\n')
+        self.assertIn("exceeds", self.call("check", ok=False).stderr)
 
     def test_duplicate_workers_cannot_overlap_and_cancel_stops_live_work(self):
         self.add(); proc = self.background()
@@ -318,7 +381,7 @@ print("<script>literal output</script>", flush=True)
         dash = load_dashboard(dict(self.env, GRAVEDECAY_ALLOWED_USERS="owner@example.test"))
         report = dash.collect_scheduled_runs()
         self.assertEqual(report["runs"][0]["status"], "succeeded")
-        self.assertEqual(report["runs"][0]["result"]["verdict"], "ready-for-review")
+        self.assertEqual(report["runs"][0]["result"]["verdict"], "unverified")
         self.assertIn("literal output", report["runs"][0]["tail"])
         self.assertNotIn("prompt", json.dumps(report))
         self.assertNotIn("PWNED", json.dumps(report))
@@ -379,20 +442,30 @@ print("<script>literal output</script>", flush=True)
         self.call("check")
         self.assertIn("no valid verdict", self.call("check", "results", ok=False).stderr)
         module.recover("nightly")
-        self.assertEqual(self.records()[0]["result"], {"verdict": "ready-for-review", "checks": [], "cost": None,
+        self.assertEqual(self.records()[0]["result"], {"verdict": "unverified", "checks": [], "cost": None,
             "changes": {"commits": 1, "files": 1, "insertions": 1, "deletions": 0, "dirty": False}})
         self.call("check", "results")
-        for broken in ({"verdict": "green"}, {**value["result"], "verdict": "succeeded"}, {**value["result"], "checks": [{"cmd": "x"}]}):
+        for broken in ({"verdict": "green"}, {**value["result"], "verdict": "succeeded"}, {**value["result"], "checks": [{"cmd": "x"}]},
+                       {**value["result"], "checks": [{"cmd": "x", "exit_code": 0, "seconds": 1, "tail": "", "source": "head"}]}):
             path.write_text(json.dumps({**value, "result": broken}))
             self.call("check", "results", ok=False)
+            module.recover("nightly")  # malformed results fall closed, never open
+            self.assertEqual(self.records()[0]["result"]["verdict"], "unverified")
+        # Today's four-key record and a check without `source` stay valid; extra keys are tolerated.
+        four = {"verdict": "ready-for-review", "changes": None, "checks": [{"cmd": "x", "exit_code": 0, "seconds": 1, "tail": ""}], "cost": None}
+        for valid in (four, {**four, "test_changes": []}):
+            path.write_text(json.dumps({**value, "result": valid}))
+            self.call("check", "results")
+            module.recover("nightly")
+            self.assertEqual(self.records()[0]["result"], valid)
         shutil.rmtree(value["dir"])
         path.write_text(json.dumps({**legacy, "status": "failed"}))
         module.recover("nightly")
         self.assertEqual(self.records()[0]["result"]["verdict"], "provider-failed")
         path.write_text(json.dumps(legacy))
         module.recover("nightly")
-        # Without a worktree to inspect, a human decides.
-        self.assertEqual(self.records()[0]["result"], {"verdict": "ready-for-review", "changes": None, "checks": [], "cost": None})
+        # Without a worktree to inspect, nothing is known about the work.
+        self.assertEqual(self.records()[0]["result"], {"verdict": "unverified", "changes": None, "checks": [], "cost": None})
 
     def test_unknown_models_bill_at_the_most_expensive_known_price(self):
         dash = load_dashboard(dict(self.env, GRAVEDECAY_ALLOWED_USERS="owner@example.test"))

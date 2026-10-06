@@ -57,15 +57,15 @@ instructions, verify its work, and avoid merging or deploying.
 ## Result package
 
 Provider exit zero means the CLI completed; it is not a result anyone can act
-on. After the provider exits, the runner itself, never the agent, inspects the
-worktree, runs checks, estimates spend and stores the outcome in the run
-record under `result`:
+on. After the provider exits, the runner inspects the worktree, runs checks
+with a command the agent did not choose, estimates spend and stores the
+outcome in the run record under `result`:
 
 ```json
 "result": {
   "verdict": "ready-for-review",
   "changes": {"commits": 2, "files": 3, "insertions": 41, "deletions": 7, "dirty": false},
-  "checks": [{"cmd": "npm test", "exit_code": 0, "seconds": 38, "tail": "…"}],
+  "checks": [{"cmd": "vitest run", "exit_code": 0, "seconds": 38, "tail": "…", "source": "base:3f9c…"}],
   "cost": {"usd": 0.42, "estimated": true, "model": "claude-sonnet-4-5"}
 }
 ```
@@ -76,9 +76,10 @@ verdict says whether there is something to review:
 
 | verdict | meaning |
 | --- | --- |
-| `ready-for-review` | provider exited 0, the worktree has commits or uncommitted edits, every check passed |
+| `ready-for-review` | provider exited 0, the worktree has commits or uncommitted edits, at least one check ran and every check passed |
 | `no-changes` | provider exited 0 and left no commits and a clean tree; checks are skipped |
 | `checks-failed` | at least one check exited non-zero (or was stopped) |
+| `unverified` | nothing checked the work: no check ran, or the result is missing or malformed; the notification says "No checks ran" |
 | `provider-failed` | the provider exited non-zero, or the runner could not launch it |
 | `timed-out`, `cancelled`, `interrupted`, `skipped` | the run ended the way `status` says, before a result could be judged |
 
@@ -86,18 +87,31 @@ verdict says whether there is something to review:
 the run's base and HEAD, plus `git status --porcelain` for `dirty`.
 
 `checks` are the commands given with `--check '<cmd>'` (repeatable, up to
-eight, each run through `sh -c`). With no flag the runner detects one in the
-worktree: a `package.json` whose `scripts.test` is not npm's "no test
-specified" placeholder runs `npm test`; a `pyproject.toml` or `pytest.ini`
-runs `pytest`; a `Makefile` with a `test` target runs `make test`; otherwise
-no check runs. Checks run after the provider, in the worktree, with the same
-working directory, environment, process supervision and runtime budget as the
-provider. They are not run when the provider failed or made no changes. Each
-check's full output is appended to the session transcript; the record keeps
-the last 4000 bytes as `tail`. A check still running when the job's timeout,
-a cancellation or gaming mode ends the run is terminated, recorded with a
-non-zero exit and a note in its tail, and the run's `status` reflects the
-stop as it would during the provider phase.
+eight, each run through `sh -c`), recorded with `source: "owner"`. With no
+flag the runner detects one from the run's **base commit**, read with
+`git show <base>:…` from the source checkout, never from the worktree, and
+records `source: "base:<sha>"`: a `package.json` whose `scripts.test` is not
+npm's "no test specified" placeholder runs that script string directly (not
+`npm test`, so no `pretest` hook) with the worktree's `node_modules/.bin`
+first on `PATH`; a `pyproject.toml` or `pytest.ini` runs `pytest`; a
+`Makefile` with a `test` target runs `make test`; otherwise no check runs and
+the verdict is `unverified`. A test entry point the agent adds is not
+detected; one it rewrites is ignored. `GRAVE_BASE` carries the base SHA to
+every check, for owner commands that want to compare against it.
+
+Checks run after the provider, in the worktree (uncommitted work and
+installed dependencies included), with the same working directory, process
+supervision and runtime budget as the provider. They are not run when the
+provider failed or made no changes. The command is the owner's or the
+base's, but what it executes is the worktree: agent-written tests, fixtures,
+`pytest` configuration and Makefile recipes all run, as the owner. See
+[SECURITY.md](SECURITY.md). Each check's full output is appended to the
+session transcript; the record keeps a tail of each (up to 4000 bytes,
+trimmed so all tails together fit 24 KiB of JSON, which keeps every run
+record under the 48 KiB doctor limit). A check still running when the job's
+timeout, a cancellation or gaming mode ends the run is terminated, recorded
+with a non-zero exit and a note in its tail, and the run's `status` reflects
+the stop as it would during the provider phase.
 
 `cost` reuses the dashboard's usage parser over the owner's Claude Code
 transcripts and Codex rollouts, keeping only sessions whose working directory
@@ -107,9 +121,12 @@ known price so the estimate errs high. `estimated` is always true. `cost` is
 null when no transcript for the worktree was found.
 
 `grave agents jobs` shows each job's last status and verdict; `--json` adds
-`last_verdict`. Run records written before results existed receive a verdict
-when the scheduler next reconciles them: a still-present worktree is inspected
-for changes, otherwise the run is marked `ready-for-review` so a human decides.
+`last_verdict`. A run record without a valid result (written before results
+existed, or malformed) receives one when the scheduler next reconciles it: a
+still-present worktree can show `no-changes`, otherwise the run is
+`unverified`. A record that already carries a valid verdict is never
+rewritten, and a record from an older runner (no `source` on its checks)
+stays valid.
 
 ## Limits and modes
 
@@ -142,9 +159,11 @@ Completion, failure and skips use the existing `agent-done` notification event.
 Enable a channel in dashboard settings or follow [NOTIFICATIONS.md](NOTIFICATIONS.md).
 
 `grave doctor` checks saved prompt ownership, permissions, schema, source repo,
-run consistency and the scheduler service when jobs exist, and separately that
-every finished run record carries a valid result and verdict and that the job
-command table adds no bypass flag. Restarting the service reconciles unfinished
+run consistency, a 48 KiB size limit per run record and the scheduler service
+when jobs exist, and separately that every finished run record carries a
+valid result and verdict, that every check's `source` is `owner` or the
+record's own base commit, and that the job command table adds no bypass flag.
+Restarting the service reconciles unfinished
 or verdict-less records left by an interrupted or older worker. Re-raise to
 install or update the runner; no individual root-owned timer files need to be
 edited. Uninstall removes the scheduler service but retains prompts and

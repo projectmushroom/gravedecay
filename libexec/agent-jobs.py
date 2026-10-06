@@ -25,13 +25,18 @@ GRAVE = os.environ.get("GRAVE_BIN", "/usr/local/bin/grave")
 STOP = False
 DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 # `status` is the process lifecycle: how the provider ended. `result.verdict`
-# is what the runner, never the agent, concluded about the work afterwards.
+# is what the runner concluded about the work afterwards, with a command the
+# agent did not choose. `unverified` is the fail-closed default: a succeeded
+# run with no check executed, or a result that is missing or malformed.
 STATUSES = ("running", "succeeded", "failed", "skipped", "cancelled", "timed-out", "interrupted")
-VERDICTS = ("ready-for-review", "no-changes", "checks-failed", "provider-failed",
+VERDICTS = ("ready-for-review", "no-changes", "checks-failed", "unverified", "provider-failed",
             "timed-out", "cancelled", "interrupted", "skipped")
 CHECK_LIMIT = 8      # commands per job
 CHECK_LENGTH = 500   # characters per command
-TAIL = 4000          # bytes of check output kept in the run record
+TAIL = 4000          # bytes of one check's output read from its end
+TAIL_BUDGET = 24 * 1024   # JSON bytes of check tails per run record, shared across checks
+RECORD_LIMIT = 48 * 1024  # bytes per run record on disk; doctor enforces it
+SOURCE = re.compile(r"owner|base:[0-9a-f]{40}")
 LOG_COPY = 1 << 20   # bytes of check output copied into the session transcript
 _SHARED = {}
 
@@ -330,37 +335,45 @@ def change_summary(directory, base):
             "dirty": bool(git("-C", directory, "status", "--porcelain"))}
 
 
-def detect_checks(directory):
-    """The project's own test entry point, when the owner scheduled no --check."""
+def detect_checks(source, base):
+    """The project's own test entry point as committed at the run's base, read with
+    `git show` from the source checkout so the agent's worktree cannot supply it."""
+    def at_base(name):
+        try:
+            return git("-C", source, "show", base + ":" + name)
+        except subprocess.CalledProcessError:
+            return None
     try:
-        package = json.loads(bounded_read(directory / "package.json"))
+        package = json.loads(at_base("package.json") or "null")
         script = (package.get("scripts") or {}).get("test") if isinstance(package, dict) else None
         # `npm init` writes a placeholder that exits 1; that is not a check.
         if isinstance(script, str) and script.strip() and "no test specified" not in script:
-            return ["npm test"]
-    except (OSError, ValueError, AttributeError):
+            return [script.strip()]
+    except (ValueError, AttributeError):
         pass
-    if (directory / "pyproject.toml").is_file() or (directory / "pytest.ini").is_file():
+    if at_base("pyproject.toml") is not None or at_base("pytest.ini") is not None:
         return ["pytest"]
-    try:
-        if re.search(r"^test\s*:", bounded_read(directory / "Makefile"), re.M):
-            return ["make test"]
-    except OSError:
-        pass
+    if re.search(r"^test\s*:", at_base("Makefile") or "", re.M):
+        return ["make test"]
     return []
 
 
-def bounded_read(path, limit=1 << 20):
-    with open(path, "rb") as stream:
-        return stream.read(limit).decode("utf-8", "replace")
+def fit(text, budget):
+    """Drop leading characters until the JSON encoding fits the byte budget;
+    json escapes control and non-ASCII characters to six bytes each."""
+    while text and (size := len(json.dumps(text))) > budget:
+        text = text[len(text) - len(text) * budget // size:]
+    return text
 
 
-def run_check(cmd, directory, log, job, record, started):
-    """One check in the worktree: same directory, environment, supervision and
-    runtime budget as the provider. Output goes to the transcript; the tail is kept."""
+def run_check(cmd, source, directory, base, log, job, record, started, budget=TAIL_BUDGET):
+    """One check in the worktree: same directory, supervision and runtime budget
+    as the provider, with GRAVE_BASE and the worktree's node_modules/.bin on
+    PATH. Output goes to the transcript; a tail within `budget` JSON bytes is kept."""
     began = time.monotonic()
+    env = dict(os.environ, GRAVE_BASE=base, PATH=str(directory / "node_modules/.bin") + ":" + os.environ.get("PATH", ""))
     with tempfile.TemporaryFile() as output:
-        proc = subprocess.Popen(["/bin/sh", "-c", cmd], cwd=directory, stdin=subprocess.DEVNULL,
+        proc = subprocess.Popen(["/bin/sh", "-c", cmd], cwd=directory, env=env, stdin=subprocess.DEVNULL,
                                 stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
         try:
             supervise(proc, job["name"], started, job["timeout"], record)
@@ -385,7 +398,7 @@ def run_check(cmd, directory, log, job, record, started):
             transcript.write(f"\n(exit {proc.returncode}, {seconds}s)\n".encode())
     if record["status"] != "succeeded":
         tail += "\n[check stopped: " + str(record.get("reason")) + "]"
-    return {"cmd": cmd, "exit_code": proc.returncode, "seconds": seconds, "tail": tail}
+    return {"cmd": cmd, "exit_code": proc.returncode, "seconds": seconds, "tail": fit(tail, budget), "source": source}
 
 
 def cost_for(directory, since):
@@ -408,7 +421,7 @@ def verdict_for(record, changes=None, checks=()):
         return "no-changes"
     if any(check["exit_code"] != 0 for check in checks):
         return "checks-failed"
-    return "ready-for-review"
+    return "ready-for-review" if checks else "unverified"
 
 
 def package(verdict, changes=None, checks=(), cost=None):
@@ -416,7 +429,9 @@ def package(verdict, changes=None, checks=(), cost=None):
 
 
 def result_package(job, record, directory, base, log, started):
-    """Computed by the runner after the provider exits; the agent has no say in it."""
+    """Computed by the runner after the provider exits. The check command comes
+    from the owner's --check or from the base commit, never from the worktree;
+    it still executes agent-written code in the worktree, as the owner."""
     changes = None
     try:
         changes = change_summary(directory, base)
@@ -424,18 +439,21 @@ def result_package(job, record, directory, base, log, started):
         print(job["name"] + ": could not summarise changes: " + str(error)[:200], file=sys.stderr, flush=True)
     checks = []
     if record["status"] == "succeeded" and verdict_for(record, changes) != "no-changes":
-        commands = job.get("checks")
+        commands, source = job.get("checks"), "owner"
         if commands is None:
-            commands = detect_checks(directory)
+            commands, source = detect_checks(repo_path(job["repo"]), base), "base:" + base
         for cmd in commands:
-            checks.append(run_check(cmd, directory, log, job, record, started))
+            checks.append(run_check(cmd, source, directory, base, log, job, record, started, TAIL_BUDGET // len(commands)))
             if record["status"] != "succeeded":  # cancelled or out of time while checking
                 break
     return package(verdict_for(record, changes, checks), changes, checks, cost_for(directory, started))
 
 
 def valid_result(value):
-    if not isinstance(value, dict) or set(value) != {"verdict", "changes", "checks", "cost"} or value["verdict"] not in VERDICTS:
+    """Required keys with their shapes; unknown extra keys are tolerated so a
+    newer runner's record never reads as invalid, and `source` is optional for
+    checks recorded before it existed."""
+    if not isinstance(value, dict) or not {"verdict", "changes", "checks", "cost"} <= set(value) or value["verdict"] not in VERDICTS:
         return False
     changes = value["changes"]
     if changes is not None and not (isinstance(changes, dict) and set(changes) == {"commits", "files", "insertions", "deletions", "dirty"}
@@ -443,9 +461,11 @@ def valid_result(value):
                                      and type(changes["dirty"]) is bool):
         return False
     if not isinstance(value["checks"], list) or not all(
-            isinstance(check, dict) and set(check) == {"cmd", "exit_code", "seconds", "tail"}
+            isinstance(check, dict) and {"cmd", "exit_code", "seconds", "tail"} <= set(check)
             and isinstance(check["cmd"], str) and (check["exit_code"] is None or type(check["exit_code"]) is int)
-            and type(check["seconds"]) in (int, float) and isinstance(check["tail"], str) for check in value["checks"]):
+            and type(check["seconds"]) in (int, float) and isinstance(check["tail"], str)
+            and ("source" not in check or isinstance(check["source"], str) and SOURCE.fullmatch(check["source"]))
+            for check in value["checks"]):
         return False
     cost = value["cost"]
     if cost is not None and not (isinstance(cost, dict) and set(cost) == {"usd", "estimated", "model"}
@@ -456,8 +476,8 @@ def valid_result(value):
 
 
 def legacy_result(record):
-    """A verdict for a record finished before results existed. A live worktree
-    tells us whether there is anything to review; otherwise a human decides."""
+    """A verdict for a record whose result is missing or malformed. A live
+    worktree can still show `no-changes`; anything else is `unverified`."""
     changes = None
     if record.get("status") == "succeeded" and isinstance(record.get("session"), str) and isinstance(record.get("dir"), str):
         try:
@@ -470,10 +490,13 @@ def legacy_result(record):
 
 
 def notify(record):
+    result = record.get("result") or {}
+    verdict = result.get("verdict")
+    title = "Scheduled " + record["name"] + ": " + record["status"] + ("" if verdict in (None, record["status"]) else ", " + verdict)
+    body = record.get("reason") or ("No checks ran; nothing verified the work. " if verdict == "unverified" and not result.get("checks") else "") \
+        + "Open the overnight report to review output and the isolated worktree."
     try:
-        subprocess.run([GRAVE, "notify", "--event", "agent-done", "--link", "/grave/?tab=work",
-                        "Scheduled " + record["name"] + ": " + record["status"],
-                        record.get("reason") or "Open the overnight report to review output and the isolated worktree."],
+        subprocess.run([GRAVE, "notify", "--event", "agent-done", "--link", "/grave/?tab=work", title, body],
                        timeout=20, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired):
         pass  # Results remain durable even if a notification channel is unavailable.
@@ -534,7 +557,7 @@ def worker(name):
             if proc is not None:
                 terminate(proc)
             if not valid_result(record.get("result")):
-                record["result"] = package(verdict_for(record))
+                record["result"] = package(verdict_for(record))  # succeeded without a result is unverified
             record["finished"] = time.time()
             write_json(target, record)
             if run_lock is not None:
@@ -554,7 +577,7 @@ def recover(name):
                     value.update(status="interrupted", reason="previous worker ended without a result", finished=time.time())
                     value["result"] = package("interrupted")
                     write_json(target, value)
-                elif not valid_result(value.get("result")):
+                elif not valid_result(value.get("result")):  # a valid verdict is never rewritten
                     value["result"] = legacy_result(value)
                     write_json(target, value)
     except BlockingIOError:
@@ -602,13 +625,19 @@ def check(what=None):
         try:
             with locked(job_dir(name) / ".run.lock", blocking=False):
                 for path in (job_dir(name) / "runs").glob("*.json"):
+                    if path.lstat().st_size > RECORD_LIMIT:
+                        raise ValueError(name + ": run record " + path.name + " exceeds " + str(RECORD_LIMIT) + " bytes")
                     record = json.loads(read_private(path))
                     if not isinstance(record, dict) or record.get("status") not in STATUSES:
                         raise ValueError(name + ": invalid run record " + path.name)
                     if record.get("status") == "running":
                         raise ValueError(name + ": abandoned run; restart gravedecay-agents to reconcile it")
-                    if what == "results" and not valid_result(record.get("result")):
-                        raise ValueError(name + ": run " + path.name + " has no valid verdict; restart gravedecay-agents to reconcile it")
+                    if what == "results":
+                        if not valid_result(record.get("result")):
+                            raise ValueError(name + ": run " + path.name + " has no valid verdict; restart gravedecay-agents to reconcile it")
+                        for check_ in record["result"]["checks"]:
+                            if check_.get("source", "owner") not in ("owner", "base:" + str(record.get("base"))):
+                                raise ValueError(name + ": run " + path.name + " ran a check from " + check_["source"] + ", not the owner or its base commit")
         except BlockingIOError:
             pass  # A live worker owns the run and will record its result.
     if what == "results":
@@ -633,7 +662,7 @@ def main():
     run.add_argument("--timeout", type=int, default=7200)
     run.add_argument("--check", action="append", metavar="CMD",
                      help="verification command run in the worktree after the agent; repeatable. "
-                          "Without it the runner detects npm test, pytest or make test.")
+                          "Without it the runner detects the base commit's package.json test script, pytest or make test.")
     jobs = sub.add_parser("jobs"); jobs.add_argument("command", nargs="?", choices=("cancel",)); jobs.add_argument("name", nargs="?"); jobs.add_argument("--json", action="store_true")
     sub.add_parser("scheduler")
     sub.add_parser("check").add_argument("what", nargs="?", choices=("results",))
