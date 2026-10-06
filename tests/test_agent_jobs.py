@@ -40,10 +40,14 @@ class AgentJobTests(unittest.TestCase):
         self.store = self.root / "config/secrets/agent-jobs"
         self.prompt = self.root / "prompt.txt"; self.prompt.write_text('Review $(touch PWNED); `echo nope` and "quoted text".\n')
         self.env = dict(os.environ, HOME=str(self.home), GRAVE_ROOT=str(self.root), MULTI_USER="0",
+            GRAVE_FREEZE_FILE=str(self.root / "cgroup.freeze"),
             PATH=str(self.bin) + ":" + str(Path(sys.executable).parent) + ":" + os.environ["PATH"],
             GIT_AUTHOR_NAME="Test", GIT_AUTHOR_EMAIL="test@example.test",
             GIT_COMMITTER_NAME="Test", GIT_COMMITTER_EMAIL="test@example.test")
-        self.exe("systemctl", 'import os,sys\nfrom pathlib import Path\nsys.exit(3 if (Path(os.environ["GRAVE_ROOT"])/"gaming").exists() else 0)\n')
+        self.exe("systemctl", 'import os,sys\nfrom pathlib import Path\n'
+                 'if sys.argv[1] == "show": print("After=" + os.environ.get("FAKE_AFTER", "network.target") + "\\nRequires=\\nWants=\\nBindsTo=\\nRequisite=\\nPartOf=\\n"); sys.exit(0)\n'
+                 'sys.exit(3 if "t3code" in sys.argv else 0)\n')
+        self.freeze = self.root / "cgroup.freeze"
         self.exe("notify", 'import json,os,sys\nfrom pathlib import Path\nwith (Path(os.environ["GRAVE_ROOT"])/"notifications").open("a") as f: f.write(json.dumps(sys.argv[1:])+"\\n")\n')
         self.env["GRAVE_BIN"] = str(self.bin / "notify")
         # A check that records where it ran and exits with FAKE_CHECK.
@@ -440,25 +444,68 @@ print("<script>literal output</script>", flush=True)
         self.assertFalse(self.job()["enabled"])
         self.assertTrue(Path(self.records()[0]["dir"]).exists())
 
-    def test_gaming_mode_skips_due_jobs_without_thawing(self):
+    def test_gaming_mode_defers_due_jobs_without_a_record_and_runs_after_the_thaw(self):
         self.add("nightly", "--on", "Mon 02:00")
-        path = self.store / "nightly/job.json"; value = self.job(); value["next_due"] = time.time() - 60
+        path = self.store / "nightly/job.json"; value = self.job(); due = value["next_due"] = time.time() - 60
         path.write_text(json.dumps(value))
-        (self.root / "gaming").touch()
+        self.freeze.write_text("1\n")
         self.call("worker", "nightly")
-        self.assertEqual(self.records()[0]["status"], "skipped")
-        self.assertEqual(self.records()[0]["result"], {"verdict": "skipped", "changes": None, "checks": [], "cost": None})
-        self.assertGreater(self.job()["next_due"], time.time())
+        self.assertEqual(self.records(), [])
+        self.assertEqual(self.job()["next_due"], due)
         self.assertFalse((self.root / "calls").exists())
         self.assertFalse((self.root / "worktrees").exists())
-        self.call("check", "results")
+        self.call("check"); self.call("check", "results")
+        self.freeze.write_text("0\n")
+        self.call("worker", "nightly", env=dict(self.env, FAKE_AGENT="commit"))
+        self.assertEqual(self.records()[0]["status"], "succeeded")
+        self.assertEqual(self.records()[0]["due"], due)
+        self.assertGreater(self.job()["next_due"], time.time())
 
-    def test_entering_gaming_mode_cancels_an_active_run(self):
+    def test_t3_stopped_or_masked_does_not_stop_a_job(self):
+        # The fake systemctl reports t3code inactive for every query; the verdict still arrives.
+        self.add("nightly", "--check", "true")
+        self.call("worker", "nightly", env=dict(self.env, FAKE_AGENT="commit"))
+        self.assertEqual(self.records()[0]["result"]["verdict"], "ready-for-review")
+        unit = (ROOT / "systemd/gravedecay-agents.service.tmpl").read_text()
+        self.assertNotIn("t3code", unit)
+        self.call("check")
+        self.assertIn("depends on t3code.service", self.call("check", ok=False, env=dict(self.env, FAKE_AFTER="network.target t3code.service")).stderr)
+
+    def test_entering_gaming_mode_cancels_an_active_run_and_requeues_it_once(self):
         self.add(); proc = self.background()
         self.wait_for(lambda: (self.root / "started").exists())
-        (self.root / "gaming").touch()
+        self.freeze.write_text("1\n")
         proc.wait(timeout=10)
-        self.assertEqual(self.records()[0]["reason"], "gaming mode entered during run")
+        first = self.records()[0]
+        self.assertEqual((first["status"], first["reason"]), ("cancelled", "gaming mode entered during run"))
+        job = self.job()
+        self.assertEqual(job["requeue"], {"run_id": first["requeued"], "of": first["run_id"]})
+        self.assertLessEqual(job["next_due"], time.time())
+        self.assertIn("Scheduled nightly: cancelled", (self.root / "notifications").read_text())
+        self.call("check"); self.call("check", "results")
+        # Still gaming: the requeued run waits. Thawed: it runs under the promised id and is final.
+        self.call("worker", "nightly")
+        self.assertEqual(len(self.records()), 1)
+        self.freeze.write_text("0\n")
+        (self.root / "started").unlink()
+        proc = self.background()
+        self.wait_for(lambda: (self.root / "started").exists())
+        self.freeze.write_text("1\n")
+        proc.wait(timeout=10)
+        second = next(r for r in self.records() if r["run_id"] == first["requeued"])
+        self.assertEqual((second["status"], second["requeue_of"]), ("cancelled", first["run_id"]))
+        self.assertNotIn("requeued", second)
+        self.assertNotIn("requeue", self.job())
+        self.assertEqual(len(self.records()), 2)
+        self.call("check")
+        # Doctor refuses a gaming cancel that nobody requeued, and a malformed requeue marker.
+        path = next(p for p in (self.store / "nightly/runs").glob("*.json") if json.loads(p.read_text())["run_id"] == first["run_id"])
+        path.write_text(json.dumps({k: v for k, v in first.items() if k != "requeued"}))
+        self.assertIn("never requeued", self.call("check", ok=False).stderr)
+        path.write_text(json.dumps(first))
+        job = self.job(); job["requeue"] = {"run_id": "../x", "of": first["run_id"]}
+        (self.store / "nightly/job.json").write_text(json.dumps(job))
+        self.assertIn("invalid requeue marker", self.call("check", ok=False).stderr)
 
     def test_scheduler_launches_due_work_and_shutdown_records_cancellation(self):
         self.add(); proc = self.background("scheduler")
@@ -674,6 +721,7 @@ print("<script>literal output</script>", flush=True)
         unit = (ROOT / "systemd/gravedecay-agents.service.tmpl").read_text()
         self.assertIn("User=@USER@", unit); self.assertIn("Environment=HOME=@HOME@", unit)
         self.assertIn("KillMode=control-group", unit)
+        self.assertNotIn("t3code", unit)
         for path in ("bin/grave", "raise.sh", "uninstall.sh"):
             self.assertIn("gravedecay-agents.service", (ROOT / path).read_text())
         raise_sh = (ROOT / "raise.sh").read_text()

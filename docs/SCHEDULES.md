@@ -153,15 +153,21 @@ current work; use `grave agents jobs cancel <name>` or the report's Cancel job
 button. Killing a terminal review shell does not cancel a headless job.
 Results and worktrees are retained after cancellation.
 
-If developer services are stopped or the agent freezer is active when a run
-is due, it is recorded as skipped. Entering gaming mode during a run cancels
-that run within the next mode check (about two seconds, plus process shutdown).
+Gaming mode is the agent freezer (`/sys/fs/cgroup/grave-torpor/cgroup.freeze`)
+and nothing else: the runner does not consult T3, so a job runs to a verdict
+with `t3code` stopped or masked, and `gravedecay-agents.service` neither orders
+after nor depends on it. A run due while gaming keeps its due time and starts
+after the thaw; nothing is recorded. Entering gaming mode during a run cancels
+that run within the next mode check (about two seconds, plus process shutdown)
+and queues it again once: the cancelled record carries `requeued: <run id>`,
+the job's `next_due` becomes now, and the replacement record carries
+`requeue_of`; if gaming mode cancels the replacement too, that is final.
 The runner never starts services or thaws the appliance. Missed schedule times
-while the host was off coalesce into one run at restart, or one recorded skip
-if it restarts in gaming mode. A run interrupted by a service or host failure
-is reported as interrupted; it is not automatically retried. Recurring jobs
-keep their next scheduled occurrence. DST transitions do not replay an already
-claimed occurrence.
+while the host was off coalesce into one run at restart. A run interrupted by
+a service or host failure is reported as interrupted; it is not automatically
+retried. Recurring jobs keep their next scheduled occurrence. DST transitions
+do not replay an already claimed occurrence. Records with status `skipped`
+come from runners before this behaviour and stay valid.
 
 ## Report, notifications and doctor
 
@@ -174,13 +180,15 @@ carries each run's `result`. **Needs attention** counts runs whose verdict is
 `checks-failed`, `provider-failed` or `unverified` ([DASHBOARD.md](DASHBOARD.md)).
 Reports, the diff and cancellation are owner-gated. Saved prompt files are not
 exposed by the report API; provider output can include task text.
-Completion, failure and skips use the existing `agent-done` notification event;
+Completion, failure and cancellation use the existing `agent-done` notification event;
 its deep link stays on the dashboard origin.
 Enable a channel in dashboard settings or follow [NOTIFICATIONS.md](NOTIFICATIONS.md).
 
 `grave doctor` checks saved prompt ownership, permissions, schema, source repo,
-run consistency, a 48 KiB size limit per run record and the scheduler service
-when jobs exist, and separately that every finished run record carries a
+run consistency, a 48 KiB size limit per run record, that every run gaming
+mode cancelled was requeued, and the scheduler service when jobs exist
+(including that it does not order after or depend on `t3code.service`), and
+separately that every finished run record carries a
 valid result and verdict (including a well-formed `test_changes` list when
 present), that every check's `source` is `owner` or the record's own base
 commit, that the job command table adds no bypass flag, and that the

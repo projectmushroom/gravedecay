@@ -105,7 +105,8 @@ firewalld (default zone `drop`, allow `ssh`, trust `tailscale0`).
 ## Reboot, auto-start & self-heal
 
 SteamOS boots into Game Mode (gamescope), but that's just the graphical session —
-the appliance comes up underneath it regardless:
+gamewatch does not read it as a game, and the appliance comes up underneath it
+regardless:
 
 - **System units** (`tailscaled`, `sshd`, `gravedecay`, `gravedecay-term`,
   `t3code`) are `enabled`, so they start at boot into `multi-user.target`. T3
@@ -154,10 +155,12 @@ profile reapplications never undo `grave gamewatch off` (or `on`). Manual
 
 When enabled, launching a game **freezes agents + frees RAM/GPU** (`grave
 gaming`); quitting **thaws + restores** (`grave developer`). Detection follows
-the configured `GAME_SIGNALS` order: `gamescope`, an active `app-steam-*.scope`
-with measurable CPU work, Feral GameMode's D-Bus `ClientCount`, then the exact
-`GAME_PROC` name as a last resort. The list and Steam-cgroup sample thresholds
-live in `grave.conf`. It only auto-restores after seeing a game, so it does not
+the configured `GAME_SIGNALS` order: an active `app-steam-*.scope` with
+measurable CPU work, Feral GameMode's D-Bus `ClientCount`, then the exact
+`GAME_PROC` name as a last resort. `gamescope` is the Game Mode session itself,
+so it is not a default signal and, if listed, only counts together with one of
+the others; `grave doctor` fails a `grave.conf` that lists it before
+`steam-cgroup`. The list and Steam-cgroup sample thresholds live in `grave.conf`. It only auto-restores after seeing a game, so it does not
 fight a manual `grave gaming`.
 
 ```sh

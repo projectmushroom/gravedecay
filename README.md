@@ -280,4 +280,4 @@ Writing your own is ~20 lines; see `profiles/README.md`.
 MIT. Daemons in the dirt, shipping while you sleep. 🪦
 
 Saved prompts can run unattended with isolated worktrees and an owner-only
-[overnight report](docs/SCHEDULES.md), including cancellation and gaming-mode skips.
+[overnight report](docs/SCHEDULES.md), including cancellation; gaming mode defers a due job and requeues one it interrupts.
