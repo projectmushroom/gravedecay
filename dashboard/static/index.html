@@ -1389,6 +1389,10 @@ function runCard(r){
   // windows are labelled by length; it is the account's position, not this run's share.
   const quota=res.quota?.windows?.length?`${esc(res.quota.provider)} account quota at run end · ${res.quota.windows.map(w=>`${quotaWindow(w.window_minutes)} ${esc(String(w.used_percent))}% used, resets ${esc(quotaReset(w.resets_at))}`).join(' · ')} · account-wide snapshot, ChatGPT-plan sign-in only`:'';
   const when=esc(new Date(r.started*1000).toLocaleString());
+  // Head-only live preview (docs/SCHEDULES.md): the job's serve command running in this run's
+  // worktree behind tailscale serve, for 24 hours from `started` unless stopped earlier.
+  const pv=res.preview,live=pv&&!pv.stopped&&(pv.started+86400)*1000>Date.now();
+  const preview=pv?`<div class="dim" data-preview="${live?'live':'ended'}">${live?`<a class="mini" href="${esc(pv.url)}" target="_blank" rel="noopener">Open live</a> · :${esc(String(pv.port))} until ${esc(new Date((pv.started+86400)*1000).toLocaleString())}`:'Live preview ended'}</div>`:'';
   return `<div class="runcard" data-run="${esc(r.name+'-'+r.started)}" data-verdict="${esc(verdict)}">
     <div class="runhead"><b>${esc(r.name)}</b> <span class="verdict">${esc(verdict)}</span> <span class="dim2">· ${esc(r.status)}${r.exit_code!=null?' (exit '+esc(String(r.exit_code))+')':''} · ${when}</span></div>
     ${r.reason?`<p class="dim">${esc(r.reason)}</p>`:''}
@@ -1396,6 +1400,7 @@ function runCard(r){
     ${checks.length?`<ul class="checks">${checks.map(c=>`<li><code>${esc(c.cmd)}</code> <span class="dim2">· ${esc(String(c.source||'owner').replace(/^(base:[0-9a-f]{12})[0-9a-f]{28}$/,'$1'))} · ${c.exit_code==null?'stopped':'exit '+esc(String(c.exit_code))} · ${esc(String(c.seconds))}s</span></li>`).join('')}</ul>`
       :(r.status==='succeeded'&&verdict!=='no-changes'?'<div class="dim">No checks ran; nothing verified the work.</div>':'')}
     ${tests.length?`<div class="testchanges">⚠ Test changes: ${tests.map(esc).join(' · ')}</div>`:''}
+    ${preview}
     <div class="dim">${esc(cost)}</div>
     ${quota?`<div class="dim" data-quota>${quota}</div>`:''}
     <details data-report="${esc(r.name+'-'+r.started)}"><summary>Output</summary>${r.session&&r.log?`<a class="viewlog" href="#" data-log="${esc(r.session)}" data-file="${esc(r.log)}">Transcript</a> · <a class="viewdiff" href="#" data-diff="${esc(r.session)}">Diff</a> · <a href="${esc(appUrl('/term/?arg='+encodeURIComponent(r.session)))}">Open worktree</a>`:''}<pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto">${esc(r.tail||'No output recorded.')}</pre></details>

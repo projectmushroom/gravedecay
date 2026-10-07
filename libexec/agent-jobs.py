@@ -12,11 +12,14 @@ from pathlib import Path
 import pwd
 import re
 import signal
+import socket
 import stat
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 import uuid
 
 ROOT = Path(os.environ.get("GRAVE_ROOT", "/srv/dev"))
@@ -54,6 +57,15 @@ CI_PATH = re.compile(r"^(\.github/workflows/|\.gitlab-ci\.yml$|\.circleci/|Jenki
 LOCKFILE = re.compile(r"(^|/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|poetry\.lock|uv\.lock|Pipfile\.lock|Cargo\.lock|go\.sum|Gemfile\.lock|composer\.lock|mix\.lock|flake\.lock)$")
 SNAPSHOT = re.compile(r"(^|/)__snapshots__/|\.snap$|(^|/)snapshots?/")
 LOG_COPY = 1 << 20   # bytes of check output copied into the session transcript
+# Live previews: `--serve` jobs get one fixed port here (grave.conf PREVIEW_RANGE,
+# passed in by the grave CLI; never a PREVIEW_RESERVED platform port).
+PREVIEW_RANGE = os.environ.get("PREVIEW_RANGE", "3000-3999")
+PREVIEW_RESERVED = os.environ.get("PREVIEW_RESERVED", "3050")
+PREVIEW_TTL = 86400       # a live preview is stopped and unmapped this long after it started
+PREVIEW_WAIT = int(os.environ.get("GRAVE_PREVIEW_WAIT", "120"))  # seconds for the serve command to listen and answer 200
+PREVIEW_PROBE = os.environ.get("GRAVE_PREVIEW_PROBE", "https://{host}:{port}/")  # tests probe plain http instead
+PREVIEW_REGISTRY = ROOT / "config/previews"  # ports mapped by hand with `grave preview`, one per line
+LOOPBACK = "0100007F"     # 127.0.0.1 as /proc/net/tcp prints it
 _SHARED = {}
 
 
@@ -180,6 +192,8 @@ def read_job(name):
         raise ValueError("invalid due time")
     if not valid_checks(value.get("checks")):
         raise ValueError("invalid check commands")
+    if not valid_serve(value.get("serve")):
+        raise ValueError("invalid serve command or port")
     pending = value.get("requeue")
     if pending is not None and not (isinstance(pending, dict) and set(pending) == {"run_id", "of"}
                                     and all(isinstance(pending[key], str) and re.fullmatch(r"[0-9]{8}T[0-9]{6}-[0-9a-f]{6}", pending[key]) for key in pending)):
@@ -223,6 +237,12 @@ def add(args):
         raise ValueError("prompt must be non-empty UTF-8 text, at most 64 KiB")
     if not valid_checks(args.check):
         raise ValueError(f"--check takes at most {CHECK_LIMIT} printable commands of up to {CHECK_LENGTH} characters")
+    serve = None
+    if args.serve is not None:
+        private_dir(STORE)
+        serve = {"cmd": args.serve, "port": allocate_port()}
+        if not valid_serve(serve):
+            raise ValueError(f"--serve takes one printable command of up to {CHECK_LENGTH} characters that uses $PORT")
     schedule = args.at or args.on
     calendar(schedule)
     if args.at and " " in args.at:
@@ -235,7 +255,7 @@ def add(args):
             stream.write(prompt)
         private_dir(path / "runs")
         value = dict(name=args.name, repo=repo, agent=args.agent, schedule=schedule,
-                     timeout=args.timeout, enabled=True, created=now, checks=args.check,
+                     timeout=args.timeout, enabled=True, created=now, checks=args.check, serve=serve,
                      next_due=next_due(schedule, now) if schedule else now)
         write_json(path / "job.json", value)
         read_job(args.name)
@@ -251,6 +271,8 @@ def cancel(name):
         value = read_job(name)
         value.update(enabled=False, next_due=None)
         write_json(path / "job.json", value)
+    if value.get("serve"):
+        stop_preview(path, value, "job cancelled")
     print(name + ": cancelled; running work will stop and results are retained")
 
 
@@ -618,6 +640,12 @@ def valid_result(value, status="succeeded"):
         return False
     if "quota" in value and not valid_quota(value["quota"]):
         return False
+    preview = value.get("preview")
+    if "preview" in value and not (isinstance(preview, dict) and {"port", "url", "started"} <= set(preview) <= {"port", "url", "started", "stopped"}
+                                   and type(preview["port"]) is int and 0 < preview["port"] < 65536
+                                   and isinstance(preview["url"], str) and preview["url"].startswith("https://")
+                                   and all(type(preview[key]) in (int, float) and preview[key] > 0 for key in preview if key != "url" and key != "port")):
+        return False
     return True
 
 
@@ -633,6 +661,262 @@ def legacy_result(record):
         except (OSError, ValueError, subprocess.CalledProcessError):
             changes = None
     return package(verdict_for(record, changes), changes)
+
+
+# --------------------------------------------------------------- preview ----
+# ponytail: one live preview per job, on a port fixed when the job is created;
+# a per-run allocator when someone needs two previews of one job at once.
+def preview_ports():
+    low, high = (int(part) for part in PREVIEW_RANGE.split("-"))
+    return range(low, high + 1), {int(part) for part in PREVIEW_RESERVED.split()}
+
+
+def valid_serve(value):
+    ports, reserved = preview_ports()
+    return value is None or (isinstance(value, dict) and set(value) == {"cmd", "port"}
+        and isinstance(value["cmd"], str) and 0 < len(value["cmd"]) <= CHECK_LENGTH and value["cmd"].isprintable()
+        and "$PORT" in value["cmd"] and type(value["port"]) is int and value["port"] in ports and value["port"] not in reserved)
+
+
+def allocate_port():
+    """The lowest port in PREVIEW_RANGE that is not reserved, not another job's and not bound right now."""
+    ports, reserved = preview_ports()
+    taken = set()
+    for name in names():
+        try:
+            taken.add((json.loads(read_private(job_dir(name) / "job.json")).get("serve") or {}).get("port"))
+        except (OSError, ValueError, AttributeError):
+            pass
+    for port in ports:
+        if port in reserved or port in taken:
+            continue
+        with socket.socket() as probe:
+            try:
+                probe.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+        return port
+    raise ValueError("no free port in PREVIEW_RANGE " + PREVIEW_RANGE)
+
+
+def listeners(port):
+    """Local addresses, as /proc/net/tcp prints them, of every LISTEN socket the
+    owner holds on `port`. Only the owner's: once mapped, tailscaled (root) also
+    listens on the tailnet addresses of that port."""
+    found, uid = [], str(os.getuid())
+    for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            rows = Path(table).read_text().splitlines()[1:]
+        except OSError:
+            continue
+        for row in rows:
+            fields = row.split()
+            address, hexport = fields[1].rsplit(":", 1)
+            if fields[3] == "0A" and fields[7] == uid and int(hexport, 16) == port:
+                found.append(address)
+    return found
+
+
+def tailscale(*args):
+    return subprocess.run(["tailscale", *args], check=True, capture_output=True, text=True, timeout=30).stdout
+
+
+def serve_mappings():
+    """Port → origin for every `tailscale serve` web handler, from its JSON status."""
+    status = json.loads(tailscale("serve", "status", "--json") or "{}")
+    mapped = {}
+    for origin, site in (status.get("Web") or {}).items():
+        for handler in (site.get("Handlers") or {}).values():
+            mapped[int(origin.rsplit(":", 1)[1])] = handler.get("Proxy")
+    return mapped
+
+
+def unmap(port):
+    try:
+        if port in serve_mappings():
+            tailscale("serve", "--https=" + str(port), "off")
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        print("tailscale serve off " + str(port) + ": " + str(error)[:200], file=sys.stderr, flush=True)
+
+
+def proc_started(pid):
+    """The kernel start time of a live `pid` (None for a gone or zombie process),
+    so a recycled pid is never mistaken for the serve process."""
+    try:
+        fields = Path("/proc", str(pid), "stat").read_text().rsplit(")", 1)[1].split()
+        return None if fields[0] == "Z" else fields[19]
+    except (OSError, IndexError, TypeError):
+        return None
+
+
+def kill_group(pid):
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pid, sig)
+        except ProcessLookupError:
+            return
+        for _ in range(50):
+            if proc_started(pid) is None:
+                return
+            time.sleep(.1)
+
+
+def preview_state(path):
+    try:
+        state = json.loads(read_private(path / "preview.json"))
+    except (OSError, ValueError):
+        return None
+    return state if isinstance(state, dict) else None
+
+
+def preview_alive(state):
+    return bool(state) and proc_started(state.get("pid")) == state.get("ticks")
+
+
+def latest_record(path):
+    records = sorted((path / "runs").glob("*.json"))
+    return (records[-1], read_record(records[-1])) if records else (None, None)
+
+
+def live_preview(record, now=None):
+    """The preview a run record says should be reachable now: recorded, not stopped, not expired."""
+    preview = ((record or {}).get("result") or {}).get("preview")
+    if not isinstance(preview, dict) or "stopped" in preview or (now or time.time()) >= preview["started"] + PREVIEW_TTL:
+        return None
+    return preview
+
+
+def start_preview(job, record, directory, log, path, started=None):
+    """The job's serve command in the run's worktree, in its own session, with
+    PORT set and the worktree's node_modules/.bin on PATH; its output goes to the
+    session transcript. It must listen on 127.0.0.1 only, then answer HTTP 200
+    through the tailnet name within PREVIEW_WAIT seconds, or it is killed and
+    nothing is mapped. Returns the preview recorded in the run, or None."""
+    port, cmd = job["serve"]["port"], job["serve"]["cmd"]
+    env = dict(os.environ, PORT=str(port), PATH=str(directory / "node_modules/.bin") + ":" + os.environ.get("PATH", ""))
+    with open(log, "ab") as transcript:
+        transcript.write(("\n$ PORT=" + str(port) + " " + cmd + "\n").encode())
+        proc = subprocess.Popen(["/bin/sh", "-c", cmd], cwd=directory, env=env, stdin=subprocess.DEVNULL,
+                                stdout=transcript, stderr=subprocess.STDOUT, start_new_session=True)
+    deadline = time.monotonic() + PREVIEW_WAIT
+    def fail(why):
+        print(job["name"] + ": no live preview: " + why, file=sys.stderr, flush=True)
+        kill_group(proc.pid)
+        return None
+    while not (bound := listeners(port)) and proc.poll() is None and time.monotonic() < deadline:
+        time.sleep(.5)
+    if not bound:
+        return fail("serve command never listened on port " + str(port))
+    if any(address != LOOPBACK for address in bound):
+        return fail("serve command listens on more than 127.0.0.1")
+    try:
+        host = json.loads(tailscale("status", "--json"))["Self"]["DNSName"].rstrip(".")
+        tailscale("serve", "--bg", "--https=" + str(port), "http://127.0.0.1:" + str(port))
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+        return fail("tailscale serve: " + str(error)[:200])
+    probe = PREVIEW_PROBE.format(host=host, port=port)
+    while time.monotonic() < deadline and proc.poll() is None:
+        try:
+            with urllib.request.urlopen(urllib.request.Request(probe, headers={"User-Agent": "gravedecay-preview"}), timeout=5) as response:
+                if response.status == 200:
+                    break
+        except (OSError, urllib.error.URLError, ValueError):
+            pass
+        time.sleep(1)
+    else:
+        unmap(port)
+        return fail("no HTTP 200 from " + probe + " within " + str(PREVIEW_WAIT) + "s")
+    started = started or time.time()
+    write_json(path / "preview.json", dict(pid=proc.pid, ticks=proc_started(proc.pid), port=port, run_id=record["run_id"], started=started))
+    return {"port": port, "url": "https://" + host + ":" + str(port) + "/", "started": started}
+
+
+def stop_preview(path, job, why):
+    """Kill the job's serve process, remove its mapping and mark its run's preview stopped."""
+    state = preview_state(path)
+    if state and preview_alive(state):
+        kill_group(state["pid"])
+    unmap(job["serve"]["port"])
+    (path / "preview.json").unlink(missing_ok=True)
+    run_id = (state or {}).get("run_id")
+    target = path / "runs" / (run_id + ".json") if isinstance(run_id, str) and re.fullmatch(r"[0-9]{8}T[0-9]{6}-[0-9a-f]{6}", run_id) else latest_record(path)[0]
+    try:
+        record = read_record(target) if target and target.exists() else None
+        preview = ((record or {}).get("result") or {}).get("preview")
+        if isinstance(preview, dict) and "stopped" not in preview:
+            preview["stopped"] = time.time()
+            write_json(target, record)
+    except (OSError, ValueError):
+        pass
+    print(path.name + ": live preview stopped: " + why, file=sys.stderr, flush=True)
+
+
+def sweep_previews(restore=False):
+    """Scheduler housekeeping, skipping jobs with a worker active: a preview whose
+    run has expired, whose job was cancelled, or that gaming mode interrupts is
+    stopped; one whose process is gone is stopped too, except with `restore`
+    (service start), when every preview the latest records call live is started
+    again in its worktree."""
+    now = time.time()
+    for name in names():
+        path = job_dir(name)
+        try:
+            with locked(path / ".run.lock", blocking=False):
+                job = read_job(name)
+                if not job.get("serve"):
+                    continue
+                target, record = latest_record(path)
+                live, state = live_preview(record, now), preview_state(path)
+                if not live:
+                    if state:
+                        stop_preview(path, job, "24-hour expiry")
+                elif not job["enabled"] or gaming():
+                    stop_preview(path, job, "gaming mode" if job["enabled"] else "job cancelled")
+                elif not preview_alive(state):
+                    if restore and isinstance(record.get("dir"), str) and Path(record["dir"]).is_dir() and start_preview(
+                            job, record, Path(record["dir"]), ROOT / "agents" / record["session"] / record["log"], path, live["started"]):
+                        print(name + ": live preview restarted", file=sys.stderr, flush=True)
+                    else:
+                        stop_preview(path, job, "serve process exited" if state else "could not be restarted")
+        except BlockingIOError:
+            pass
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            print(name + ": preview sweep: " + str(error)[:200], file=sys.stderr, flush=True)
+
+
+def check_previews():
+    """Doctor: serve ports unique, in range and never reserved (read_job); a
+    mapping on a job port only while its latest run shows a live preview; live
+    listeners bound to 127.0.0.1; every other mapping in PREVIEW_RANGE registered
+    by `grave preview`, and every registration still mapped."""
+    ports, _ = preview_ports()
+    try:
+        registry = {int(line) for line in PREVIEW_REGISTRY.read_text().split()}
+    except OSError:
+        registry = set()
+    except ValueError:
+        raise ValueError("config/previews must hold one port per line")
+    mapped, owners, now = serve_mappings(), {}, time.time()
+    for name in names():
+        serve = read_job(name).get("serve")
+        if not serve:
+            continue
+        port = serve["port"]
+        if port in owners:
+            raise ValueError(name + " and " + owners[port] + " share serve port " + str(port))
+        owners[port] = name
+        if port in registry:
+            raise ValueError("port " + str(port) + " belongs to job " + name + " but is registered as a manual preview")
+        if live_preview(latest_record(job_dir(name))[1], now):
+            if any(address != LOOPBACK for address in listeners(port)):
+                raise ValueError(name + ": live preview on port " + str(port) + " listens beyond 127.0.0.1")
+        elif port in mapped:
+            raise ValueError(name + ": tailscale serve maps port " + str(port) + " but the latest run shows no live preview; restart gravedecay-agents")
+    for port in sorted(mapped):
+        if port in ports and port not in owners and port not in registry:
+            raise ValueError("tailscale serve maps port " + str(port) + " outside any job or registered preview; `grave preview " + str(port) + "` or `grave preview off " + str(port) + "`")
+    for port in sorted(registry - set(mapped)):
+        raise ValueError("registered preview port " + str(port) + " is not mapped; `grave preview off " + str(port) + "`")
 
 
 def notify(record):
@@ -721,6 +1005,8 @@ def worker(name):
             if why := stop():
                 record.update(status=why[0], reason=why[1])
             else:
+                if job.get("serve"):
+                    stop_preview(path, job, "next run of the job started")
                 session = "job-" + name + "-" + run_id
                 directory, history, run_lock, base = worktree(job, session)
                 log = "session-" + time.strftime("%Y%m%d") + ".log"
@@ -743,6 +1029,10 @@ def worker(name):
                         record["status"] = "succeeded" if proc.returncode == 0 else "failed"
                     proc = None  # Process group has already been reaped.
                 record["result"] = result_package(job, record, directory, base, history / log, now, stop)
+                if job.get("serve") and record["result"]["verdict"] == "ready-for-review" and not stop():
+                    preview = start_preview(job, record, directory, history / log, path)
+                    if preview:
+                        record["result"]["preview"] = preview
         except Exception as error:
             record.update(status="failed", reason=fit(str(error), 1024, head=True))
         finally:
@@ -798,6 +1088,7 @@ def scheduler():
     private_dir(STORE)
     children = {}
     with locked(STORE / ".scheduler.lock", blocking=False):
+        restore = True
         try:
             while not STOP:
                 for name in names():
@@ -810,6 +1101,8 @@ def scheduler():
                             children[name] = subprocess.Popen([sys.executable, __file__, "worker", name])
                     except (OSError, ValueError) as error:
                         print(name + ": " + str(error), file=sys.stderr, flush=True)
+                sweep_previews(restore)
+                restore = False
                 for _ in range(50):
                     if STOP:
                         break
@@ -829,7 +1122,10 @@ def check(what=None):
     """Doctor: `check` covers definitions, storage, gaming-cancelled runs being
     requeued and the service (which must not wait on T3); `check results`
     requires every finished run record to carry a valid result and verdict,
-    and any quota snapshot a window label and reset time."""
+    and any quota snapshot a window label and reset time; `check previews`
+    is check_previews."""
+    if what == "previews":
+        return check_previews()
     for name in names():
         private_dir(job_dir(name), create=False)
         read_job(name)
@@ -883,9 +1179,12 @@ def main():
     run.add_argument("--check", action="append", metavar="CMD",
                      help="verification command run in the worktree after the agent; repeatable. "
                           "Without it the runner detects the base commit's package.json test script, pytest or make test.")
+    run.add_argument("--serve", metavar="CMD",
+                     help="dev-server command using $PORT; after a ready-for-review run it is started in the worktree, "
+                          "mapped with tailscale serve on the job's fixed port and kept for 24 hours.")
     jobs = sub.add_parser("jobs"); jobs.add_argument("command", nargs="?", choices=("cancel",)); jobs.add_argument("name", nargs="?"); jobs.add_argument("--json", action="store_true")
     sub.add_parser("scheduler")
-    sub.add_parser("check").add_argument("what", nargs="?", choices=("results",))
+    sub.add_parser("check").add_argument("what", nargs="?", choices=("results", "previews"))
     sub.add_parser("worker").add_argument("name")
     args = parser.parse_args()
     if os.getuid() == 0 or os.environ.get("MULTI_USER", "0") == "1":
@@ -917,7 +1216,8 @@ def main():
                 for job in values:
                     due = dt.datetime.fromtimestamp(job["next_due"]).isoformat(" ", "minutes") if job["next_due"] else "—"
                     last = (job["last_status"] or "—") + ("/" + job["last_verdict"] if job["last_verdict"] else "")
-                    print(f'{job["name"]:20} {job["agent"]:6} {job["repo"]:20} next {due}  {"enabled" if job["enabled"] else "cancelled"}  last {last}')
+                    serve = "  serve :" + str(job["serve"]["port"]) if job.get("serve") else ""
+                    print(f'{job["name"]:20} {job["agent"]:6} {job["repo"]:20} next {due}  {"enabled" if job["enabled"] else "cancelled"}  last {last}{serve}')
                 if not values:
                     print("No scheduled jobs. Use grave agents run <name> --prompt-file <file> --repo <repo>.")
     elif args.action == "scheduler":

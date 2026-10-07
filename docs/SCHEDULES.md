@@ -13,6 +13,7 @@ grave agents run triage --repo app --prompt-file ~/prompts/triage.txt
 grave agents run nightly --repo app --prompt-file ~/prompts/tests.txt --at 02:00
 grave agents run weekly --repo app --prompt-file ~/prompts/deps.txt --on 'Mon 03:00' --agent claude
 grave agents run fixci --repo app --prompt-file ~/prompts/ci.txt --check 'npm test' --check 'npm run lint'
+grave agents run ui --repo app --prompt-file ~/prompts/ui.txt --check 'npm test' --serve 'vite --host 127.0.0.1 --port $PORT --strictPort'
 grave agents jobs
 grave agents jobs --json
 grave agents jobs cancel nightly
@@ -160,6 +161,45 @@ still-present worktree can show `no-changes`, otherwise the run is
 rewritten, and a record from an older runner (no `source` on its checks)
 stays valid.
 
+## Live preview
+
+`--serve '<command using $PORT>'` gives the job one fixed port from
+`PREVIEW_RANGE` (grave.conf; never a `PREVIEW_RESERVED` platform port, never
+another job's), stored in `job.json` as `serve: {cmd, port}` and shown by
+`grave agents jobs`. After a run ends `ready-for-review`, the runner starts the
+command in that run's worktree, in its own session, with `PORT` set and the
+worktree's `node_modules/.bin` on `PATH`; its output is appended to the session
+transcript. The command must listen on **127.0.0.1 only** (read from
+`/proc/net/tcp`; a server on `0.0.0.0`, `::` or `::1` is killed and nothing is
+mapped), then the port is mapped with `tailscale serve --https=<port>` and
+probed at `https://<box>.ts.net:<port>/` through the tailnet name, not raw
+loopback, so a dev server that rejects the `ts.net` host (Vite's
+`allowedHosts`) fails the check. One HTTP 200 within two minutes records
+`preview: {port, url, started}` in the run's `result` and the card shows an
+**Open live** button; the push notification keeps its dashboard link. No
+answer, a wrong bind or a mapping failure yields no preview and no mapping, the
+reason goes to the service journal, and the run still ends
+`ready-for-review`.
+
+The preview stops, its mapping is removed and the record gains
+`preview.stopped` when: the next run of the same job starts, `grave agents jobs
+cancel` removes the job, gaming mode is entered (within the scheduler's
+ten-second scan), or 24 hours have passed since `started`. The scheduler
+restarts every preview the latest records call live when the service starts
+(the serve process dies with the service), keeping the original expiry; a
+preview whose process exits on its own is stopped, not restarted. One live
+preview per job: a new run replaces the previous one on the same port. It is
+the head of the agent's branch only; there is no database clone, no
+screenshot, and no base-vs-head twin. `grave preview <port>` refuses a job's
+serve port.
+
+The serve command runs agent-written code as the appliance owner, reachable
+from every device on the tailnet, for up to a day after the run; see
+[SECURITY.md](SECURITY.md). Vite and Next.js each need the bind flag in the
+command (`vite --host 127.0.0.1 --port $PORT --strictPort`,
+`next dev -H 127.0.0.1 -p $PORT`); Vite also needs the box's tailnet name in
+`server.allowedHosts`, see [PORTS.md](PORTS.md).
+
 ## Limits and modes
 
 Every job has a two-hour runtime limit; use `--timeout <seconds>` (60–86400) to
@@ -219,10 +259,17 @@ mode cancelled was requeued, and the scheduler service when jobs exist
 (including that it does not order after or depend on `t3code.service`), and
 separately that every finished run record carries a
 valid result and verdict (including a well-formed `test_changes` list when
-present, and a `quota` snapshot whose every window has a positive
-`window_minutes` and reset time), that every check's `source` is `owner` or
+present, a `quota` snapshot whose every window has a positive
+`window_minutes` and reset time, and a `preview` with port, `https://` URL
+and times), that every check's `source` is `owner` or
 the record's own base commit, that the job command table adds no bypass flag, and that the
-installed dashboard carries the review card and its diff route.
+installed dashboard carries the review card, its diff route and the live
+button. A third line covers previews: every job's serve port is unique,
+inside `PREVIEW_RANGE` and not reserved; a `tailscale serve` mapping on a job
+port exists only while that job's latest record shows a live preview; every
+live preview listener is bound to 127.0.0.1; every other mapping in the range
+is one `grave preview` registered in `$GRAVE_ROOT/config/previews`, and every
+registration is still mapped.
 Restarting the service reconciles unfinished
 or verdict-less records left by an interrupted or older worker. Re-raise to
 install or update the runner; no individual root-owned timer files need to be

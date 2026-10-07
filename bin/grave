@@ -679,6 +679,7 @@ cmd_agents() {
       local action="$1"; shift
       [[ "$action" != __scheduler ]] || action=scheduler
       GRAVE_ROOT="$GRAVE_ROOT" GRAVE_CONF="$CONF" GRAVE_BIN="$(readlink -f "$0")" \
+        PREVIEW_RANGE="$PREVIEW_RANGE" PREVIEW_RESERVED="$PREVIEW_RESERVED" \
         python3 "$GRAVE_ROOT/scripts/agent-jobs.py" "$action" "$@" ;;
     *) cmd_agents_unlocked "$@" ;;
   esac
@@ -826,7 +827,7 @@ cmd_agents_unlocked() {
       fi
       cmd_agents_unlocked new "$name" "$dir" ;;
     *) say "usage: grave agents [list|new|attach|kill|history|resume|prune|run|jobs]"
-       say "       grave agents run <name> --prompt-file <file> [--repo <repo>] [--at HH:MM|--on 'Mon HH:MM'] [--agent codex|claude] [--timeout <s>] [--check '<cmd>']..."; exit 1 ;;
+       say "       grave agents run <name> --prompt-file <file> [--repo <repo>] [--at HH:MM|--on 'Mon HH:MM'] [--agent codex|claude] [--timeout <s>] [--check '<cmd>']... [--serve '<cmd using \$PORT>']"; exit 1 ;;
   esac
 }
 
@@ -877,16 +878,25 @@ listening_previews() { # previewable ports with a live listener (one per line)
     while read -r p; do preview_in_range "$p" && echo "$p"; done
 }
 
+job_serve_port() { # job_serve_port <port> — the scheduled job whose live preview owns it, if any
+  local f; for f in "$GRAVE_ROOT"/config/secrets/agent-jobs/*/job.json; do
+    [[ -f "$f" && "$(jq -r '.serve.port // empty' "$f" 2>/dev/null)" == "$1" ]] && { basename "$(dirname "$f")"; return 0; }
+  done; return 1
+}
+
 preview_start() { # preview_start <port>
-  local port="$1" host
+  local port="$1" host job
   preview_reserved "$port" && { bad "port $port belongs to a platform service — refusing to expose it"; exit 1; }
   preview_in_range "$port" || { bad "port $port is outside the preview range $PREVIEW_RANGE"; exit 1; }
+  if job=$(job_serve_port "$port"); then bad "port $port is the live-preview port of scheduled job '$job' — the scheduler maps it (docs/SCHEDULES.md)"; exit 1; fi
   host=$(tailnet_host)
   [[ -n "$host" ]] || { bad "can't read the tailnet name — is tailscale up?"; exit 1; }
   if ! port_listening "$port"; then
     say "  ${YLW}nothing is listening on 127.0.0.1:$port yet — start your dev server first (this maps it anyway).${RST}"
   fi
   tailscale serve --bg --https="$port" "http://127.0.0.1:$port" >/dev/null
+  # Registered so doctor can tell a manual preview from an orphaned mapping.
+  (umask 077; grep -qx "$port" "$GRAVE_ROOT/config/previews" 2>/dev/null || echo "$port" >>"$GRAVE_ROOT/config/previews")
   log "preview: on $port"
   ok "https://$host:$port  →  127.0.0.1:$port  (tailnet only — 'grave preview off $port' to stop)"
 }
@@ -895,6 +905,7 @@ preview_stop() { # preview_stop <port>
   local port="$1"
   preview_in_range "$port" || { bad "port $port is outside the preview range $PREVIEW_RANGE"; exit 1; }
   tailscale serve --https="$port" off >/dev/null 2>&1 || true
+  [[ -f "$GRAVE_ROOT/config/previews" ]] && sed -i "/^$port\$/d" "$GRAVE_ROOT/config/previews"
   log "preview: off $port"
   ok "preview on $port stopped"
 }
@@ -1551,8 +1562,9 @@ cmd_doctor() { # grave doctor [--no-page]
   check "managed agent worktrees valid and writable" agent_worktrees_check
   if [[ "${MULTI_USER:-0}" == 0 ]]; then
     check "scheduled agent runner installed" test -r "$GRAVE_ROOT/scripts/agent-jobs.py"
-    check "scheduled prompts and service valid" env GRAVE_ROOT="$GRAVE_ROOT" python3 "$GRAVE_ROOT/scripts/agent-jobs.py" check
-    check "scheduled run records carry a valid verdict" env GRAVE_ROOT="$GRAVE_ROOT" python3 "$GRAVE_ROOT/scripts/agent-jobs.py" check results
+    check "scheduled prompts and service valid" env GRAVE_ROOT="$GRAVE_ROOT" PREVIEW_RANGE="$PREVIEW_RANGE" PREVIEW_RESERVED="$PREVIEW_RESERVED" python3 "$GRAVE_ROOT/scripts/agent-jobs.py" check
+    check "scheduled run records carry a valid verdict" env GRAVE_ROOT="$GRAVE_ROOT" PREVIEW_RANGE="$PREVIEW_RANGE" PREVIEW_RESERVED="$PREVIEW_RESERVED" python3 "$GRAVE_ROOT/scripts/agent-jobs.py" check results
+    check "live previews mapped only while live, loopback-bound, manual previews registered" env GRAVE_ROOT="$GRAVE_ROOT" PREVIEW_RANGE="$PREVIEW_RANGE" PREVIEW_RESERVED="$PREVIEW_RESERVED" python3 "$GRAVE_ROOT/scripts/agent-jobs.py" check previews
     check "keeper runner installed" test -r "$GRAVE_ROOT/scripts/keeper.py"
     check "keeper instructions and private storage" env GRAVE_ROOT="$GRAVE_ROOT" GRAVE_CONF="$CONF" python3 "$GRAVE_ROOT/scripts/keeper.py" check files
     # Provider login is a post-raise human step (AGENTS.md §2), so report it.
@@ -1990,6 +2002,7 @@ dashboard_shell_ok() { [[ "$(sha256sum "$GRAVE_ROOT/scripts/dashboard-static/ind
 # a shell without the card shows verdicts nobody can see.
 dashboard_review_card_ok() {
   grep -q 'data-verdict=' "$GRAVE_ROOT/scripts/dashboard-static/index.html" &&
+    grep -q 'data-preview=' "$GRAVE_ROOT/scripts/dashboard-static/index.html" &&
     grep -q '"/api/run-diff"' "$GRAVE_ROOT/scripts/gravedecay.py"
 }
 dashboard_manifest_ok() { dashboard_probe manifest | grep -q '"scope": "/"'; }
