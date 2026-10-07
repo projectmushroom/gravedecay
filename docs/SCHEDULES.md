@@ -65,9 +65,13 @@ what a night needs once, as the owner. For Claude, in `~/.claude/settings.json`:
 ```json
 {"permissions": {"defaultMode": "acceptEdits",
   "allow": ["Bash(npm *)", "Bash(npx *)", "Bash(node *)", "Bash(git *)",
-            "Bash(python3 *)", "Bash(pytest *)", "Bash(make *)"],
+            "Bash(python3 *)", "Bash(make *)", "Bash(.venv/bin/*)"],
   "deny": ["Bash(git push*)"]}}
 ```
+
+Rules match the command's first word, so the worktree venv's own `pip` and
+`pytest` need the `.venv/bin/` entry; `Bash(python3 *)` alone leaves the agent
+unable to install into the venv it just created.
 
 For Codex, in `~/.codex/config.toml`, network access for installs:
 
