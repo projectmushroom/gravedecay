@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -50,6 +51,23 @@ class AgentJobTests(unittest.TestCase):
         self.freeze = self.root / "cgroup.freeze"
         self.exe("notify", 'import json,os,sys\nfrom pathlib import Path\nwith (Path(os.environ["GRAVE_ROOT"])/"notifications").open("a") as f: f.write(json.dumps(sys.argv[1:])+"\\n")\n')
         self.env["GRAVE_BIN"] = str(self.bin / "notify")
+        # tailscale: serve mappings live in a JSON file; the box's tailnet name is `localhost`, and the
+        # preview probe is pointed at plain http on loopback because nothing terminates TLS here.
+        self.exe("tailscale", '''import json, os, sys
+from pathlib import Path
+state = Path(os.environ["GRAVE_ROOT"]) / "tailscale-serve.json"
+cfg = json.loads(state.read_text()) if state.exists() else {"TCP": {"443": {"HTTPS": True}}, "Web": {"localhost:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:4711"}}}}}
+a = sys.argv[1:]
+if a == ["status", "--json"]: print(json.dumps({"Self": {"DNSName": "localhost."}}))
+elif a == ["serve", "status", "--json"]: print(json.dumps(cfg))
+elif a[0] == "serve":
+    port = next(x for x in a if x.startswith("--https=")).split("=")[1]
+    if a[-1] == "off": cfg["Web"].pop("localhost:" + port, None); cfg["TCP"].pop(port, None)
+    else: cfg["Web"]["localhost:" + port] = {"Handlers": {"/": {"Proxy": a[-1]}}}; cfg["TCP"][port] = {"HTTPS": True}
+    state.write_text(json.dumps(cfg))
+else: sys.exit(2)
+''')
+        self.env.update(GRAVE_PREVIEW_PROBE="http://127.0.0.1:{port}/", GRAVE_PREVIEW_WAIT="8")
         # A check that records where it ran and exits with FAKE_CHECK.
         self.exe("fakecheck", '''import json, os, sys
 from pathlib import Path
@@ -146,8 +164,22 @@ print("<script>literal output</script>", flush=True)
     def job(self, name="nightly"):
         return json.loads((self.store / name / "job.json").read_text())
 
-    def wait_for(self, predicate):
-        deadline = time.monotonic() + 10
+    def mapped(self):
+        state = self.root / "tailscale-serve.json"
+        return {int(origin.rsplit(":", 1)[1]) for origin in (json.loads(state.read_text()) if state.exists() else {"Web": {}})["Web"]} - {443}
+
+    def due(self, name="nightly"):
+        job = self.job(name); job["next_due"] = time.time() - 1
+        (self.store / name / "job.json").write_text(json.dumps(job))
+
+    def answers(self, port):
+        try:
+            return urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=2).status == 200
+        except (OSError, urllib.error.URLError):
+            return False
+
+    def wait_for(self, predicate, timeout=10):
+        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if predicate(): return
             time.sleep(.05)
@@ -526,7 +558,8 @@ print("<script>literal output</script>", flush=True)
         self.assertEqual(len((self.root / "calls").read_text().splitlines()), 1)
 
     def test_validation_rejects_duplicate_names_bad_times_and_unsafe_prompt(self):
-        for args in (("--at", "25:00"), ("--on", "Mon 02:00; touch PWNED"), ("--timeout", "0"), ("--check", ""), ("--check", "x" * 501)):
+        for args in (("--at", "25:00"), ("--on", "Mon 02:00; touch PWNED"), ("--timeout", "0"), ("--check", ""), ("--check", "x" * 501),
+                     ("--serve", "python3 -m http.server 3000"), ("--serve", "")):
             self.call("run", "bad", "--prompt-file", str(self.prompt), "--repo", "project", *args, ok=False)
         self.assertFalse((self.store / "bad").exists())
         self.add()
@@ -796,4 +829,136 @@ print("<script>literal output</script>", flush=True)
         self.assertIn("agent-jobs.py", raise_sh)
         self.assertIn('install -m 644 "$REPO_DIR/libexec/providers.py" "$GRAVE_ROOT/scripts/providers.py"', raise_sh)
         grave = (ROOT / "bin/grave").read_text()
-        self.assertIn('check "scheduled run records carry a valid verdict" env GRAVE_ROOT="$GRAVE_ROOT" python3 "$GRAVE_ROOT/scripts/agent-jobs.py" check results', grave)
+        self.assertIn('check "scheduled run records carry a valid verdict" env GRAVE_ROOT="$GRAVE_ROOT" PREVIEW_RANGE="$PREVIEW_RANGE" PREVIEW_RESERVED="$PREVIEW_RESERVED" python3 "$GRAVE_ROOT/scripts/agent-jobs.py" check results', grave)
+        self.assertIn('python3 "$GRAVE_ROOT/scripts/agent-jobs.py" check previews', grave)
+
+    def test_live_preview_is_recorded_replaced_by_the_next_run_and_torn_down_with_the_job(self):
+        module = load(HELPER, "jobs_preview")
+        self.add("nightly", "--check", "true", "--serve", "python3 -m http.server --bind 127.0.0.1 $PORT")
+        self.add("other", "--check", "true", "--serve", "sleep 1000 # $PORT")
+        port, other = self.job()["serve"]["port"], self.job("other")["serve"]["port"]
+        self.assertTrue(3000 <= port <= 3999 and port != 3050 and 3000 <= other <= 3999 and other != port)
+        self.call("check", "previews")
+        self.call("worker", "nightly", env=dict(self.env, FAKE_AGENT="commit"))
+        first = self.records()[0]
+        preview = first["result"]["preview"]
+        self.assertEqual((first["result"]["verdict"], preview["port"], preview["url"]), ("ready-for-review", port, f"https://localhost:{port}/"))
+        self.assertAlmostEqual(preview["started"], time.time(), delta=60)
+        self.assertNotIn("stopped", preview)
+        self.assertIn(port, self.mapped())
+        self.assertTrue(self.answers(port))
+        state = json.loads((self.store / "nightly/preview.json").read_text())
+        self.assertEqual(state["run_id"], first["run_id"])
+        self.assertEqual(module.listeners(port), [module.LOOPBACK])
+        self.assertIn("$ PORT=" + str(port) + " python3 -m http.server", (self.root / "agents" / first["session"] / first["log"]).read_text())
+        self.call("check"); self.call("check", "results"); self.call("check", "previews")
+        self.assertIn(f"serve :{port}", self.call("jobs").stdout)
+        self.assertIn('"/grave/?tab=work"', (self.root / "notifications").read_text())  # the push link stays on the dashboard origin
+        self.assertIn("data-preview=", (ROOT / "dashboard/static/index.html").read_text())
+        # The next run of the job replaces the preview on the same port.
+        self.due()
+        self.call("worker", "nightly", env=dict(self.env, FAKE_AGENT="commit"))
+        first, second = self.records()
+        self.assertGreater(first["result"]["preview"]["stopped"], first["result"]["preview"]["started"])
+        self.assertIsNone(module.proc_started(state["pid"]))
+        self.assertEqual(second["result"]["preview"]["port"], port)
+        self.assertNotIn("stopped", second["result"]["preview"])
+        replaced = json.loads((self.store / "nightly/preview.json").read_text())
+        self.assertNotEqual(replaced["pid"], state["pid"])
+        self.assertTrue(self.answers(port))
+        self.call("check", "results"); self.call("check", "previews")
+        # Cancelling the job tears the preview down: process, mapping and record.
+        self.call("jobs", "cancel", "nightly")
+        self.assertNotIn(port, self.mapped())
+        self.assertFalse((self.store / "nightly/preview.json").exists())
+        self.assertIn("stopped", self.records()[1]["result"]["preview"])
+        self.assertIsNone(module.proc_started(replaced["pid"]))
+        self.assertFalse(self.answers(port))
+        self.call("check", "results"); self.call("check", "previews")
+        # Doctor: orphan mappings, manual registrations, job ports and uniqueness.
+        tailscale = [str(self.bin / "tailscale"), "serve", "--bg", "--https=3999", "http://127.0.0.1:3999"]
+        subprocess.run(tailscale, env=self.env, check=True)
+        self.assertIn("outside any job or registered preview", self.call("check", "previews", ok=False).stderr)
+        registry = self.root / "config/previews"
+        if shutil.which("jq"):
+            # `grave preview` registers manual mappings and refuses a job's serve port.
+            grave = [str(ROOT / "bin/grave"), "preview"]
+            result = subprocess.run(grave + [str(other)], env=self.env, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0); self.assertIn("live-preview port of scheduled job 'other'", result.stdout)
+            subprocess.run(grave + ["3999"], env=self.env, check=True, capture_output=True)
+            self.assertEqual(registry.read_text().split(), ["3999"]); self.call("check", "previews")
+            subprocess.run(grave + ["off", "3999"], env=self.env, check=True, capture_output=True)
+            self.assertEqual((registry.read_text().split(), 3999 in self.mapped()), ([], False))
+            subprocess.run(tailscale, env=self.env, check=True)
+        registry.write_text("3999\n"); self.call("check", "previews")
+        registry.write_text(f"3999\n{other}\n")
+        self.assertIn("registered as a manual preview", self.call("check", "previews", ok=False).stderr)
+        registry.write_text("3999\n3998\n")
+        self.assertIn("is not mapped", self.call("check", "previews", ok=False).stderr)
+        registry.write_text("3999\n")
+        subprocess.run(tailscale[:3] + [f"--https={port}", f"http://127.0.0.1:{port}"], env=self.env, check=True)
+        self.assertIn("shows no live preview", self.call("check", "previews", ok=False).stderr)
+        subprocess.run(tailscale[:3] + [f"--https={port}", "off"], env=self.env, check=True)
+        self.call("check", "previews")
+        job = self.job("other"); job["serve"]["port"] = 3050
+        (self.store / "other/job.json").write_text(json.dumps(job))
+        self.assertIn("invalid serve command or port", self.call("check", "previews", ok=False).stderr)
+        job["serve"]["port"] = port
+        (self.store / "other/job.json").write_text(json.dumps(job))
+        self.assertIn("share serve port", self.call("check", "previews", ok=False).stderr)
+
+    def test_serve_command_that_never_answers_or_listens_beyond_loopback_yields_no_preview(self):
+        module = load(HELPER, "jobs_preview_refusal")
+        self.add("wide", "--check", "true", "--serve", "python3 -m http.server $PORT")  # every interface
+        self.add("mute", "--check", "true", "--serve", "sleep 60 # $PORT")
+        self.add("deny", "--check", "true", "--serve", "python3 -m http.server --bind 127.0.0.1 --directory /nonexistent $PORT")  # answers 404
+        for name in ("wide", "mute", "deny"):
+            with self.subTest(job=name):
+                self.call("worker", name, env=dict(self.env, FAKE_AGENT="commit"))
+                record = self.records(name)[0]
+                self.assertEqual(record["result"]["verdict"], "ready-for-review")
+                self.assertNotIn("preview", record["result"])
+                port = self.job(name)["serve"]["port"]
+                self.assertNotIn(port, self.mapped())
+                self.assertFalse((self.store / name / "preview.json").exists())
+                self.assertEqual(module.listeners(port), [])
+        self.call("check", "results"); self.call("check", "previews")
+
+    def test_scheduler_restores_live_previews_on_start_and_stops_them_on_expiry_or_gaming(self):
+        module = load(HELPER, "jobs_preview_sweep")
+        self.add("nightly", "--check", "true", "--serve", "python3 -m http.server --bind 127.0.0.1 $PORT")
+        self.call("worker", "nightly", env=dict(self.env, FAKE_AGENT="commit"))
+        port = self.job()["serve"]["port"]
+        state = json.loads((self.store / "nightly/preview.json").read_text())
+        os.killpg(state["pid"], signal.SIGKILL)  # what a service restart does to every serve process
+        self.wait_for(lambda: module.proc_started(state["pid"]) is None)
+        proc = self.background("scheduler")
+        self.wait_for(lambda: json.loads((self.store / "nightly/preview.json").read_text())["pid"] != state["pid"], timeout=15)
+        restored = json.loads((self.store / "nightly/preview.json").read_text())
+        self.assertTrue(self.answers(port))
+        record = self.records()[0]
+        self.assertNotEqual(restored["pid"], state["pid"])
+        self.assertEqual((restored["started"], record["result"]["preview"]["started"]), (state["started"], state["started"]))
+        self.assertNotIn("stopped", record["result"]["preview"])
+        self.assertIn(port, self.mapped())
+        # Gaming mode stops it within the next scan, and the thaw does not bring it back.
+        self.freeze.write_text("1\n")
+        self.wait_for(lambda: "stopped" in self.records()[0]["result"]["preview"], timeout=15)
+        self.assertNotIn(port, self.mapped())
+        self.assertFalse(self.answers(port))
+        self.assertIsNone(module.proc_started(restored["pid"]))
+        self.freeze.write_text("0\n")
+        proc.terminate(); proc.wait(timeout=15)
+        # A fixed 24-hour expiry: an aged record is stopped by the sweep and never restored.
+        self.due()
+        self.call("worker", "nightly", env=dict(self.env, FAKE_AGENT="commit"))
+        path = sorted((self.store / "nightly/runs").glob("*.json"))[-1]
+        record = json.loads(path.read_text()); record["result"]["preview"]["started"] -= 86400
+        path.write_text(json.dumps(record))
+        pid = json.loads((self.store / "nightly/preview.json").read_text())["pid"]
+        proc = self.background("scheduler")
+        self.wait_for(lambda: not (self.store / "nightly/preview.json").exists(), timeout=15)
+        self.assertIn("stopped", json.loads(path.read_text())["result"]["preview"])
+        self.assertNotIn(port, self.mapped())
+        self.assertIsNone(module.proc_started(pid))
+        self.call("check", "results"); self.call("check", "previews")

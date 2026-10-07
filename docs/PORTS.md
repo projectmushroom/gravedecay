@@ -15,7 +15,7 @@ listening — add a row in the same commit that adds a listener.
 | 5432 | 127.0.0.1 | core-postgres | loopback only |
 | 6379 | 127.0.0.1 | core-redis | loopback only |
 | 3050 | 127.0.0.1 | browsers-playwright | loopback only |
-| 3000–3999 | 127.0.0.1 | dev-server previews and isolated dashboard browser fixtures | opt-in per port via `grave preview <port>` → https `:<port>` on the tailnet |
+| 3000–3999 | 127.0.0.1 | dev-server previews, scheduled-job live previews (`grave agents run --serve`, one fixed port per job) and isolated dashboard browser fixtures | opt-in per port via `grave preview <port>`, or by the scheduler for up to 24 h after a `ready-for-review` run → https `:<port>` on the tailnet |
 | 4810–4909 | 127.0.0.1 | per-workspace T3 instances | identity gateway only |
 | 4910–5009 | 127.0.0.1 | per-workspace terminals | identity gateway only |
 | 5010–5109 | 127.0.0.1 | per-workspace dashboards | identity gateway only |
@@ -30,11 +30,29 @@ that legacy T3/terminal remain disabled. It also verifies the exact gateway-only
 Serve configuration on port 443. Multi-user `/net` and its event stream require
 an enabled administrator; old direct `/net` mounts are removed on re-raise.
 
-The 3000–3999 range is the sandbox for `grave preview` (config: `PREVIEW_RANGE`).
-Dev servers still bind loopback; `grave preview <port>` runs `tailscale serve
---https=<port>` so the project is reachable at `https://<box>.ts.net:<port>` —
-served at the port root, not a path, so HMR/websockets/absolute URLs work with
-no per-project config. Previews persist until `grave preview off <port>`.
+The 3000–3999 range is the sandbox for `grave preview` and for scheduled-job
+live previews (config: `PREVIEW_RANGE`; `PREVIEW_RESERVED` ports are never
+handed out). Dev servers still bind loopback; `grave preview <port>` runs
+`tailscale serve --https=<port>` so the project is reachable at
+`https://<box>.ts.net:<port>` — served at the port root, not a path, so
+HMR/websockets/absolute URLs need no base-path configuration. Two things do
+need per-project attention, measured on the box with Vite 8.3 and Next 16.4
+(2026-10-07): the **bind address** and the **Host check**. Vite's default
+`localhost` binds `[::1]` only (tailscale's proxy to `127.0.0.1` answers 502)
+and Next's default binds every interface; use `vite --host 127.0.0.1` and
+`next dev -H 127.0.0.1`. Vite then rejects the tailnet hostname with 403
+"Blocked request" until `server.allowedHosts` lists `<box>.ts.net`
+(`vite.config.js`: `export default { server: { allowedHosts: ['<box>.ts.net'] } }`);
+Next served the page with no further config. A scheduled job's serve command
+is held to the same rules: it must bind 127.0.0.1 only and answer 200 through
+the tailnet name, or no preview is mapped ([SCHEDULES.md](SCHEDULES.md)).
+
+Manual previews persist until `grave preview off <port>` and are recorded in
+`$GRAVE_ROOT/config/previews` so doctor can tell them from orphaned mappings:
+a mapping in the range that is neither a registered manual preview nor a
+job's live preview fails doctor (re-run `grave preview <port>` to register one
+made before this file existed, or `grave preview off <port>`). Job preview
+ports belong to the scheduler; `grave preview` refuses them.
 
 On macOS the dashboard may read containers from the active standard Docker CLI
 context, but it creates no Docker listener or backing port. Any existing
@@ -48,4 +66,5 @@ in `grave doctor` (declared mode vs. link/tunnel state), and the trust trade
 is documented in SECURITY.md.
 
 Audit: `sudo ss -tlnp` and `sudo docker ps --format '{{.Names}} {{.Ports}}'`;
-`grave preview list` for what's currently exposed.
+`grave preview list` for what's currently exposed, `grave agents jobs` for the
+job ports.

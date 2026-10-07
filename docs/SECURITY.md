@@ -464,6 +464,18 @@ runner with a command the agent did not choose", and review the diff. Owners
 who want test-tampering rules can add a tool such as gatekeep or tampercheck
 as a `--check`; `GRAVE_BASE` gives it the base SHA.
 
+A job with `--serve` goes one step further: after a `ready-for-review` run
+the runner keeps the agent's branch **running** as the owner, in the run's
+worktree, with the owner's environment, and maps it over the tailnet at
+`https://<box>.ts.net:<port>` for up to 24 hours (or until the next run,
+cancellation or gaming mode). Anything the agent committed executes for that
+whole time, not only during the checks, and every tailnet device can reach
+it. The listener is confined to 127.0.0.1 and exposed only through
+`tailscale serve` (never funnel); the port, URL and expiry are in the run
+record and on the card, and `grave doctor` fails on a mapping with no live
+preview behind it or a listener bound beyond loopback. Review the diff before
+opening the preview, and do not point it at a database you cannot lose.
+
 ## Durable console action history
 
 Single-owner Linux graves keep bounded action progress in
