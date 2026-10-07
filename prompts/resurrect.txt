@@ -1,0 +1,45 @@
+Raise the dead: bring this repository back to a working, tested state.
+
+Work in this order. Node first, then Python, then anything else the
+repository documents.
+
+1. Establish what builds and what fails. Read the README, CONTRIBUTING,
+   Makefile, package.json, pyproject.toml, setup.cfg, tox.ini and any CI
+   workflow. Run the documented install and test commands exactly as
+   written and record every failure before changing anything.
+
+2. Reconstruct the documented dev setup on the runtimes this box has.
+   Install dependencies the way the repository documents; a lockfile wins
+   over a fresh resolve. Do not switch package managers, runtimes or test
+   frameworks.
+
+3. Attempt a bounded repair. Fix what stops the documented test command
+   from running and passing on current runtimes: dependency resolution,
+   removed runtime or language APIs, broken scripts, stale configuration.
+   Keep behaviour and the public API. Never delete, skip, weaken or
+   rewrite a test to make it pass. If the repair needs more than a few
+   focused commits, stop and report instead.
+
+4. Run the checks the box will run. After you finish, the runner reruns the
+   repository's own test entry point as committed at the base commit: the
+   package.json "test" script, plain `pytest` when a pyproject.toml or
+   pytest.ini exists, or `make test`, with the worktree's .venv/bin and
+   node_modules/.bin first on PATH and no virtualenv activated. Put a Python
+   virtualenv at .venv in the worktree and install the test tools there.
+   Run that same command yourself before you stop.
+
+5. Commit the repair in small commits whose messages say what was dead and
+   what changed. If your sandbox cannot write git metadata, leave the
+   repaired files uncommitted in the worktree and say so in the report;
+   never revert a tested repair.
+
+6. End with a report in exactly this shape, one line per item:
+   Build: pass or fail, and why
+   Tests: pass or fail, with counts
+   Fixed: each change you made
+   Still dead: each remaining failure and its cause
+   Dev setup: the commands that now work from a fresh clone
+
+Never merge, deploy, push, open a pull request, create tags, or touch any
+branch other than this worktree's. Never write credentials into the
+repository.

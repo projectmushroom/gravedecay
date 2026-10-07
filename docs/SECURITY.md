@@ -455,7 +455,7 @@ from the owner's `--check` or from the base commit, so the agent cannot swap
 in `exit 0`, and a run with no check ends `unverified` rather than
 `ready-for-review`. But the command executes in the agent's worktree: tests,
 fixtures, `pytest` configuration, Makefile recipes and anything on
-`node_modules/.bin` are agent-writable and run inside the test process, as
+`.venv/bin` or `node_modules/.bin` are agent-writable and run inside the test process, as
 the same root-equivalent Unix account (`raise.sh` sudoers) that runs the
 scheduler and writes the run record. Checks run as the owner outside the
 Codex sandbox that confined the provider (`run_check` is a plain `/bin/sh -c`),

@@ -4,280 +4,262 @@
 
 <h1 align="center">gravedecay</h1>
 
-<p align="center">
-  <b>Raise any Linux box into an always-on AI dev appliance.<br>
-  The box never sleeps — your agents work the graveyard shift.</b> 🪦
-</p>
+<p align="center"><b>A spare Linux box, raised as the night shift for your repos.</b> 🪦</p>
 
 <p align="center">
-  <a href="https://github.com/projectmushroom/gravedecay/actions/workflows/ci.yml"><img alt="Main CI status" src="https://github.com/projectmushroom/gravedecay/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/projectmushroom/gravedecay/actions/workflows/apple.yml"><img alt="Apple clients CI status" src="https://github.com/projectmushroom/gravedecay/actions/workflows/apple.yml/badge.svg"></a>
+  <a href="https://github.com/projectmushroom/gravedecay/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/projectmushroom/gravedecay/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/projectmushroom/gravedecay/actions/workflows/browser.yml"><img alt="Browser matrix" src="https://github.com/projectmushroom/gravedecay/actions/workflows/browser.yml/badge.svg"></a>
+  <a href="https://github.com/projectmushroom/gravedecay/actions/workflows/apple.yml"><img alt="Apple clients" src="https://github.com/projectmushroom/gravedecay/actions/workflows/apple.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
 </p>
 
 ---
 
-gravedecay converts a spare machine (old laptop, mini PC, Steam Machine) into
-a personal, tailnet-only AI development server: your repos, databases, and
-coding agents live on it 24/7, while your laptops, phones, and tablets become
-thin clients. If the machine also games, an optional gaming layer freezes
-agent sessions and frees RAM/GPU until you're done.
+## What it is
 
-```
-        ┌─────────────────────────────── the box ─────────────────────────────────┐
-        │                                                                         │
-        │  systemd (native, no containers)           docker (backing svcs only)   │
-        │  ├─ gravedecay.service  dashboard :4712    ├─ postgres  127.0.0.1:5432  │
-        │  ├─ t3code.service      web UI    :4711    ├─ redis     127.0.0.1:6379  │
-        │  ├─ gravedecay-term     ttyd      :4713    └─ playwright browsers       │
-        │  ├─ gravedecay-net      flow mon  :4714                                 │
-        │  └─ tmux -L agents      persistent claude/codex/shell sessions          │
-        │                                                                         │
-        │  /srv/dev/{repos,agents,docker,config,logs,scripts,backups,docs}        │
-        │  grave <cmd> — one CLI to rule the box                                  │
-        └──────────────┬─────────────────────────────┬────────────────────────────┘
-                       │ tailscale serve —           │ T3 Connect (opt-in) —
-                       │ ONE https origin:           │ outbound relay tunnel or
-                       │   /grave = gravedecay       │ notifications-only publish
-                       │   /      = T3               │
-                       │   /term  = terminal         │
-                       │   /net   = gravenet         │
-             ┌─────────┴─────────┐             ┌─────┴──────┐
-          laptop    iPhone     iPad         official T3 apps
-             └─ gravedecay PWA (/grave/) ─┘   (iOS/Android/desktop)
-                the system overview & controller      drive the agents
-```
+A spare Linux box becomes a private night shift for your repositories.
+Coding agents work on it while you sleep, each run in its own worktree.
+The box reruns your own test command afterwards, next to your real local
+services (Postgres, Redis, whatever else lives on it). Your phone gets a
+result card in the morning: verdict, diff, cost, and a live link to the
+running branch. Everything stays on hardware you own, behind your tailnet.
 
-## Design principles
+It is for developers with a Claude or Codex subscription and a Linux machine
+that can stay on: an old laptop, a mini PC, a Steam Machine, a VM.
 
-1. **Native first.** Agents, web UI, terminal, and dashboard run as plain
-   systemd services — agents need real files, real processes, real builds.
-   Docker only backs services (postgres, redis, playwright).
-2. **Tailnet-only.** Everything binds `127.0.0.1`; the only ways in are
-   Tailscale and key-only sshd. Default-deny firewall, no port forwarding,
-   ever. One off-by-default exception for the official T3 apps: `grave t3
-   connect` — trade-offs in [docs/SECURITY.md](docs/SECURITY.md).
-3. **Dev box first; gaming when needed.** `grave gaming` frees RAM/GPU while
-   remote access stays up. Opt in with `grave gamewatch on`; stock SteamOS
-   starts with it on.
-4. **Agent-operated.** Scripts do the deterministic 90 %; a coding agent
-   handles the box-specific 10 %. [AGENTS.md](AGENTS.md) is its playbook.
-5. **Everything is a file under `$GRAVE_ROOT`** (default `/srv/dev`) —
-   snapshot-friendly (btrfs+snapper supported, not required).
-6. **Doctor is the contract.** Every invariant the platform relies on is a
-   `grave doctor` check; a quirk doctor can't see will silently regress.
+## Dusk, night, dawn
 
-## Choose your install
+*The box never sleeps so that you can.*
 
-- **Linux appliance** — the complete always-on box above. Quickstart below.
-- **Standalone macOS app** — runs this Mac as a grave and accesses your other
-  graves. A Universal 2 SwiftUI app (macOS 15+) with opt-in dashboard/PWA and
-  network hosting for phones, tablets, and browsers at `/grave/` and `/net/`.
-  Its web backend and Python runtime are bundled; no separate companion,
-  Homebrew, or Xcode installation is needed. Close the window to keep hosting;
-  quit the app to stop. Download the DMG from the
-  [latest release](https://github.com/projectmushroom/gravedecay/releases/latest)
-  and follow [Mac hosting setup](docs/MACOS.md#native-app-hosting).
-- **Classic macOS companion** — an alternative installation: user-scoped LaunchAgents that make
-  a Mac itself a grave (dashboard + network monitor; no sudo, no system
-  services). Opt into T3 + web terminal with the second form:
+**Evening.** Queue a job from the CLI (`grave agents run`) or from the
+dashboard's Linear **Work on this** button. The prompt is copied at that
+moment; the schedule can be once, nightly or weekly.
 
-  ```sh
-  brew install projectmushroom/gravedecay/gravedecay-companion
-  gravedecay-mac install            # /grave and /net on the tailnet
+**Night.** Each run gets a fresh worktree and an `agent/job-…` branch from the
+committed HEAD. When the agent exits, the runner reruns the repository's test
+entry point as it was at the base commit, a command the agent did not choose.
+A game on the box freezes the agents in place (torpor); a run cut short by it
+is requeued once, and a job that comes due while gaming waits. A Claude usage
+limit defers the job to its reset time.
 
-  brew install projectmushroom/gravedecay/gravedecay-companion --with-node --with-tmux --with-ttyd
-  gravedecay-mac install --agents   # + T3 at / and terminal at /term
-  ```
+**Morning.** One card per run on the dashboard: verdict, change summary, each
+check with its source and exit code, an amber line when tests were trimmed,
+the diff, an **Open live** button for the running branch, and a cost line.
+The same event reaches your phone as a push.
 
-  Details, limits, and coexistence with the native app: [docs/MACOS.md](docs/MACOS.md).
-- **Portable Docker workspace** — a reduced work-plane with the same origin
-  layout and no host control plane: [docs/DOCKER.md](docs/DOCKER.md).
+## What you need
 
-## Quickstart (Linux appliance)
+- **Hardware.** Any machine that can stay on, about 8 GB RAM. Intel T2 Macs,
+  EC2 and stock SteamOS have their own host profiles.
+- **OS.** A systemd Linux. Arch-family (Arch, CachyOS, Omarchy) is first
+  class; Debian/Ubuntu, Fedora and openSUSE Leap are best effort.
+- **A Tailscale account.** Free tier is enough; every device that reaches the
+  box joins the same tailnet.
+- **A provider login.** Claude Code or Codex, signed in on the box as the
+  appliance owner, with that account's permission rules opened for unattended
+  work; a fresh login refuses to edit or install anything headless
+  ([docs/SCHEDULES.md](docs/SCHEDULES.md#provider-command-and-sandbox)).
 
-Requirements: a systemd distro (Arch-family—including Arch, CachyOS, and
-Omarchy—first-class; Debian/Fedora/openSUSE best-effort), ~8 GB RAM, a free
-[Tailscale](https://tailscale.com) account.
+The raise installs packages, a default-deny firewall, systemd services, Docker
+for Postgres and Redis, one `tailscale serve` origin, and a dedicated owner
+account with scoped passwordless sudo. `grave uninstall` reverses all of it
+and keeps your repos, agents, secrets and backups unless you pass `--purge`
+([docs/UNINSTALL.md](docs/UNINSTALL.md)).
 
-**The agent way (recommended).** SSH in, install your coding agent, and say:
-
-> Clone `https://github.com/projectmushroom/gravedecay`, read `AGENTS.md`,
-> and raise this box. Host profile: `<generic | aws | t2-macbook | steam-machine>`.
-
-The agent runs the ritual, fixes distro quirks, walks you through the two
-interactive steps (Tailscale login, T3 pairing), and hands you a passing
-`grave doctor`.
-
-**The one-liner** (checks out the latest release; `GRAVEDECAY_CHANNEL=edge`
-follows main):
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/projectmushroom/gravedecay/master/install.sh | bash -s -- --profile generic
-```
-
-**The manual way:**
+## Raise it
 
 ```sh
 git clone https://github.com/projectmushroom/gravedecay
 cd gravedecay
-./raise.sh --profile generic      # idempotent; uses sudo as needed
-grave doctor                      # verify every invariant
+./raise.sh --profile generic      # idempotent; asks which account owns the box
+grave doctor                      # every check must pass
 ```
 
-Fresh Linux installs ask which Unix account should own the appliance:
-**`grave` (recommended)**, a custom username, or your current user. A new
-account gets its own home and a local sudo password. Services, repositories,
-GitHub login, and agent logins then use that account. Root can launch setup;
-the installer switches into the selected account before raising services.
+Profiles: `generic`, `aws`, `t2-macbook`, `steam-machine`. Two steps need a
+human: `sudo tailscale up --ssh` prints a login URL, and a T3 pairing link
+(dashboard, System, Connections & integrations) enrols your phone. Rerun
+`./raise.sh` after the Tailscale login, then `grave doctor` again.
 
-For scripted installs, choose explicitly with `--user grave`, `--user devbox`,
-or `--user current`. Creating an account requires a terminal for its password;
-unattended runs must use an account already provisioned with sudo access.
-Existing appliances keep their owner on re-raise, and immutable hosts retain
-their existing login/toolchain account. [Owner setup details](docs/INSTALL.md).
+The alternative is to let an agent raise it. SSH in, install Claude Code or
+Codex, and say: *Clone https://github.com/projectmushroom/gravedecay, read
+AGENTS.md, and raise this box with profile generic.* [AGENTS.md](AGENTS.md)
+is the playbook; the agent fixes distro quirks and hands you a passing doctor.
 
-`raise.sh` is idempotent, so updating *is* re-raising: config is never
-clobbered, services and dashboard refresh, doctor verifies the result.
+Updating is re-raising: `grave upgrade` pulls the latest release and reruns
+the ritual without touching your config.
+
+## First result: raise the dead
+
+*A repository nobody has built in a year makes a good first corpse.*
+
+Clone it under `$GRAVE_ROOT/repos` and queue the shipped prompt from the
+gravedecay checkout:
 
 ```sh
-grave upgrade                     # latest release tag (also in the dashboard UI)
-grave upgrade --tag vX.Y.Z        # pin an exact release; --edge follows main
-grave uninstall --dry-run         # print the whole teardown, change nothing
-grave uninstall [--purge]         # remove platform; --purge also deletes data
+git clone https://github.com/you/dead-repo "$GRAVE_ROOT/repos/dead-repo"
+grave agents run resurrect --repo dead-repo --prompt-file prompts/resurrect.txt
 ```
 
-Uninstall keeps `$GRAVE_ROOT` and docker volumes unless you `--purge`; the
-full contract is in [docs/UNINSTALL.md](docs/UNINSTALL.md).
+[prompts/resurrect.txt](prompts/resurrect.txt) tells the agent to establish
+what builds and what fails, reconstruct the documented dev setup (Node and
+Python first), attempt a bounded repair, run the checks, commit, and end with
+a report of what is still dead. It never merges, pushes or deploys.
 
-## Connecting a device
-
-Two routes; most setups use both:
-
-**Route A — the tailnet** (dashboard, terminal, files, gravenet). Install
-[Tailscale](https://tailscale.com/download) on the device, sign into the same
-account as the box, toggle the VPN on (the #1 "it's broken" cause is that
-it's off), then open `https://<box>.<tailnet>.ts.net/grave/` and add it to
-your Home Screen/Dock — everything on the box is one tap from that PWA. To
-use T3's web UI, mint a pairing token from System → Connections & integrations on any paired device
-and open the printed `/pair` link on the new one.
-
-**Route B — the official T3 apps** ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824) ·
-[Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code) ·
-desktop) drive the agents. Connect them over the tailnet with a pairing
-token, or without a VPN on the device via `grave t3 connect full` (managed
-relay), or keep tailnet-only transport and still get phone push with
-`grave t3 connect publish`. Doctor enforces the declared mode; trade-offs in
-[docs/SECURITY.md](docs/SECURITY.md).
-
-## What's on the box
-
-**Dashboard** (`/grave/`) — the system overview and controller, installable
-as a PWA. **Work tab:** PRs, Linear issues, CI status, agent token spend,
-live agent sessions, repo state. **System tab:** vitals, services, docker,
-journal errors, one-tap updates with a release picker. **Launcher tiles** for
-T3, terminal, Claude, Codex, GitHub, and a built-in file manager jailed to
-`$GRAVE_ROOT`. **System → Configuration:** widgets and tiles, pairing tokens, re-auth
-flows, T3 Connect, notifications. Sections show compact summaries with expandable
-details; see [Dashboard layout](docs/DASHBOARD.md).
-
-**Web terminal** (`/term/`) — ttyd + xterm.js attached to the same
-`tmux -L agents` socket as SSH: close the tab, the session lives on; browser,
-SSH, and phone reach the *same* session. Drag-select copies via OSC 52
-(hold Shift for native browser selection).
-
-**gravenet** (`/net/`) — realtime network view: per-interface RX/TX
-sparklines, topology from upstream gateway through the box, DHCP leases,
-conntrack count, tailnet peers. One stdlib-only Python daemon, no build step.
-
-**Game mode** (optional) — `grave gaming` freezes agent sessions with the
-cgroup v2 freezer (zero CPU, RAM kept, resume mid-thought) and stops
-T3/docker; `--kill` for maximum headroom, `--for 2h` auto-restores,
-`grave developer` thaws. Tailscale, SSH, and the dashboard always stay up.
-
-**Notifications** — the box pages you (agents finishing or waiting on a
-prompt, failing units, failing doctor) via Web Push to the installed PWA
-and/or an [ntfy](https://ntfy.sh) topic. Wired but silent until you opt in;
-`grave notify "msg"` for scripting. See [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md).
-
-**Dev-server preview** — `grave preview 3000` exposes a loopback dev server
-at `https://<box>.ts.net:3000`, tailnet-only, at the URL root so HMR and
-websockets just work. `grave preview off 3000` stops it.
-
-## Daily driving
+The run starts on the next scheduler scan (`--at 02:00` makes it nightly).
+In the morning `grave agents jobs` shows one line per job:
 
 ```
-grave status                     # services, containers, agents, temps, disk
-grave doctor                     # verify every platform invariant
-grave bench                      # score local development speed (System tab also)
-grave agents new mybot [dir]     # persistent tmux agent session
-grave agents new mybot --repo app --branch agent/mybot  # isolated Git worktree
-grave agents attach mybot        # detach: Ctrl-b d — session survives
-grave agents prune               # safely clean up eligible idle worktrees
-grave agents run nightly --repo app --prompt-file ~/nightly.txt --at 02:00
-grave agents jobs                 # persistent schedules; jobs cancel <name> stops one
-grave agents new issue-run --repo app --task /path/to/task.json  # saved Linear task
-grave gaming [--kill] [--for 2h] # 🎮 free resources; optionally auto-restore
-grave developer                  # 💻 thaw + restore
-grave docker ps|up|down|logs     # stack management
-grave preview 3000               # expose a dev server on the tailnet
-grave logs t3|dash|term|<unit>   # follow logs
-grave update                     # snapshot (if snapper), update pkgs/npm/images
-grave backup / restore           # git bundles + configs + docker volumes
-grave backup verify <timestamp>  # checksum a backup before relying on it
-grave notify "title" ["body"]    # page your devices
+resurrect            claude dead-repo            next —  enabled  last succeeded/ready-for-review
 ```
 
-The Work tab's Linear **Work on this** button starts Codex or Claude in an
-isolated worktree and links the issue, session, and resulting PR. See
-[issue dispatch](docs/DISPATCH.md) for setup and supported platforms.
+The dashboard's **Overnight report** shows the card. It leads with the
+verdict: green `ready-for-review` (the agent exited cleanly, left commits or
+edits, and every check passed), red `checks-failed` or `provider-failed`,
+amber `unverified` when no check ran. Below it: commits, files and lines
+changed; each check with its command, `source` (`owner` or `base:<sha>`),
+exit code and duration; the amber **Test changes** line when tests were
+deleted, skipped or trimmed; the estimated cost; the output tail, which ends
+with the agent's report; and the diff against the base.
 
-## Host profiles
+To see the branch running, add `--serve` when queuing:
 
-Machine-specific quirks live in `profiles/*.sh`, applied by
-`raise.sh --profile <name>`; each flips matching `CHECK_*` doctor flags.
+```sh
+grave agents run resurrect --repo dead-repo --prompt-file prompts/resurrect.txt \
+  --serve 'vite --host 127.0.0.1 --port $PORT --strictPort'
+```
 
-- **generic** — any always-on dev box; masks suspend.
-- **aws** — EC2 (Amazon Linux 2023): fills the distro's package gaps; see
-  [docs/AWS.md](docs/AWS.md).
-- **t2-macbook** — Intel T2 Macs: sleep/lid handling, amdgpu crash workaround.
-- **steam-machine** — stock SteamOS (immutable rootfs): durable toolchain in
-  `$HOME`, survives OS updates, games alongside; see [docs/STEAMOS.md](docs/STEAMOS.md).
+After a `ready-for-review` run the box starts that command in the worktree,
+maps it over the tailnet, and the card gains **Open live**, valid for 24 hours
+or until the next run. Details and the verdict table are in
+[docs/SCHEDULES.md](docs/SCHEDULES.md).
 
-Writing your own is ~20 lines; see `profiles/README.md`.
+## What lies beneath
 
-## Going further
+- **Dashboard** (`/grave/`): the overview and controller, installable as a
+  PWA; Work tab for runs, PRs, Linear issues, CI and spend; System tab for
+  vitals, services, updates ([docs/DASHBOARD.md](docs/DASHBOARD.md)).
+- **Terminal** (`/term/`): ttyd on the same `tmux -L agents` socket as SSH;
+  close the tab and the session lives on ([docs/TERMINAL.md](docs/TERMINAL.md)).
+- **Preview**: `grave preview 3000` exposes a loopback dev server at
+  `https://<box>.ts.net:3000` on the tailnet; jobs get the same through `--serve`.
+- **gravenet** (`/net/`): live network view, per-interface traffic, tailnet
+  peers, one stdlib Python daemon.
+- **Gravekeeper**: `grave keeper ask "<question>"` runs a read-only agent over
+  the box's own state, logs and docs; it diagnoses, it does not change anything.
+- **Notifications**: Web Push to the installed PWA and/or an ntfy topic, for
+  finished runs, failing units and a failing doctor
+  ([docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md)).
+- **Gaming mode**: `grave gaming` freezes agent sessions with the cgroup
+  freezer and stops T3 and Docker; `grave developer` thaws; SteamOS boxes can
+  switch automatically.
+- **Backups**: a nightly timer bundles repos, configs and Docker volumes;
+  doctor enforces freshness; `grave restore` puts them back
+  ([docs/RECOVERY.md](docs/RECOVERY.md)).
 
-- **Secrets & MCP** — per-integration keys in `$GRAVE_ROOT/config/secrets/`
-  reach both Claude and Codex sessions via one systemd drop-in; worked
-  example in [docs/SECRETS.md](docs/SECRETS.md).
-- **Trusted collaborators** — opt-in multi-user mode with per-user Unix
-  identities and project grants: [docs/MULTIUSER.md](docs/MULTIUSER.md).
+## Tending the grave
+
+```
+grave status                              # services, containers, agents, temps, disk
+grave doctor                              # verify every platform invariant
+grave agents run <job> --repo <r> --prompt-file <f> [--at 02:00] [--check '<cmd>'] [--serve '<cmd>']
+grave agents jobs                         # schedules and last verdicts; jobs cancel <job> stops one
+grave agents new <name> --repo <r>        # interactive session in an isolated worktree
+grave agents attach <name>                # detach with Ctrl-b d; the session survives
+grave agents prune                        # drop clean, merged, idle worktrees
+grave preview 3000                        # expose a loopback dev server on the tailnet
+grave gaming [--kill] [--for 2h]          # torpor: freeze agents, free RAM and GPU
+grave developer                           # thaw and restore
+grave notify "title" ["body"]             # page your devices
+grave logs t3|dash|term|<unit>            # follow logs
+grave upgrade                             # latest release; --edge follows master
+grave backup                              # bundles, configs, volumes; grave restore undoes
+```
+
+## What stays buried
+
+- **Tailnet only.** The ways in are Tailscale and key-only SSH. One
+  `tailscale serve` origin carries the dashboard, T3, terminal and gravenet;
+  the official T3 apps' relay is the single opt-in exception
+  ([docs/SECURITY.md](docs/SECURITY.md)).
+- **Loopback binds.** Every service, database and preview listens on
+  `127.0.0.1`; a serve command that binds wider is killed and never mapped.
+- **Default-deny firewall.** ufw or firewalld, SSH and `tailscale0` allowed,
+  nothing else, no port forwarding.
+- **Doctor is the contract.** Every invariant above, and every run record,
+  check source, serve mapping and the no-bypass-flag provider table, is a
+  `grave doctor` check. A quirk doctor cannot see will regress.
+- **The honest limit.** Agents and the runner share one root-equivalent owner
+  account (scoped sudoers), and checks run agent-written code as that owner,
+  inside the test process; a live preview keeps that code running for up to a
+  day. Read the verdict as checks run by the runner with a command the agent
+  did not choose, then read the diff.
+
+## Neighbouring plots
+
+| Tool | What it does | What gravedecay does instead |
+| --- | --- | --- |
+| [gatekeep](https://github.com/SagnikKK1/gatekeep) | Hooks, CLI and a GitHub Action that stop an agent from calling work done when tests were deleted, skipped or weakened, diffed against a session-start snapshot. | Shows the same patterns on the card as an amber, informational line, never as the verdict; add gatekeep as a `--check` to make it one. |
+| [discipline](https://github.com/orieg/discipline) | A GitHub Action with a test-integrity gate: deleted test files, unconditional skip/only/todo markers and assertion reductions fail the PR unless a label says the change is intended. | Runs on the box before a PR exists, with your own test command; [docs/REQUIRED-CHECKS.md](docs/REQUIRED-CHECKS.md) shows how to require either tool on the repository. |
+| protect-the-oracle recipe | Freeze the tests at the base commit, lock fixtures by hash and cap skips in CI, so the oracle grading the agent is not the one it edited. | Pins the check command to the base commit the same way, but runs it in the agent's worktree where tests are writable; the pin stops a swapped command, not an edited test. |
+| [Paseo](https://paseo.sh) | Self-hosted daemon that runs Claude Code, Codex, OpenCode and others on your machines, driven from phone, desktop and web, with worktrees, push and an optional relay. | Leaves live-session control to T3 and adds the unattended schedule, the runner-executed checks, the morning card and the system contract around the box. |
+| [Open Session](https://github.com/tellahq/opensession) | Self-hosted server that drives sessions in worktrees or sandboxes with Slack, Linear, Plain and GitHub intake, diff and PR review, and several subscriptions. | A single-owner appliance: firewall, services, backups and doctor come with it; Linear intake is one button and GitHub PR intake is left out on purpose. |
+| Cursor cloud agents | Each agent in an isolated cloud VM that clones from GitHub, drives a browser and opens a PR. | The same shape on hardware you own, next to your real database and private services, with no per-day cap, no vendor relay, and a live preview of the branch instead of a recording. |
+
+## Other plots
+
+<details>
+<summary>macOS app, companion, portable Docker, multi-user</summary>
+
+- **Standalone macOS app.** A Universal SwiftUI app that hosts this Mac as a
+  grave and reaches your other graves; DMG on the
+  [latest release](https://github.com/projectmushroom/gravedecay/releases/latest),
+  setup in [docs/MACOS.md](docs/MACOS.md#native-app-hosting).
+- **Classic macOS companion.** User-scoped LaunchAgents, no sudo:
+  `brew install projectmushroom/gravedecay/gravedecay-companion` then
+  `gravedecay-mac install` ([docs/MACOS.md](docs/MACOS.md)).
+- **Portable Docker workspace.** The same origin layout with no host control
+  plane, for a laptop or a disposable host ([docs/DOCKER.md](docs/DOCKER.md)).
+- **Multi-user mode.** Opt-in per-user Unix identities and project grants for
+  a few trusted collaborators; frozen, not expanding
+  ([docs/MULTIUSER.md](docs/MULTIUSER.md)).
+- **Clients.** The official T3 apps, the native Apple shell and the Omarchy
+  widget ([docs/CLIENTS.md](docs/CLIENTS.md)).
+
+</details>
 
 ## Docs
 
 | Doc | What |
-|---|---|
-| [AGENTS.md](AGENTS.md) | Playbook for the coding agent doing the install |
-| [docs/STEAMOS.md](docs/STEAMOS.md) | Raising on stock SteamOS (immutable rootfs): durable toolchain, update-survival |
-| [docs/AWS.md](docs/AWS.md) | Raising on EC2 (Amazon Linux 2023): package gaps, `--profile aws`, security group |
-| [docs/VM.md](docs/VM.md) | Raising in a plain VM (KVM/Proxmox): pre-flight probes, openSUSE Leap notes |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Why native-first, layout, mode model |
-| [docs/API.md](docs/API.md) | Versioned, read-only summary contract for thin clients |
-| [docs/SECURITY.md](docs/SECURITY.md) | Threat model, tailnet-only, T3 Connect trade-offs, sudoers scope, terminal trust |
-| [docs/CLIENTS.md](docs/CLIENTS.md) | Clients: official T3 apps, native Apple shell, and Omarchy widget |
-| [clients/apple/README.md](clients/apple/README.md) | Native iOS/macOS client, DMG, signing, and build details |
-| [docs/MACOS.md](docs/MACOS.md) | macOS companion, native-app coexistence, and macOS operations |
-| [docs/SECRETS.md](docs/SECRETS.md) | Secrets + MCP wiring for agent CLIs |
-| [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md) | Web Push + ntfy: agents, failing units, and doctor page your phone |
-| [docs/BENCHMARK.md](docs/BENCHMARK.md) | Development speed scores, parallel scaling, and sustained workloads |
-| [docs/PORTS.md](docs/PORTS.md) | Every port, documented or it doesn't exist |
-| [docs/RECOVERY.md](docs/RECOVERY.md) | Backup/restore procedures |
-| [docs/UNINSTALL.md](docs/UNINSTALL.md) | Unraising the box: what is removed, kept, and deliberately untouched |
+| --- | --- |
+| [AGENTS.md](AGENTS.md) | Playbook for the agent that raises the box |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Running the suites in containers; prompts, check detection and host profiles |
+| [docs/SCHEDULES.md](docs/SCHEDULES.md) | Scheduled runs, the result package, verdicts, live preview |
+| [docs/REQUIRED-CHECKS.md](docs/REQUIRED-CHECKS.md) | Making a test-integrity workflow required on a GitHub repository |
+| [docs/DASHBOARD.md](docs/DASHBOARD.md) | Dashboard layout and the Overnight report |
+| [docs/DISPATCH.md](docs/DISPATCH.md) | Starting work from a Linear issue |
+| [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md) | Web Push and ntfy |
+| [docs/SECURITY.md](docs/SECURITY.md) | Threat model, sudoers scope, T3 Connect, the shared account |
+| [docs/INSTALL.md](docs/INSTALL.md) | Choosing the appliance account |
+| [docs/PORTS.md](docs/PORTS.md) | Every port, documented or it does not exist |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Native first, layout, mode model |
+| [docs/API.md](docs/API.md) | Read-only summary contract for thin clients |
+| [docs/TERMINAL.md](docs/TERMINAL.md) | The web terminal |
+| [docs/SECRETS.md](docs/SECRETS.md) | Secrets and MCP wiring for agent CLIs |
+| [docs/RECOVERY.md](docs/RECOVERY.md) | Backup and restore |
+| [docs/UNINSTALL.md](docs/UNINSTALL.md) | Unraising: removed, kept, untouched |
+| [docs/BENCHMARK.md](docs/BENCHMARK.md) | Development speed scores |
+| [docs/GRAVEYARD.md](docs/GRAVEYARD.md) | Several graves from one overview |
+| [docs/CLIENTS.md](docs/CLIENTS.md) | Official T3 apps, Apple shell, Omarchy widget |
+| [docs/MACOS.md](docs/MACOS.md) | macOS app and companion |
+| [docs/DOCKER.md](docs/DOCKER.md) | Portable Docker workspace |
+| [docs/MULTIUSER.md](docs/MULTIUSER.md) | Multi-user identity and authorization |
+| [docs/STEAMOS.md](docs/STEAMOS.md) | Stock SteamOS: durable toolchain, update survival |
+| [docs/AWS.md](docs/AWS.md) | EC2 and Amazon Linux 2023 |
+| [docs/VM.md](docs/VM.md) | Plain VMs and openSUSE Leap |
+| [docs/NEXT.md](docs/NEXT.md) | Direction and what comes next |
+| [profiles/README.md](profiles/README.md) | Writing a host profile |
+| [clients/apple/README.md](clients/apple/README.md) | Native iOS and macOS client build |
 
-## License
+## Licence
 
 MIT. Daemons in the dirt, shipping while you sleep. 🪦
-
-Saved prompts can run unattended with isolated worktrees and an owner-only
-[overnight report](docs/SCHEDULES.md), including cancellation; gaming mode defers a due job and requeues one it interrupts.

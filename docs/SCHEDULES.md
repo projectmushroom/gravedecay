@@ -55,6 +55,41 @@ row is read-only. A tool that needs additional permission can fail rather than
 pause for a human. The runner asks the agent to follow repository
 instructions, verify its work, and avoid merging or deploying.
 
+The owner's rules are therefore the night shift's rules, and a fresh login
+has none: Claude denies every edit and every shell command it would normally
+ask about, and Codex's `workspace-write` sandbox has no network and treats the
+worktree's git directory (under the source repository's `.git`) as read-only,
+so it can install nothing and commit nothing. Both end `no-changes`. Grant
+what a night needs once, as the owner. For Claude, in `~/.claude/settings.json`:
+
+```json
+{"permissions": {"defaultMode": "acceptEdits",
+  "allow": ["Bash(npm *)", "Bash(npx *)", "Bash(node *)", "Bash(git *)",
+            "Bash(python3 *)", "Bash(make *)", "Bash(.venv/bin/*)"],
+  "deny": ["Bash(git push*)"]}}
+```
+
+Rules match the command's first word, so the worktree venv's own `pip` and
+`pytest` need the `.venv/bin/` entry; `Bash(python3 *)` alone leaves the agent
+unable to install into the venv it just created.
+
+For Codex, in `~/.codex/config.toml`, network access for installs:
+
+```toml
+[sandbox_workspace_write]
+network_access = true
+```
+
+Codex still cannot commit: its sandbox keeps a worktree's git metadata
+read-only whatever `writable_roots` says. Its repair stays as uncommitted
+edits in the worktree, which the verdict counts as changes and the checks
+run against; the owner reviews and commits. Claude commits as usual.
+
+Checks and the serve command run with the worktree's `.venv/bin` and
+`node_modules/.bin` first on PATH, so a Python agent creates its virtualenv at
+`.venv` inside the worktree and installs the test tools there; nothing needs
+to be installed on the owner's PATH.
+
 ## Result package
 
 Provider exit zero means the CLI completed; it is not a result anyone can act
@@ -95,12 +130,14 @@ flag the runner detects one from the run's **base commit**, read with
 `git show <base>:…` from the source checkout, never from the worktree, and
 records `source: "base:<sha>"`: a `package.json` whose `scripts.test` is not
 npm's "no test specified" placeholder runs that script string directly (not
-`npm test`, so no `pretest` hook) with the worktree's `node_modules/.bin`
-first on `PATH`; a `pyproject.toml` or `pytest.ini` runs `pytest`; a
+`npm test`, so no `pretest` hook) with the worktree's `.venv/bin` and
+`node_modules/.bin` first on `PATH`; a `pyproject.toml` or `pytest.ini` runs `pytest`; a
 `Makefile` with a `test` target runs `make test`; otherwise no check runs and
 the verdict is `unverified`. A test entry point the agent adds is not
 detected; one it rewrites is ignored. `GRAVE_BASE` carries the base SHA to
 every check, for owner commands that want to compare against it.
+To make the same rule a required status check on the GitHub repository, so
+nobody merges around it, see [REQUIRED-CHECKS.md](REQUIRED-CHECKS.md).
 
 Checks run after the provider, in the worktree (uncommitted work and
 installed dependencies included), with the same working directory, process
@@ -168,8 +205,8 @@ stays valid.
 another job's), stored in `job.json` as `serve: {cmd, port}` and shown by
 `grave agents jobs`. After a run ends `ready-for-review`, the runner starts the
 command in that run's worktree, in its own session, with `PORT` set and the
-worktree's `node_modules/.bin` on `PATH`; its output is appended to the session
-transcript. The command must listen on **127.0.0.1 only** (read from
+worktree's `.venv/bin` and `node_modules/.bin` on `PATH`; its output is
+appended to the session transcript. The command must listen on **127.0.0.1 only** (read from
 `/proc/net/tcp`; a server on `0.0.0.0`, `::` or `::1` is killed and nothing is
 mapped), then the port is mapped with `tailscale serve --https=<port>` and
 probed at `https://<box>.ts.net:<port>/` through the tailnet name, not raw
