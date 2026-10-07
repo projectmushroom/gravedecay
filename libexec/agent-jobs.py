@@ -474,13 +474,19 @@ def fit(text, budget, head=False):
     return text
 
 
+def worktree_path(directory):
+    """PATH for checks and the serve command: the worktree's own tool dirs first,
+    so what the agent installed there (a venv, npm devDependencies) is found."""
+    return ":".join([str(directory / ".venv/bin"), str(directory / "node_modules/.bin"), os.environ.get("PATH", "")])
+
+
 def run_check(cmd, source, directory, base, log, stop, timeout, record, started, budget=TAIL_BUDGET):
     """One check in the worktree: same directory, stop predicate and runtime
-    budget as the provider, with GRAVE_BASE and the worktree's node_modules/.bin
-    on PATH. Output goes to the transcript; the command (its head, up to half of
+    budget as the provider, with GRAVE_BASE and the worktree's .venv/bin and
+    node_modules/.bin on PATH. Output goes to the transcript; the command (its head, up to half of
     `budget`) and a tail of the output together fit `budget` JSON bytes."""
     began = time.monotonic()
-    env = dict(os.environ, GRAVE_BASE=base, PATH=str(directory / "node_modules/.bin") + ":" + os.environ.get("PATH", ""))
+    env = dict(os.environ, GRAVE_BASE=base, PATH=worktree_path(directory))
     with tempfile.TemporaryFile() as output:
         proc = subprocess.Popen(["/bin/sh", "-c", cmd], cwd=directory, env=env, stdin=subprocess.DEVNULL,
                                 stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
@@ -788,12 +794,12 @@ def live_preview(record, now=None):
 
 def start_preview(job, record, directory, log, path, started=None):
     """The job's serve command in the run's worktree, in its own session, with
-    PORT set and the worktree's node_modules/.bin on PATH; its output goes to the
+    PORT set and the worktree's .venv/bin and node_modules/.bin on PATH; its output goes to the
     session transcript. It must listen on 127.0.0.1 only, then answer HTTP 200
     through the tailnet name within PREVIEW_WAIT seconds, or it is killed and
     nothing is mapped. Returns the preview recorded in the run, or None."""
     port, cmd = job["serve"]["port"], job["serve"]["cmd"]
-    env = dict(os.environ, PORT=str(port), PATH=str(directory / "node_modules/.bin") + ":" + os.environ.get("PATH", ""))
+    env = dict(os.environ, PORT=str(port), PATH=worktree_path(directory))
     with open(log, "ab") as transcript:
         transcript.write(("\n$ PORT=" + str(port) + " " + cmd + "\n").encode())
         proc = subprocess.Popen(["/bin/sh", "-c", cmd], cwd=directory, env=env, stdin=subprocess.DEVNULL,

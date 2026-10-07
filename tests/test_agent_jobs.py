@@ -404,6 +404,28 @@ print("<script>literal output</script>", flush=True)
         (self.repo / "package.json").write_text(json.dumps({"scripts": {"test": "vitest run"}}))
         return self.commit("node")
 
+    def test_runner_puts_the_worktree_venv_on_path(self):
+        # `pytest` from the base's pytest.ini resolves through the worktree's .venv/bin,
+        # the Python counterpart of node_modules/.bin; the owner's PATH needs nothing.
+        tools = self.root / "pytools"; tools.mkdir()
+        self.assertNotIn(str(tools), self.env["PATH"])
+        (tools / "pytest").write_text("#!" + sys.executable + '\nimport os\nprint("venv pytest", os.environ["GRAVE_BASE"], flush=True)\n')
+        (tools / "pytest").chmod(0o755)
+        (self.repo / "pytest.ini").write_text("[pytest]\n")
+        base = self.commit("python")
+        self.exe("codex", 'import subprocess\nfrom pathlib import Path\n'
+                 'Path(".venv/bin").mkdir(parents=True)\n'
+                 'Path(".venv/bin/pytest").symlink_to(%r)\n'
+                 'Path("file.txt").write_text("repaired\\n")\n'
+                 'subprocess.run(["git","commit","-qam","repair"], check=True)\n' % str(tools / "pytest"))
+        self.add()
+        self.call("worker", "nightly")
+        record = self.records()[0]
+        check = record["result"]["checks"][0]
+        self.assertEqual((check["cmd"], check["exit_code"], check["source"]), ("pytest", 0, "base:" + base))
+        self.assertIn("venv pytest " + base, check["tail"])
+        self.assertEqual(record["result"]["verdict"], "ready-for-review")
+
     def test_replacing_the_base_commit_from_the_worktree_does_not_change_the_check(self):
         # refs/replace is shared through the common git dir; the runner reads the base with it disabled.
         base = self.node_repo()
