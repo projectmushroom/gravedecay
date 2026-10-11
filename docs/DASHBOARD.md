@@ -99,6 +99,13 @@ after a reload of the PWA. **Conversations** lists saved sessions; **New** start
 another. A missing or logged-out provider and a turn interrupted by a dashboard
 restart are reported with the next step. Conversation identity is stored per
 grave in this browser, so switching graves never carries a pending turn along.
+
+**Memory** opens what the Keeper remembers on this grave: one short text you
+can edit, **Save** or **Forget all**. Tell the Keeper "remember that…" and it
+adds a dated line; it reads the whole text before every turn as owner notes.
+A save that collides with a line the Keeper just added keeps your draft on
+screen and asks you to reload before saving again. Secrets and permission
+grants are refused.
 Runner and limits: [API.md](API.md#gravekeeper-conversations),
 [SECURITY.md](SECURITY.md#the-gravekeeper).
 
