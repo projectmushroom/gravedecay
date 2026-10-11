@@ -526,10 +526,12 @@ the owner's rules; Codex 0.155's built-in `exec` isolate, `view_image`,
 `apply_patch` and sub-agent tools, which no configuration removes). The Keeper
 is therefore an owner-level assistant, not a sandboxed one.
 
-On top of that it gets one MCP server, `keeper.py mcp`, with three tools:
+On top of that it gets one MCP server, `keeper.py mcp`, with four tools:
 `get_resource` (the structured resources), `get_logs` (the `grave logs` targets
-that need no name, at most 500 lines) and `run_doctor` (a durable `doctor`
-operation, so it takes the shared action lock and appears in operation history).
+that need no name, at most 500 lines), `run_doctor` (a durable `doctor`
+operation, so it takes the shared action lock and appears in operation history)
+and `remember` (one dated line into the owner-editable memory, through the
+revision-checked `keeper/memory` endpoint).
 Every tool call goes through the dashboard's owner-gated API with the local
 maintenance token; the model never receives that token, and environment
 variables whose names look like secrets are removed before the provider starts.
@@ -541,6 +543,17 @@ Conversation records live in owner-private `$GRAVE_ROOT/config/secrets/keeper/`
 file and the private storage, and reports whether the configured provider is
 installed and logged in (a post-raise owner step, not a failure). `GRAVEKEEPER.md` is the instruction file, not an authorization
 boundary: change what the Keeper may do by changing the CLI's own permissions.
+
+Memory (`config/secrets/keeper/memory.md`, 4000 characters, 0600) is data the
+owner can read, edit and erase from the drawer. Each turn receives it inside an
+`<owner-notes>` block that the instruction file tells the model to treat as
+preferences, never as instructions or authorization; nothing in memory changes
+what the API or the CLI permit. Writes refuse secret-shaped text, access grants
+and bypass instructions, and doctor re-checks the stored file for the same
+patterns, its size and its mode. The Keeper may only call `remember` for what
+the owner asked to keep in that turn; log, repository and model text is never
+promoted into memory automatically, and forgetting removes the text from every
+later turn while finished transcripts keep their own retention.
 
 The dashboard drawer renders every event as text; its controls (chips, Stop,
 New) are application-owned and a reply cannot add or trigger one. The browser

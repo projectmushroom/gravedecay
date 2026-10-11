@@ -156,14 +156,14 @@ CLIENT_TRUST_PATH = os.path.join(GRAVE_ROOT, "config", "secrets", "dashboard-tru
 CLIENT_ROUTES = {
     "GET": frozenset(("state", "settings", "capabilities", "t3-activity",
                       "admin/benchmark", "admin/releases", "admin/update-status",
-                      "files", "download", "agent-log", "dispatch-pr", "operations", "openapi.json", "keeper",
+                      "files", "download", "agent-log", "dispatch-pr", "operations", "openapi.json", "keeper", "keeper/memory",
                       "resources/system", "resources/services", "resources/containers", "resources/sessions",
                       "resources/repositories", "resources/preferences")),
     "POST": frozenset(("settings", "admin/benchmark", "admin/upgrade", "admin/update-check",
                        "action", "action-stream", "fs", "upload", "session-kill",
                        "session-resume", "session-capture", "agent-job-cancel",
                        "linear-issue", "linear-dispatch", "notify-test", "operations", "resources/preferences",
-                       "keeper", "keeper/turn", "keeper/cancel")),
+                       "keeper", "keeper/turn", "keeper/cancel", "keeper/memory")),
 }
 
 
@@ -3415,7 +3415,7 @@ class Handler(BaseHTTPRequestHandler):
                 "host": HOST, "platform": PLATFORM, "routes": client_routes(),
                 "actions": sorted(ACTIONS), "operations": {"protocol": 1, "actions": operation_actions(),
                 "retention_seconds": operations.RETENTION, "new_id_max_age_seconds": operations.KEY_AGE},
-                "keeper": ({**keeper.conf(), "tools": [tool["name"] for tool in keeper.TOOLS]} if keeper_supported() else {}),
+                "keeper": ({**keeper.conf(), "tools": [tool["name"] for tool in keeper.TOOLS], "memory_limit": keeper.MAX_MEMORY} if keeper_supported() else {}),
                 "resource_contract": {"version": api_contract.VERSION, "schema": "openapi.json", "sha256": API_DOCUMENT_HASH, "build": api_contract.BUILD_ID,
                                       "resources": [p.split("/", 1)[1] for p in client_routes()["GET"] if p.startswith("resources/")]}})); return
         if self._client_authorized and p == "/api/openapi.json":
@@ -3428,12 +3428,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self._client_authorized and p == "/api/settings":
             self._send(200, json.dumps({"settings": load_settings()})); return
-        if self._client_authorized and p == "/api/keeper":
+        if self._client_authorized and p in ("/api/keeper", "/api/keeper/memory"):
             if not keeper_supported():
                 self._client_error(501, "unsupported", "The Gravekeeper requires a single-owner Linux grave"); return
             try:
                 query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
-                if "id" in query:
+                if p == "/api/keeper/memory":
+                    result = KEEPER.memory()
+                elif "id" in query:
                     cursor = query.get("after", ["0"])[0]
                     if not re.fullmatch(r"[0-9]{1,10}", cursor):
                         raise keeper.KeeperError(400, "invalid_cursor", "Invalid progress cursor")
@@ -3691,7 +3693,7 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 self._client_error(503, "resource_unavailable", "Cannot read or save preferences; check the grave")
             return
-        if self._client_authorized and p in ("/api/keeper", "/api/keeper/turn", "/api/keeper/cancel"):
+        if self._client_authorized and p in ("/api/keeper", "/api/keeper/turn", "/api/keeper/cancel", "/api/keeper/memory"):
             if not keeper_supported():
                 self._client_error(501, "unsupported", "The Gravekeeper requires a single-owner Linux grave"); return
             try:
@@ -3710,6 +3712,10 @@ class Handler(BaseHTTPRequestHandler):
                     if set(data) != {"conversation", "turn", "message"}:
                         raise ValueError("Supply conversation, turn and message")
                     result, created = KEEPER.send(data["conversation"], data["turn"], data["message"], owner)
+                elif p == "/api/keeper/memory":
+                    if set(data) != {"text", "revision"}:
+                        raise ValueError("Supply the memory text and the revision you read")
+                    result = KEEPER.set_memory(data["text"], data["revision"])
                 else:
                     if set(data) != {"conversation"}:
                         raise ValueError("Supply the conversation ID")

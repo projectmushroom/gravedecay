@@ -102,6 +102,7 @@ Platform-specific handlers continue to validate runtime availability.
 | `linear-issue`, `linear-dispatch`, `notify-test` | POST existing integration operations |
 | `operations` | GET owner-private progress or health; POST a retry-safe console action (single-owner Linux) |
 | `keeper`, `keeper/turn`, `keeper/cancel` | GET conversation list or one conversation by cursor; POST create, send a turn, cancel (single-owner Linux; see [Gravekeeper conversations](#gravekeeper-conversations)) |
+| `keeper/memory` | GET the Keeper's owner-editable memory with its revision; POST the full text with that revision (see [Gravekeeper memory](#gravekeeper-memory)) |
 | `action` | POST `{action: ...}` using the advertised fixed action names |
 | `action-stream?action=...` | **POST only**: SSE output (`data: <JSON string>`, then `event: done` with exit code) |
 
@@ -411,6 +412,27 @@ ten minutes. At most 64 conversations are kept for 30 days under owner-private
 
 `grave keeper ask "<prompt>"` and `grave keeper resume <id> "<prompt>"` drive the
 same endpoints from the shell using the local maintenance token.
+
+### Gravekeeper memory
+
+One bounded text per grave that the Keeper reads before every turn, labelled
+as owner notes rather than instructions. It is the preference pattern with a
+second key: read it with its revision, send the whole text back with that
+revision, get 409 `revision_conflict` if it moved meanwhile.
+
+```http
+GET  /grave/api/v1/keeper/memory
+POST /grave/api/v1/keeper/memory         {"text": "- Maintenance after 02:00 only\n", "revision": "<sha256 of the text you read>"}
+```
+
+The reply carries `text`, `revision`, `updated_at` (null until first saved)
+and `limit` (4000 characters, also in `capabilities.keeper.memory_limit`).
+Empty text forgets everything. 400 `unsafe_memory` refuses text that looks
+like a credential, a token, an access grant or a permission-bypass
+instruction. The `remember` MCP tool appends one dated line through this same
+endpoint, so the Keeper and the drawer share one writer and one revision chain.
+The file is `$GRAVE_ROOT/config/secrets/keeper/memory.md` (0600), inside the
+owner-private store that backups already cover.
 
 The dashboard drawer follows the console-operation rules: it keeps only the
 conversation ID and the current turn (ID, message, accepted flag) per

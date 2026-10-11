@@ -477,6 +477,10 @@ body.remote-pending #panels,body.remote-pending #launcher,body.remote-pending #a
 #keeper-head .spacer{flex:1}
 #keeper-status{font-size:12px;color:var(--muted);margin:6px 0;overflow-wrap:anywhere}
 #keeper-list{border-bottom:1px solid var(--ring);padding-bottom:6px;max-height:40%;overflow-y:auto}
+#keeper-memory{border-bottom:1px solid var(--ring);padding:6px 0}
+#keeper-memory-text{width:100%;box-sizing:border-box;min-height:120px;font-size:14px;font-family:inherit;background:var(--inset);color:var(--ink);border:1px solid var(--ring);border-radius:6px;padding:6px}
+#keeper-memory-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding-top:6px}
+#keeper-memory-row .dim{flex:1;font-size:12px;overflow-wrap:anywhere}
 #keeper-list button{display:block;width:100%;text-align:left;margin:4px 0;font-size:12px;overflow-wrap:anywhere}
 #keeper-list button[aria-current="true"]{border-color:var(--accent)}
 #keeper-log{flex:1;min-height:0;overflow-y:auto;padding:8px 0;font-size:13px;line-height:1.5;overscroll-behavior:contain}
@@ -878,10 +882,19 @@ body.remote-pending #panels,body.remote-pending #launcher,body.remote-pending #a
     <span id="keeper-host" title="This conversation speaks for one grave only"></span>
     <span class="spacer"></span>
     <button class="mini" id="keeper-conversations" aria-expanded="false" aria-controls="keeper-list">Conversations</button>
+    <button class="mini" id="keeper-memory-open" aria-expanded="false" aria-controls="keeper-memory">Memory</button>
     <button class="mini" id="keeper-new">New</button>
     <button class="mini xbtn" id="keeper-x" title="close (Esc)" aria-label="close">✕</button>
   </div>
   <div id="keeper-list" hidden></div>
+  <div id="keeper-memory" hidden>
+    <textarea id="keeper-memory-text" maxlength="4000" aria-label="Keeper memory" placeholder="Nothing remembered yet. Preferences and decisions the Keeper should keep in mind, one per line."></textarea>
+    <div id="keeper-memory-row">
+      <button class="mini" id="keeper-memory-save">Save</button>
+      <button class="mini" id="keeper-memory-forget">Forget all</button>
+      <span class="dim" id="keeper-memory-status" role="status" aria-live="polite"></span>
+    </div>
+  </div>
   <p id="keeper-status" role="status" aria-live="polite"></p>
   <div id="keeper-log" role="log" aria-live="polite" aria-label="Conversation with the Keeper"></div>
   <div id="keeper-chips">
@@ -2961,7 +2974,8 @@ async function keeperJSON(path,body,signal){
 async function keeperCapabilities(){
   let info;
   try{info=await capabilities();}catch(e){if(!remoteGrave&&e.status===501)return null;throw e;}
-  return info.keeper?.provider&&info.routes.GET.includes('keeper')&&info.routes.POST.includes('keeper/turn')?info.keeper:null;
+  return info.keeper?.provider&&info.routes.GET.includes('keeper')&&info.routes.POST.includes('keeper/turn')
+    ?{...info.keeper,memory:info.routes.POST.includes('keeper/memory')}:null;
 }
 async function paintKeeperEntry(){
   keeperProbed=Date.now();
@@ -2972,7 +2986,7 @@ function keeperStatus(text){$('keeper-status').textContent=text;}
 function keeperProviderLine(){return `${keeperInfo.provider}${keeperInfo.model?' · '+keeperInfo.model:''} · speaks only for ${targetLocation.hostname}`;}
 function keeperBusy(on){
   $('keeper-send').hidden=on;$('keeper-stop').hidden=!on;$('keeper-stop').disabled=false;
-  ['keeper-new','keeper-conversations'].forEach(id=>$(id).disabled=on);
+  ['keeper-new','keeper-conversations','keeper-memory-open'].forEach(id=>$(id).disabled=on);
   $('keeper-chips').querySelectorAll('button').forEach(b=>b.disabled=on);
 }
 function renderKeeperEvent(event){
@@ -3095,6 +3109,39 @@ async function toggleKeeperList(){
     }):[Object.assign(document.createElement('p'),{className:'dim',textContent:`No saved conversations on ${targetLocation.hostname}.`})]));
   }catch(e){list.textContent=e.message;}
 }
+// Memory: the whole text plus the revision it was read at, like preferences. A 409 keeps the draft on screen.
+let keeperMemoryRevision=null;
+function keeperMemoryStatus(text){$('keeper-memory-status').textContent=text;}
+async function loadKeeperMemory(){
+  keeperMemoryStatus('Loading…');
+  try{
+    const m=await keeperJSON('keeper/memory');
+    keeperMemoryRevision=m.revision;$('keeper-memory-text').value=m.text;
+    keeperMemoryStatus(m.updated_at?`Saved ${new Date(m.updated_at*1000).toLocaleString()} · read before every turn`:'Empty · read before every turn');
+  }catch(e){keeperMemoryRevision=null;keeperMemoryStatus(e.message);}
+}
+async function saveKeeperMemory(text){
+  if(keeperMemoryRevision===null){keeperMemoryStatus('Reload the memory before saving.');return;}
+  keeperMemoryStatus('Saving…');
+  try{
+    const m=await keeperJSON('keeper/memory',{text,revision:keeperMemoryRevision});
+    keeperMemoryRevision=m.revision;$('keeper-memory-text').value=m.text;
+    keeperMemoryStatus(m.text?'Saved. The Keeper reads this before its next turn.':'Forgotten. Nothing is injected into the next turn.');
+  }catch(e){
+    if(e.code==='revision_conflict')keeperMemoryStatus('Memory changed on the grave meanwhile (the Keeper may have remembered something). Your draft is kept: copy it, press Memory twice to reload, then save again.');
+    else keeperMemoryStatus(e.message);
+  }
+}
+function toggleKeeperMemory(){
+  const panel=$('keeper-memory'),open=panel.hidden;
+  $('keeper-memory-open').setAttribute('aria-expanded',String(open));
+  panel.hidden=!open;
+  if(open){if(!keeperInfo?.memory){keeperMemoryStatus(`Memory needs a release with the keeper/memory route on ${targetLocation.hostname}.`);$('keeper-memory-text').disabled=true;return;}
+    $('keeper-memory-text').disabled=false;loadKeeperMemory();}
+}
+$('keeper-memory-open').onclick=toggleKeeperMemory;
+$('keeper-memory-save').onclick=()=>saveKeeperMemory($('keeper-memory-text').value);
+$('keeper-memory-forget').onclick=()=>{if(confirm(`Forget everything the Keeper remembers on ${targetLocation.hostname}?`))saveKeeperMemory('');};
 function fitKeeper(){
   // iOS keeps 100dvh under the software keyboard; follow the visual viewport so the composer stays in view.
   const vv=window.visualViewport,drawer=$('keeper');
