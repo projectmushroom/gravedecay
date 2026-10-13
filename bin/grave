@@ -27,6 +27,11 @@ source "$CONF"
 # documented in docs/RECOVERY.md and grave.conf.example.
 : "${BACKUP_MAX_AGE_DAYS:=2}"
 
+# Doctor warns, then fails, as $GRAVE_ROOT's filesystem fills (used %).
+# Defaults here for older grave.conf; documented in grave.conf.example.
+: "${DISK_WARN_PCT:=85}"
+: "${DISK_CRIT_PCT:=95}"
+
 # Event classes allowed to page the human via `grave notify --event` (#78).
 # Default here so installs whose grave.conf predates the feature still work;
 # documented in docs/NOTIFICATIONS.md and grave.conf.example. The dashboard's
@@ -1271,7 +1276,9 @@ cmd_digest() { # grave digest [--print]  (--print: compose only, never page)
   doctor_rc=$?
   set -e
   if (( doctor_rc == 0 )); then
-    doctor_line="doctor: ✓ all checks passed"
+    # WARN never pages on its own; the morning digest is where it surfaces.
+    local warns; warns=$(grep -oE '[0-9]+ warning\(s\)' <<<"$doctor_out" | tail -1)
+    doctor_line="doctor: ✓ all checks passed${warns:+, $warns — run: grave doctor}"
   else
     local fails; fails=$(grep -oE '[0-9]+ check\(s\) failed' <<<"$doctor_out" | tail -1)
     doctor_line="doctor: ✗ ${fails:-failing} — run: grave doctor"
@@ -1497,8 +1504,31 @@ cmd_logs() { # grave logs [--tail <n>] [<target>]   (--tail: print n lines and e
 }
 
 # ---------------------------------------------------------------- doctor ----
+fail() { # fail <message> [<key>] — key: stable name for doctor_page when the message varies
+  bad "$1"; FAILURES=$((FAILURES+1)); FAILED+="${2:-$1}"$'\n'
+}
+warn() { printf '  %b!%b %s\n' "$YLW" "$RST" "$1"; WARNINGS=$((WARNINGS+1)); }
 check() { # check <description> <command...>
-  if "${@:2}" >/dev/null 2>&1; then ok "$1"; else bad "$1"; FAILURES=$((FAILURES+1)); fi
+  if "${@:2}" >/dev/null 2>&1; then ok "$1"; else fail "$1"; fi
+}
+levels() { # levels <description> <value> <warn> <crit> — Checkmk-style thresholds
+  if (( $2 >= $4 )); then fail "$1: $2 (crit at $4)" "$1"
+  elif (( $2 >= $3 )); then warn "$1: $2 (warn at $3)"
+  else ok "$1: $2"; fi
+}
+doctor_page() { # page when the failing set changes, not on every failing run
+  # The doctor runs from the dashboard, keeper and the CLI; a page per run for
+  # one ongoing failure is how a channel gets muted. Unreadable state pages.
+  local state="$GRAVE_ROOT/logs/doctor-failing" prev
+  prev=$(cat "$state" 2>/dev/null) || prev=""
+  [[ "$prev" == "${FAILED%$'\n'}" ]] && return 0
+  ( umask 077; printf '%s' "${FAILED%$'\n'}" > "$state" ) 2>/dev/null || true
+  if [[ -n "$FAILED" ]]; then
+    # Subshell: cmd_notify exits, doctor must still print its own verdict.
+    ( cmd_notify --event doctor --priority high --link "/grave/?tab=system" "doctor: $FAILURES check(s) failed" "${FAILED}on ${HOSTNAME:-gravedecay} — run: grave doctor" ) || true
+  else
+    ( cmd_notify --event doctor --link "/grave/?tab=system" "doctor: recovered" "all checks pass on ${HOSTNAME:-gravedecay}" ) || true
+  fi
 }
 firewall_active() {
   # Not merely "a firewall is running": the appliance boundary (AGENTS.md §3) is
@@ -1571,8 +1601,9 @@ cmd_doctor() { # grave doctor [--no-page]
   # failing contract is how notifications get muted wholesale.
   local no_page=0
   [[ "${1:-}" == "--no-page" ]] && no_page=1
-  FAILURES=0
+  FAILURES=0; WARNINGS=0; FAILED=""
   hdr "grave doctor"
+  levels "disk used on $GRAVE_ROOT (%)" "$(df -P "$GRAVE_ROOT" | awk 'NR==2{sub(/%/,"",$5); u=$5} END{print u+0}')" "$DISK_WARN_PCT" "$DISK_CRIT_PCT"
   check "managed agent worktrees valid and writable" agent_worktrees_check
   if [[ "${MULTI_USER:-0}" == 0 ]]; then
     check "scheduled agent runner installed" test -r "$GRAVE_ROOT/scripts/agent-jobs.py"
@@ -1636,8 +1667,7 @@ cmd_doctor() { # grave doctor [--no-page]
     # /etc drift after a SteamOS update — the self-heal boot unit drops this
     # marker when a config file it depends on went missing (see docs/STEAMOS.md).
     if [[ -f "$GRAVE_ROOT/logs/DRIFT-DETECTED" ]]; then
-      bad "config drift after OS update — re-run raise.sh (see $GRAVE_ROOT/logs/selfheal.log)"
-      FAILURES=$((FAILURES+1))
+      fail "config drift after OS update — re-run raise.sh (see $GRAVE_ROOT/logs/selfheal.log)"
     fi
   else
     check "headless CLI installation available" sudo -n "$0" __install-cli --check
@@ -1673,8 +1703,7 @@ cmd_doctor() { # grave doctor [--no-page]
     case "$gamewatch_preference" in
       on)  check "gamewatch preference synced (on)" test -e "$GRAVE_ROOT/config/gamewatch.on" ;;
       off) check "gamewatch preference synced (off)" test ! -e "$GRAVE_ROOT/config/gamewatch.on" ;;
-      *)   bad "invalid gamewatch preference '$gamewatch_preference' (expected on or off)"
-           FAILURES=$((FAILURES+1)) ;;
+      *)   fail "invalid gamewatch preference '$gamewatch_preference' (expected on or off)" ;;
     esac
   else
     say "  ${YLW}– gamewatch preference not initialized — re-run raise.sh${RST}"
@@ -1691,11 +1720,10 @@ cmd_doctor() { # grave doctor [--no-page]
       case "$detector_rc" in
         0) ok "game detection signals evaluable ($detector_report)" ;;
         2) say "  ${YLW}– game detection has only the fragile process fallback ($detector_report)${RST}" ;;
-        *) bad "game detection signals unusable ($detector_report)"; FAILURES=$((FAILURES+1)) ;;
+        *) fail "game detection signals unusable ($detector_report)" "game detection signals unusable" ;;
       esac
     else
-      bad "gamewatch on but gravedecay-gamewatch.service not installed — 'grave gamewatch off' or re-run raise.sh"
-      FAILURES=$((FAILURES+1))
+      fail "gamewatch on but gravedecay-gamewatch.service not installed — 'grave gamewatch off' or re-run raise.sh"
     fi
   fi
   if [[ -e "$GRAVE_ROOT/config/keepalive.on" ]]; then
@@ -1703,8 +1731,7 @@ cmd_doctor() { # grave doctor [--no-page]
       check "tailnet keepalive running"   systemctl is-active --quiet gravedecay-keepalive
       check "tailnet keepalive enabled"   systemctl is-enabled --quiet gravedecay-keepalive
     else
-      bad "keepalive on but gravedecay-keepalive.service not installed — 'grave keepalive off' or re-raise"
-      FAILURES=$((FAILURES+1))
+      fail "keepalive on but gravedecay-keepalive.service not installed — 'grave keepalive off' or re-raise"
     fi
   fi
   if dkctl is-active --quiet docker; then
@@ -1766,8 +1793,7 @@ cmd_doctor() { # grave doctor [--no-page]
         ;;
     esac
   elif [[ "$tc_mode" != off ]]; then
-    bad "t3 connect mode is $tc_mode but its status is unreadable — run 'grave t3 connect status'"
-    FAILURES=$((FAILURES+1))
+    fail "t3 connect mode is $tc_mode but its status is unreadable — run 'grave t3 connect status'"
   fi
   # Stray Connect identities: a bare `t3` run or the desktop app links the
   # DEFAULT profile (~/.t3) — a second relay identity outside this contract.
@@ -1916,7 +1942,7 @@ cmd_doctor() { # grave doctor [--no-page]
     # can't traverse — run unprivileged it raises PermissionError and fails on a
     # healthy box. Same path as every other `grave users` operation.
     if workspace_doctor_ok; then ok "workspace registry and ownership"; else
-      bad "workspace registry and ownership"; FAILURES=$((FAILURES+1))
+      fail "workspace registry and ownership"
     fi
   fi
   if [[ "${MULTI_USER:-0}" == 1 ]]; then
@@ -1933,13 +1959,11 @@ cmd_doctor() { # grave doctor [--no-page]
     check "legacy terminal disabled" legacy_terminal_disabled
   fi
   echo
-  if (( FAILURES > 0 && ! no_page )); then
-    # Page the human about a failing contract (muteable via NOTIFY_EVENTS,
-    # silent no-op when unconfigured). Subshell: cmd_notify exits, doctor must
-    # still print its own verdict below.
-    ( cmd_notify --event doctor --priority high --link "/grave/?tab=system" "doctor: $FAILURES check(s) failed" "on $(hostname) — run: grave doctor" ) || true
-  fi
-  if (( FAILURES == 0 )); then say "${GRN}${BLD}All checks passed.${RST}"; else say "${RED}${BLD}$FAILURES check(s) failed.${RST}"; exit 1; fi
+  # Muteable via NOTIFY_EVENTS, silent no-op when unconfigured. --no-page runs
+  # leave the state alone so the next paging run still sees the change.
+  (( no_page )) || doctor_page
+  local warned=""; (( WARNINGS )) && warned=" ($WARNINGS warning(s))"
+  if (( FAILURES == 0 )); then say "${GRN}${BLD}All checks passed${warned}.${RST}"; else say "${RED}${BLD}$FAILURES check(s) failed${warned}.${RST}"; exit 1; fi
 }
 
 cmd_dashboard_health() {

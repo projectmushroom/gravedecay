@@ -39,7 +39,7 @@ class DigestContractTests(unittest.TestCase):
         # that broke overnight would page twice at 08:00 — the fast route to
         # the human muting notifications wholesale.
         self.assertIn('"$0" doctor --no-page', GRAVE)
-        self.assertIn("(( FAILURES > 0 && ! no_page ))", GRAVE)
+        self.assertIn("(( no_page )) || doctor_page", GRAVE)
         # ...and plain `grave doctor` still pages: the flag must be opt-in.
         self.assertIn('[[ "${1:-}" == "--no-page" ]] && no_page=1', GRAVE)
 

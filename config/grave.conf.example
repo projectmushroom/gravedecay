@@ -64,6 +64,11 @@ BACKUP_DIR="$GRAVE_ROOT/backups"
 BACKUP_KEEP=7
 BACKUP_MAX_AGE_DAYS=2
 
+# Doctor thresholds for $GRAVE_ROOT's filesystem, used %. At WARN doctor
+# still passes and the morning digest mentions it; at CRIT doctor fails.
+DISK_WARN_PCT=85
+DISK_CRIT_PCT=95
+
 # Notifications (`grave notify`, docs/NOTIFICATIONS.md). The channels live
 # elsewhere — ntfy in $GRAVE_ROOT/config/secrets/notify.env (NTFY_URL +
 # optional NTFY_TOKEN, 600), Web Push devices enrolled from ⚙️ settings —

@@ -61,7 +61,7 @@ Subscribe to the topic in the ntfy app, then `grave notify "hello"`.
 | `agent-done` | an agent CLI turn completes, including a Gravekeeper turn | Claude `Stop` hook, Codex `notify` | that session's terminal, or T3 root |
 | `agent-done` | a scheduled run ends; the title carries the lifecycle status and the runner's verdict | `grave agents` runner ([SCHEDULES.md](SCHEDULES.md)) | the Overnight report's review cards on the dashboard origin (`/grave/?tab=work`) |
 | `unit-failure` | a platform unit enters failed state (t3code, dashboard, terminal, gateway, upgrades, gamewatch, selfheal) | `OnFailure=gravedecay-notify@%n` | System tab |
-| `doctor` | a `grave doctor` run has failing checks | doctor itself | System tab |
+| `doctor` | the set of failing `grave doctor` checks changes (a new failure, or recovery) | doctor itself | System tab |
 | `digest` | every morning ~08:00 — one summary of the graveyard shift: agent sessions, spend, doctor verdict, backup freshness | `gravedecay-digest.timer` → `grave digest` | dashboard |
 
 The digest embeds a full doctor run with the doctor page suppressed
@@ -93,8 +93,8 @@ EOF
 grave notify "hello"   # the companion's grave — a test message
 ```
 
-What pages you there: a failing `macos/status.sh` contract, checked every 30
-minutes by the `io.gravedecay.doctor` LaunchAgent — which covers crash-looping
+What pages you there: `macos/status.sh` turning failing (and again when it
+recovers), checked every 30 minutes by the `io.gravedecay.doctor` LaunchAgent — which covers crash-looping
 or unloaded agents, dead healthz, missing Serve mounts, a serving Mac that can
 idle-sleep, and install drift. Unconfigured is a silent no-op, exactly like
 the appliance; the secret is owner-only (600, doctor-lite enforces it) and is
@@ -185,4 +185,9 @@ Gated on each channel being opted into:
   notify exist.
 
 A failing doctor run is itself a `doctor`-class notification, so a broken
-invariant pages you even when you aren't looking at the dashboard.
+invariant pages you even when you aren't looking at the dashboard. It pages on
+state change, not on every run: once when the failing set changes, once
+when everything passes again (`$GRAVE_ROOT/logs/doctor-failing` holds the last
+set). Threshold checks such as disk usage (`DISK_WARN_PCT`/`DISK_CRIT_PCT`)
+have a middle state: a warning (`!`) passes doctor and never pages; the morning
+digest mentions it.

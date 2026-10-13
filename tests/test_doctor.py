@@ -19,6 +19,33 @@ class DoctorContractTests(unittest.TestCase):
         self.assertIn("grep -q 'data-verdict=' \"$GRAVE_ROOT/scripts/dashboard-static/index.html\"", GRAVE)
         self.assertIn("grep -q '\"/api/run-diff\"' \"$GRAVE_ROOT/scripts/gravedecay.py\"", GRAVE)
 
+    def test_doctor_pages_on_state_change_and_levels_warn_before_failing(self):
+        # Checkmk-style: WARN passes and never pages; a CRIT or failing check
+        # pages once per change of the failing set, and once on recovery.
+        helpers = "\n".join(re.search(rf"^{name}\(\) \{{.*?^\}}", GRAVE, re.S | re.M).group(0)
+                             for name in ("fail", "levels", "doctor_page"))
+        with tempfile.TemporaryDirectory() as root:
+            (pathlib.Path(root) / "logs").mkdir()
+            script = helpers + """
+ok() { :; }; bad() { :; }; warn() { WARNINGS=$((WARNINGS+1)); }
+cmd_notify() { local p=default; [[ "$*" == *"--priority high"* ]] && p=high; printf '%s %s\\n' "$p" "${@: -2:1}" >> "$GRAVE_ROOT/pages"; exit 0; }
+run() { FAILURES=0; WARNINGS=0; FAILED=""; "$@"; doctor_page; echo "$FAILURES $WARNINGS"; }
+GRAVE_ROOT="$1"; HOSTNAME=box
+run levels disk 80 85 95
+run levels disk 90 85 95
+run levels disk 96 85 95
+run levels disk 97 85 95
+run eval 'levels disk 97 85 95; fail other'
+run levels disk 50 85 95
+run levels disk 50 85 95
+"""
+            out = subprocess.run(["bash", "-c", script, "t", root], capture_output=True, text=True, check=True).stdout
+            self.assertEqual(out.split("\n")[:7], ["0 0", "0 1", "1 0", "1 0", "2 0", "0 0", "0 0"])
+            pages = (pathlib.Path(root) / "pages").read_text().splitlines()
+            self.assertEqual(pages, ["high doctor: 1 check(s) failed", "high doctor: 2 check(s) failed",
+                                     "default doctor: recovered"])
+        self.assertIn("(( no_page )) || doctor_page", GRAVE)
+
     def test_firewall_check_requires_default_deny_not_just_running(self):
         # Regression #55: a running firewall that defaults to allow-in still
         # violates the 127.0.0.1+tailnet boundary. The check must assert the

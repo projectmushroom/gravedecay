@@ -444,6 +444,13 @@ class MacosContractTests(unittest.TestCase):
             paged = run_status("--page")
             self.assertNotEqual(paged.returncode, 0)
             self.assertIn("macOS doctor-lite failing", curl_log.read_text())
+            # Still failing: no second page. Recovery pages once.
+            curl_log.write_text("")
+            self.assertNotEqual(run_status("--page").returncode, 0); self.assertNotIn("doctor-lite", curl_log.read_text())
+            (root / "scripts/gravedecay.py").write_text('import sys\nassert sys.argv[1:] == ["--check-auth"]\n')
+            self.assertEqual(run_status("--page").returncode, 0); self.assertIn("macOS doctor-lite recovered", curl_log.read_text())
+            curl_log.write_text("")
+            self.assertEqual(run_status("--page").returncode, 0); self.assertNotIn("doctor-lite", curl_log.read_text())
 
     def test_serve_installer_derives_the_exact_local_tailscale_login_or_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
