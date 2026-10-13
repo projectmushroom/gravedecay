@@ -12,9 +12,9 @@ listening — add a row in the same commit that adds a listener.
 | 4713 | 127.0.0.1 | gravedecay-term (ttyd, custom clipboard-capable frontend — see TERMINAL.md; Linux systemd, or macOS `io.gravedecay.term` LaunchAgent in opt-in agents mode) | `tailscale serve` → https `/term` (disabled in multi-user mode) |
 | 4714 | 127.0.0.1 | gravedecay-net (gravenet — Linux systemd, macOS user LaunchAgent, or native Mac app-owned backend) | single-user `tailscale serve` → https `/net`; multi-user enabled admins only through the root identity gateway |
 | `${PORT:-4711}` | 127.0.0.1 | portable Compose nginx gateway (optional) | same-origin `/`, `/grave/`, `/term/`; choose a distinct `PORT` per Compose project |
-| 5432 | 127.0.0.1 | core-postgres | loopback only |
-| 6379 | 127.0.0.1 | core-redis | loopback only |
-| 3050 | 127.0.0.1 | browsers-playwright | loopback only |
+| 5432 | 127.0.0.1 | core-postgres | loopback only (owner + root only in multi-user mode) |
+| 6379 | 127.0.0.1 | core-redis | loopback only (owner + root only in multi-user mode) |
+| 3050 | 127.0.0.1 | browsers-playwright | loopback only (owner + root only in multi-user mode) |
 | 3000–3999 | 127.0.0.1 | dev-server previews, scheduled-job live previews (`grave agents run --serve`, one fixed port per job) and isolated dashboard browser fixtures | opt-in per port via `grave preview <port>`, or by the scheduler for up to 24 h after a `ready-for-review` run → https `:<port>` on the tailnet |
 | 4810–4909 | 127.0.0.1 | per-workspace T3 instances | identity gateway only |
 | 4910–5009 | 127.0.0.1 | per-workspace terminals | identity gateway only |
@@ -24,8 +24,9 @@ Multi-user mode points Serve at a root-only, randomly generated capability
 path on port 4710. The gateway strips that path and selects one of the fixed
 loopback ports from the workspace registry; callers cannot select a backend.
 Its root-owned nftables boundary rejects any non-root local TCP connection to
-4711–4714 and 4810–5109 (for both IPv4 and IPv6; the network rule follows `NET_PORT`), leaving the root gateway as
-the only backend caller. `grave doctor` verifies the persistent boundary and
+4710–4714 and 4810–5109 (for both IPv4 and IPv6; the gateway and network rules follow
+`GATEWAY_PORT`/`NET_PORT`), leaving the root gateway as the only backend caller, and
+rejects everyone but root and the appliance owner on 5432, 6379 and 3050. `grave doctor` verifies the persistent boundary and
 that legacy T3/terminal remain disabled. It also verifies the exact gateway-only
 Serve configuration on port 443. Multi-user `/net` and its event stream require
 an enabled administrator; old direct `/net` mounts are removed on re-raise.

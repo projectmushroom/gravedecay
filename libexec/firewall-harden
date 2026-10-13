@@ -23,9 +23,11 @@ systemctl enable --now firewalld >/dev/null
 ssh_port=$(sshd -T 2>/dev/null | awk '$1 == "port" { print $2; exit }')
 ssh_port=${ssh_port:-22}
 
-if [[ "$(firewall-cmd --get-default-zone 2>/dev/null)" != drop ]]; then
-  firewall-cmd --set-default-zone=drop >/dev/null
-fi
+# Open ssh in the drop zone in BOTH the runtime and permanent config, and
+# verify both, BEFORE the default zone becomes drop: --set-default-zone takes
+# effect immediately, so switching first would drop ssh the moment the add or
+# the check below failed — with no console on EC2 to recover from.
+firewall-cmd --zone=drop --add-port="$ssh_port/tcp" >/dev/null
 firewall-cmd --permanent --zone=drop --add-port="$ssh_port/tcp" >/dev/null
 firewall-cmd --permanent --zone=drop --add-interface=tailscale0 >/dev/null 2>&1 || true
 # Bind every non-loopback, non-docker up interface to the drop zone too, so
@@ -34,12 +36,16 @@ for iface in $(ip -o link show up | awk -F': ' '{print $2}' | grep -vE '^(lo|tai
   firewall-cmd --permanent --zone=drop --add-interface="$iface" >/dev/null 2>&1 || true
 done
 
-# Verify BEFORE reloading: --reload applies the permanent config in one shot,
-# so a rule that didn't take (typo, firewalld error swallowed above) must be
-# caught while the runtime config is untouched and ssh is still reachable.
-if ! firewall-cmd --permanent --zone=drop --query-port="$ssh_port/tcp" >/dev/null 2>&1; then
-  skip "firewalld: could not verify port $ssh_port/tcp in drop zone — NOT reloading (ssh left reachable)"
+# Verify BEFORE switching the default zone and reloading: --reload applies the
+# permanent config in one shot, so a rule that didn't take must be caught while
+# the default zone is untouched and ssh is still reachable.
+if ! firewall-cmd --zone=drop --query-port="$ssh_port/tcp" >/dev/null 2>&1 \
+   || ! firewall-cmd --permanent --zone=drop --query-port="$ssh_port/tcp" >/dev/null 2>&1; then
+  skip "firewalld: could not verify port $ssh_port/tcp in drop zone — default zone NOT switched to drop"
   exit 1
+fi
+if [[ "$(firewall-cmd --get-default-zone 2>/dev/null)" != drop ]]; then
+  firewall-cmd --set-default-zone=drop >/dev/null
 fi
 firewall-cmd --reload >/dev/null
 

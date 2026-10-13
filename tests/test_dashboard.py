@@ -355,9 +355,9 @@ class DashboardContractTests(unittest.TestCase):
         self.assertNotEqual(reapply, -1)
         self.assertNotEqual(gateway_start, -1)
         self.assertLess(reapply, gateway_start)
-        # …and tolerate the registry not existing yet ('-' prefix).
+        # No per-file bind: it fails on a missing registry and pins a replaced one.
         unit = (ROOT / "systemd/gravedecay-gateway.service.tmpl").read_text()
-        self.assertIn("-@GRAVE_ROOT@/config/workspaces.json", unit)
+        self.assertNotIn("ReadOnlyPaths=", unit)
         self.assertIn("gravedecay-boundary.service", unit)
         self.assertIn("multi-user loopback boundary active", ritual)
         self.assertIn("legacy web terminal disabled in multi-user mode", ritual)
@@ -463,16 +463,29 @@ class DashboardContractTests(unittest.TestCase):
     def test_custom_tile_urls_reject_dangerous_schemes(self):
         # Regression #60: tiles render as <a href> and iframe src, so a
         # javascript:/data: URL would be stored XSS in the dashboard origin.
-        self.assertEqual(DASHBOARD._safe_tile_url("javascript:fetch('/x')"), "")
-        self.assertEqual(DASHBOARD._safe_tile_url("data:text/html,x"), "")
-        self.assertEqual(DASHBOARD._safe_tile_url("https://ok.test/a"), "https://ok.test/a")
-        self.assertEqual(DASHBOARD._safe_tile_url("/term"), "/term")
         kept = DASHBOARD._sanitize_custom_apps([
             {"name": "evil", "url": "javascript:alert(1)"},
+            {"name": "data", "url": "data:text/html,x"},
             {"name": "ok", "url": "https://ok.test"},
             {"name": "internal", "url": "/grave/"},
+            # The preferences resource drops these on read, so settings must too.
+            {"name": "netpath", "url": "//evil.test/"},
+            {"name": "space", "url": "/a b"},
+            {"name": "backslash", "url": "/a\\b"},
         ])
         self.assertEqual([a["url"] for a in kept], ["https://ok.test", "/grave/"])
+
+    def test_transcripts_with_a_bad_byte_still_yield_usage(self):
+        # One stray byte must not crash the usage panel on every poll.
+        with tempfile.TemporaryDirectory() as tmp:
+            claude, codex = os.path.join(tmp, "t.jsonl"), os.path.join(tmp, "rollout.jsonl")
+            line = json.dumps({"type": "assistant", "timestamp": "2026-10-01T00:00:00Z", "requestId": "r",
+                               "message": {"id": "m", "model": "claude-x", "usage": {"output_tokens": 5}}})
+            pathlib.Path(claude).write_bytes(b'{"junk": "\xff"}\n' + line.encode() + b"\n")
+            self.assertEqual(len(list(DASHBOARD.claude_transcript(claude, set()))), 1)
+            event = {"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": 3}}}}
+            pathlib.Path(codex).write_bytes(b"\xff\n" + json.dumps(event).encode() + b"\n")
+            self.assertEqual(DASHBOARD.codex_rollout(codex)[2], {"input_tokens": 3})
 
     def test_admin_releases_requires_authorization(self):
         # Regression #47: a read-only tailnet viewer (login not in ALLOWED_USERS)

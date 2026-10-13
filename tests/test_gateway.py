@@ -1,32 +1,37 @@
 import json, os, socket, socketserver, subprocess, tempfile, threading, time, unittest
+from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 GATEWAY=Path(__file__).parents[1]/"dashboard/gateway.py"
 
 class Echo(socketserver.BaseRequestHandler):
     def handle(self):
-        data=self.request.recv(65536)
-        self.server.last_request=data
-        if b"Upgrade: websocket" in data:
-            self.request.sendall(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
-            payload=self.request.recv(1024); self.request.sendall(payload); return
-        # Read the full declared body (it may exceed the first recv when the
-        # gateway streams a large body through), so tests can verify delivery.
-        head,_,rest=data.partition(b"\r\n\r\n")
-        length=next((int(l.split(b":")[1]) for l in head.split(b"\r\n") if l.lower().startswith(b"content-length:")),0)
-        while len(rest)<length:
-            chunk=self.request.recv(65536)
-            if not chunk: break
-            rest+=chunk
-        body=(f"{self.server.label} body={len(rest)}\n").encode()
-        self.request.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: "+str(len(body)).encode()+b"\r\nConnection: close\r\n\r\n"+body)
+        # Keep-alive unless asked to close, so a gateway that relays a second
+        # request on the same connection is caught.
+        while data:=self.request.recv(65536):
+            self.server.last_request=data
+            if b"Upgrade: websocket" in data:
+                self.request.sendall(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+                payload=self.request.recv(1024); self.request.sendall(payload); return
+            # Read the full declared body (it may exceed the first recv when the
+            # gateway streams a large body through), so tests can verify delivery.
+            head,_,rest=data.partition(b"\r\n\r\n")
+            length=next((int(l.split(b":")[1]) for l in head.split(b"\r\n") if l.lower().startswith(b"content-length:")),0)
+            while len(rest)<length:
+                chunk=self.request.recv(65536)
+                if not chunk: break
+                rest+=chunk
+            body=(f"{self.server.label} body={len(rest)}\n").encode()
+            close=b"connection: close" in head.lower()
+            self.request.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: "+str(len(body)).encode()+b"\r\n"+(b"Connection: close\r\n" if close else b"")+b"\r\n"+body)
+            if close: return
 
 class GatewayTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(); self.root=Path(self.temp.name); self.servers=[]
         ports=[]
         for label in ("alice-t3","alice-term","alice-dash","bob-t3","bob-term","bob-dash","network"):
-            server=socketserver.ThreadingTCPServer(("127.0.0.1",0),Echo); server.label=label
+            server=socketserver.ThreadingTCPServer(("127.0.0.1",0),Echo); server.label=label; server.daemon_threads=True
             threading.Thread(target=server.serve_forever,daemon=True).start(); self.servers.append(server); ports.append(server.server_address[1])
         workspaces=[]
         for i,(uid,login,slug,role) in enumerate((("123","a@example.com","alice","admin"),("456","b@example.com","bob","developer"))):
@@ -141,10 +146,63 @@ class GatewayTests(unittest.TestCase):
         self.assertIn(b"alice-dash",out)
         self.assertIn(b"body=200000",out)
 
+    def test_keep_alive_cannot_carry_an_unchecked_second_request(self):
+        s=socket.create_connection(("127.0.0.1",self.port),timeout=5)
+        s.sendall(f"GET {self.prefix}/ HTTP/1.1\r\nHost: box\r\nTailscale-User-Login: b@example.com\r\n\r\n"
+                  f"GET {self.prefix}/smuggled HTTP/1.1\r\nHost: box\r\n\r\n".encode())
+        out=b""
+        while chunk:=s.recv(65536): out+=chunk   # EOF: the gateway closes after one response
+        s.close()
+        self.assertIn(b"bob-t3",out); self.assertIn(b"Connection: close",out)
+        self.assertNotIn(b"smuggled",self.servers[3].last_request)
+        self.assertIn(b"Connection: close",self.servers[3].last_request)
+
+    def test_unbounded_or_negative_bodies_are_refused(self):
+        self.assertIn(b"chunked request bodies unsupported",self.request("/","a@example.com",extra="Transfer-Encoding: chunked\r\n"))
+        self.assertIn(b"bad content length",self.request("/","a@example.com",extra="Content-Length: -1\r\n"))
+
+    def test_sessions_are_audited_on_websocket_upgrade_only(self):
+        self.assertIn(b"alice-term",self.request("/term/","a@example.com"))
+        audit=self.root/"logs/audit.jsonl"
+        self.assertNotIn("session_created",audit.read_text() if audit.exists() else "")
+        s=socket.create_connection(("127.0.0.1",self.port))
+        s.sendall(f"GET {self.prefix}/term/ws HTTP/1.1\r\nHost: box\r\nTailscale-User-Login: a@example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n".encode())
+        self.assertIn(b"101 Switching",s.recv(4096)); s.close()
+        self.assertIn("session_created",audit.read_text())
+
     def test_websocket_upgrade_is_bidirectional(self):
         s=socket.create_connection(("127.0.0.1",self.port))
         s.sendall(f"GET {self.prefix}/socket HTTP/1.1\r\nHost: box\r\nTailscale-User-Login: a@example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n".encode())
         self.assertIn(b"101 Switching",s.recv(4096)); s.sendall(b"workspace-frame")
         self.assertEqual(s.recv(1024),b"workspace-frame"); s.close()
+
+class GatewayUnitTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory(); self.root=Path(self.temp.name)
+        self.gw=SourceFileLoader("gateway_unit",str(GATEWAY)).load_module()
+    def tearDown(self): self.temp.cleanup()
+
+    def test_tailscale_identities_are_cached_briefly(self):
+        status=self.root/"status.json"; status.write_text(json.dumps({"User":{"1":{"LoginName":"a@x"}}}))
+        os.environ["GRAVE_TAILSCALE_STATUS"]=str(status)
+        try:
+            self.assertEqual(self.gw.identities(),{"1":"a@x"})
+            status.write_text(json.dumps({"User":{}}))
+            self.assertEqual(self.gw.identities(),{"1":"a@x"})
+        finally: del os.environ["GRAVE_TAILSCALE_STATUS"]
+
+    def test_audit_log_rotates_past_its_cap(self):
+        self.gw.AUDIT=self.root/"audit.jsonl"; self.gw.AUDIT_MAX=10
+        self.gw.AUDIT.write_text("x"*20)
+        self.gw.audit("probe")
+        self.assertEqual((self.root/"audit.jsonl.1").read_text(),"x"*20)
+        self.assertIn('"event":"probe"',self.gw.AUDIT.read_text())
+
+    def test_idle_relay_ends(self):
+        self.gw.IDLE=0.1
+        a,_peer_a=socket.socketpair(); b,_peer_b=socket.socketpair()
+        relay=threading.Thread(target=self.gw.relay,args=(a,b),daemon=True); relay.start(); relay.join(3)
+        self.assertFalse(relay.is_alive())
+        for sock in (a,b,_peer_a,_peer_b): sock.close()
 
 if __name__ == "__main__": unittest.main()

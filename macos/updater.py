@@ -53,7 +53,12 @@ def main():
   home=os.path.realpath(os.path.expanduser("~"))
   if ROOT==home or os.path.commonpath((home,ROOT))!=home or not os.path.isfile(os.path.join(ROOT,".gravedecay-macos")) or not all(under(p) for p in (REQUEST,STATUS,LOCK,LOG,REPO,CONFIG)): raise RuntimeError("managed root is not a marked home descendant")
   try: os.mkdir(LOCK); owned=True
-  except FileExistsError: return
+  except FileExistsError:
+   # A worker killed mid-update (power loss) never removes its lock, which would
+   # silently block every later update; no live update runs for 30 minutes.
+   # shortcut: rmdir+mkdir is not atomic against a second stale-breaker; launchd never runs two at once.
+   if time.time()-os.path.getmtime(LOCK)<1800: return
+   clean(LOCK); os.mkdir(LOCK); owned=True
   try:
    with open(REQUEST) as f: req=json.load(f)
    if set(req)!={"channel","tag","requested_at"} or req["channel"] not in ("release","edge","tag") or not isinstance(req["requested_at"],int) or req["requested_at"] < int(time.time())-86400 or req["requested_at"] > int(time.time())+3600 or (req["channel"]=="tag" and (not isinstance(req["tag"],str) or not TAG.fullmatch(req["tag"]))) or (req["channel"]!="tag" and req["tag"] is not None): raise RuntimeError("invalid update request")

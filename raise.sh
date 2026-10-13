@@ -743,16 +743,20 @@ if [[ "${MULTI_USER:-0}" == 1 ]]; then
   sudo systemctl daemon-reload
   # Provision the workspace units + registry BEFORE starting the gateway. The
   # gateway reads config/workspaces.json, which `__users reapply` creates; if it
-  # started first it would either fail namespace setup on the missing file (now
-  # also guarded by the '-' prefix on ReadOnlyPaths in the unit) or capture an
-  # empty registry it can never see updated inside its ProtectSystem=strict mount.
+  # started first every request would fail until the file appeared.
   sudo -n "$GRAVE_BIN" __users reapply --t3-bin "$T3_BIN" --ttyd-bin "$TTYD_BIN" \
     --tool-path "$TOOLPATH" --grave-bin "$GRAVE_BIN"
   enable_restart gravedecay-gateway
   while IFS= read -r slug; do
     enable_restart "gravedecay-t3@$slug" "gravedecay-term@$slug" "gravedecay-dashboard@$slug"
   done < <(jq -r '.workspaces[] | select(.enabled) | .slug' "$GRAVE_ROOT/config/workspaces.json" 2>/dev/null)
-  wait_http "http://127.0.0.1:${GATEWAY_PORT:-4710}/healthz" "identity gateway answering"
+  # Root probe: the boundary rejects non-root dials to the gateway port too.
+  gateway_ready=0
+  for _ in $(seq 1 5); do
+    sudo -n "$GRAVE_BIN" __gateway-health && { gateway_ready=1; break; }
+    sleep 1
+  done
+  if (( gateway_ready )); then ok "identity gateway answering"; else skip "identity gateway — not answering yet (check: grave logs)"; fi
 fi
 
 # --------------------------------------------------------- 5b. web terminal ----
@@ -959,8 +963,8 @@ for stack in core browsers; do
   fi
 done
 if [[ ! -f "$GRAVE_ROOT/docker/core/.env" ]]; then
-  printf 'POSTGRES_PASSWORD=%s\n' "$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)" \
-    > "$GRAVE_ROOT/docker/core/.env"
+  (umask 077; printf 'POSTGRES_PASSWORD=%s\n' "$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)" \
+    > "$GRAVE_ROOT/docker/core/.env")
   chmod 600 "$GRAVE_ROOT/docker/core/.env"
   ok "generated core/.env with random postgres password"
 fi
@@ -970,7 +974,11 @@ fi
 # ------------------------------------------------------------ 8. firewall ----
 step "Firewall (default-deny, SSH allowed BEFORE enabling)"
 if command -v ufw >/dev/null; then
-  sudo ufw allow ssh >/dev/null
+  # `ufw allow ssh` is 22/tcp only: an sshd on another port would be cut off
+  # before Tailscale is up. Allow the port(s) sshd really uses (`sshd -T` is in
+  # the NOPASSWD set; sshd may live in /usr/sbin, off a non-root PATH).
+  ssh_ports=$(sudo "$(command -v sshd || echo /usr/sbin/sshd)" -T 2>/dev/null | awk '$1 == "port" { print $2 }') || true
+  for p in ${ssh_ports:-22}; do sudo ufw allow "$p/tcp" >/dev/null; done
   sudo ufw allow in on tailscale0 >/dev/null 2>&1 || true
   sudo ufw default deny incoming >/dev/null
   sudo ufw default allow outgoing >/dev/null

@@ -14,6 +14,11 @@ Both forms prompt for confirmation (`--yes` skips it, for scripted teardowns).
 `--purge` asks you to type `purge <hostname>` — a phrase you cannot produce by
 holding down Enter.
 
+Run it over ssh or on the local console, not from the web terminal (`/term`)
+or a T3 agent: those shells live inside units the teardown stops, so the run
+would kill itself halfway. `grave uninstall` refuses to start from inside a
+gravedecay unit; `--dry-run` still works there.
+
 ## The two rules
 
 **1. Remove what gravedecay installed; leave what it merely used.**

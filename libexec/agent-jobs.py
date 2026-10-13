@@ -239,7 +239,6 @@ def add(args):
         raise ValueError(f"--check takes at most {CHECK_LIMIT} printable commands of up to {CHECK_LENGTH} characters")
     serve = None
     if args.serve is not None:
-        private_dir(STORE)
         serve = {"cmd": args.serve, "port": allocate_port()}
         if not valid_serve(serve):
             raise ValueError(f"--serve takes one printable command of up to {CHECK_LENGTH} characters that uses $PORT")
@@ -249,19 +248,16 @@ def add(args):
         raise ValueError("--at requires HH:MM; use --on for a weekday")
     now = time.time()
     # Names are never silently reused: old worktrees and results remain reviewable.
+    # A partial definition is retained for inspection on failure.
     path.mkdir(mode=0o700)
-    try:
-        with open(path / "prompt.txt", "xb") as stream:
-            stream.write(prompt)
-        private_dir(path / "runs")
-        value = dict(name=args.name, repo=repo, agent=args.agent, schedule=schedule,
-                     timeout=args.timeout, enabled=True, created=now, checks=args.check, serve=serve,
-                     next_due=next_due(schedule, now) if schedule else now)
-        write_json(path / "job.json", value)
-        read_job(args.name)
-    except Exception:
-        # Retain a partial definition for inspection; never erase another job.
-        raise
+    with open(path / "prompt.txt", "xb") as stream:
+        stream.write(prompt)
+    private_dir(path / "runs")
+    value = dict(name=args.name, repo=repo, agent=args.agent, schedule=schedule,
+                 timeout=args.timeout, enabled=True, created=now, checks=args.check, serve=serve,
+                 next_due=next_due(schedule, now) if schedule else now)
+    write_json(path / "job.json", value)
+    read_job(args.name)
     print(json.dumps(value))
 
 
@@ -309,7 +305,7 @@ def worktree(job, session):
         base = git("-C", source, "rev-parse", "HEAD")
         history = agents / session
         history.mkdir(mode=0o700)
-        git("-C", source, "worktree", "add", "-b", branch, directory, "HEAD")
+        git("-C", source, "worktree", "add", "-b", branch, directory, base)
         write_json(history / "meta.json", dict(dir=str(directory), repo=job["repo"],
             branch=branch, base=base, worktree=True, created=dt.datetime.now(dt.timezone.utc).isoformat(),
             scheduled_job=job["name"]))
@@ -375,6 +371,11 @@ def supervise(proc, stop, started, timeout, record):
             record.update(status="timed-out", reason="configured runtime limit reached")
             return False
         time.sleep(.2)
+    # systemd's stop signals the provider too; it may exit before the next poll.
+    # Only that counts here: a provider that finished on its own keeps its result.
+    if STOP:
+        record.update(status="cancelled", reason="job or scheduler stopped")
+        return False
     return True
 
 
@@ -397,7 +398,7 @@ def detect_checks(source, base):
     def at_base(name):
         try:
             return git("-C", source, "show", base + ":" + name)
-        except subprocess.CalledProcessError:
+        except subprocess.SubprocessError:
             return None
     try:
         package = json.loads(at_base("package.json") or "null")
@@ -571,17 +572,18 @@ def result_package(job, record, directory, base, log, started, stop=lambda: None
     changes = None
     try:
         changes = change_summary(directory, base)
-    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
         print(job["name"] + ": could not summarise changes: " + str(error)[:200], file=sys.stderr, flush=True)
     tests = None
     if changes and changes["commits"]:
         try:
             tests = test_changes(directory, base)
-        except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
             print(job["name"] + ": could not inspect test changes: " + str(error)[:200], file=sys.stderr, flush=True)
     budget = TAIL_BUDGET - (len(json.dumps(tests)) if tests else 0)
     checks = []
-    if record["status"] == "succeeded" and verdict_for(record, changes) != "no-changes":
+    # Without a change summary nothing says there is work to verify: unverified, never ready-for-review.
+    if record["status"] == "succeeded" and changes is not None and verdict_for(record, changes) != "no-changes":
         commands, source = job.get("checks"), "owner"
         if commands is None:
             commands, source = detect_checks(repo_path(job["repo"]), base), "base:" + base
@@ -664,7 +666,7 @@ def legacy_result(record):
             meta = json.loads(read_private(ROOT / "agents" / record["session"] / "meta.json"))
             if Path(record["dir"]).is_dir() and isinstance(meta.get("base"), str):
                 changes = change_summary(Path(record["dir"]), meta["base"])
-        except (OSError, ValueError, subprocess.CalledProcessError):
+        except (OSError, ValueError, subprocess.SubprocessError):
             changes = None
     return package(verdict_for(record, changes), changes)
 
@@ -833,7 +835,11 @@ def start_preview(job, record, directory, log, path, started=None):
         unmap(port)
         return fail("no HTTP 200 from " + probe + " within " + str(PREVIEW_WAIT) + "s")
     started = started or time.time()
-    write_json(path / "preview.json", dict(pid=proc.pid, ticks=proc_started(proc.pid), port=port, run_id=record["run_id"], started=started))
+    try:
+        write_json(path / "preview.json", dict(pid=proc.pid, ticks=proc_started(proc.pid), port=port, run_id=record["run_id"], started=started))
+    except OSError as error:
+        unmap(port)
+        return fail("could not record preview: " + str(error)[:200])
     return {"port": port, "url": "https://" + host + ":" + str(port) + "/", "started": started}
 
 
@@ -1036,7 +1042,11 @@ def worker(name):
                     proc = None  # Process group has already been reaped.
                 record["result"] = result_package(job, record, directory, base, history / log, now, stop)
                 if job.get("serve") and record["result"]["verdict"] == "ready-for-review" and not stop():
-                    preview = start_preview(job, record, directory, history / log, path)
+                    try:
+                        preview = start_preview(job, record, directory, history / log, path)
+                    except Exception as error:  # a preview problem never costs the verdict
+                        print(name + ": no live preview: " + str(error)[:200], file=sys.stderr, flush=True)
+                        preview = None
                     if preview:
                         record["result"]["preview"] = preview
         except Exception as error:
@@ -1076,16 +1086,19 @@ def recover(name):
     try:
         with locked(path / ".run.lock", blocking=False):
             for target in (path / "runs").glob("*.json"):
-                value = read_record(target)
-                if value is None:
-                    continue
-                if value.get("status") == "running":
-                    value.update(status="interrupted", reason="previous worker ended without a result", finished=time.time())
-                    value["result"] = package("interrupted")
-                    write_json(target, value)
-                elif not valid_result(value.get("result"), value.get("status")):  # a valid verdict is never rewritten
-                    value["result"] = legacy_result(value)
-                    write_json(target, value)
+                try:
+                    value = read_record(target)
+                    if value is None:
+                        continue
+                    if value.get("status") == "running":
+                        value.update(status="interrupted", reason="previous worker ended without a result", finished=time.time())
+                        value["result"] = package("interrupted")
+                        write_json(target, value)
+                    elif not valid_result(value.get("result"), value.get("status")):  # a valid verdict is never rewritten
+                        value["result"] = legacy_result(value)
+                        write_json(target, value)
+                except (OSError, ValueError) as error:  # doctor flags it; it never wedges the job
+                    print(name + ": run record " + target.name + ": " + str(error)[:200], file=sys.stderr, flush=True)
     except BlockingIOError:
         pass
 
@@ -1094,16 +1107,19 @@ def scheduler():
     private_dir(STORE)
     children = {}
     with locked(STORE / ".scheduler.lock", blocking=False):
-        restore = True
+        restore, recovered = True, set()
         try:
             while not STOP:
                 for name in names():
                     if name in children and children[name].poll() is None:
                         continue
                     try:
-                        recover(name)
+                        # Reconcile once per job at start and again when its worker has exited.
+                        if name not in recovered or children.pop(name, None):
+                            recovered.add(name)
+                            recover(name)
                         job = read_job(name)
-                        if job["enabled"] and job["next_due"] is not None and job["next_due"] <= time.time():
+                        if job["enabled"] and job["next_due"] is not None and job["next_due"] <= time.time() and not gaming():
                             children[name] = subprocess.Popen([sys.executable, __file__, "worker", name])
                     except (OSError, ValueError) as error:
                         print(name + ": " + str(error), file=sys.stderr, flush=True)

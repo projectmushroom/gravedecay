@@ -108,9 +108,12 @@ for u in "${UNITS[@]}"; do [[ -e "/etc/systemd/system/$u" ]] && files+=("/etc/sy
   && files+=(/etc/systemd/system/tailscaled.service.d/gravedecay-localapi.conf)
 [[ -e /etc/systemd/system/gravedecay.service.d/multiuser-boundary.conf ]] \
   && files+=(/etc/systemd/system/gravedecay.service.d/multiuser-boundary.conf)
+[[ -e /etc/systemd/system/gravedecay-net.service.d/multiuser-boundary.conf ]] \
+  && files+=(/etc/systemd/system/gravedecay-net.service.d/multiuser-boundary.conf)
 if ((${#files[@]})); then run sudo rm -f "${files[@]}"; did "removed ${#files[@]} unit file(s)"; fi
 (( DRY )) || sudo rmdir /etc/systemd/system/tailscaled.service.d 2>/dev/null || true
 (( DRY )) || sudo rmdir /etc/systemd/system/gravedecay.service.d 2>/dev/null || true
+(( DRY )) || sudo rmdir /etc/systemd/system/gravedecay-net.service.d 2>/dev/null || true
 run sudo systemctl daemon-reload
 (( DRY )) || sudo systemctl reset-failed 2>/dev/null || true
 

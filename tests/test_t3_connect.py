@@ -123,7 +123,7 @@ class T3ConnectContractTests(unittest.TestCase):
         self.assertEqual(DASHBOARD.count('not in ("pwa", "app")'), 2)
 
     def test_official_app_tile_href_is_a_constant(self):
-        # The app-mode tile bypasses _safe_tile_url (which rightly refuses
+        # The app-mode tile bypasses api_contract.tile_url (which rightly refuses
         # non-http schemes), so its href must be a hardcoded constant — never
         # interpolated from settings or tile data.
         self.assertIn('href="t3code://"', SHELL)

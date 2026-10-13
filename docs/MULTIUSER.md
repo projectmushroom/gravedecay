@@ -147,8 +147,13 @@ Independent preview ports remain unchanged. Single-user `/net` access is unchang
 2. The gateway accepts those headers only on requests arriving through its
    configured trusted proxy path. Direct loopback is not an implicit user:
    a root-owned nftables `inet gravedecay` output rule rejects non-root TCP
-   sockets to the legacy and workspace backend ranges (IPv4 and IPv6). Root's
-   gateway socket is the backend capability for T3 and ttyd.
+   sockets to the gateway port, the legacy and workspace backend ranges (IPv4
+   and IPv6). Root's gateway socket is the backend capability for T3 and ttyd.
+   The capability path is visible in the root `tailscale serve` argv; that is
+   harmless only because no workspace user can dial the gateway port.
+   The gateway checks one request per connection: it forwards
+   `Connection: close`, ends the connection after the response (only a
+   completed WebSocket upgrade stays open) and refuses chunked request bodies.
 3. The gateway resolves stable user ID first. A login is used only to migrate
    a legacy record after the local Tailscale API confirms the stable ID.
 4. The registry selects a fixed upstream for the workspace. Client URLs,
@@ -190,7 +195,9 @@ terminal and global file manager are removed from developer routes.
 - Tailscale Serve authenticates the remote principal.
 - The gateway maps that principal to role and a fixed workspace.
 - The root-owned nftables boundary prevents one workspace Unix user from
-  directly dialing another workspace's T3, terminal, or dashboard port.
+  directly dialing another workspace's T3, terminal, or dashboard port, or the
+  gateway itself. The owner's dev services (Postgres 5432, Redis 6379,
+  Playwright 3050) accept only root and the owner; workspaces bring their own.
 - Unix ownership prevents ordinary cross-workspace file, process-state, home,
   credential, tmux-socket, and log access.
 - Project grants limit what the dashboard and T3 expose; repository-provider
@@ -209,7 +216,9 @@ result. Required events are provisioning/removal,
 enable/disable and role/grant/provider-policy changes, integration
 login/logout/failure, session creation, denied access, and every appliance
 administrative action. Tokens, authorization headers, cookies, pairing URLs,
-command output, secret values, and request bodies are never recorded.
+command output, secret values, and request bodies are never recorded. The gateway
+rotates the log to `audit.jsonl.1` past 10 MB (one generation kept); a session
+is a WebSocket upgrade, not every terminal asset request.
 
 ## Migration
 

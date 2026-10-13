@@ -16,44 +16,48 @@ MAX_HEADER=65536
 # action POST; larger bodies (uploads) stream straight to the backend (see below).
 MAX_PEEK=65536
 MAX_BODY=2*1024*1024*1024   # match the dashboard's MAX_UPLOAD
+AUDIT_MAX=10*1024*1024     # then rotate to audit.jsonl.1 (one generation kept)
+CLIENT_TIMEOUT=30          # a silent client may hold a thread this long per read
+IDLE=600                   # a quiet stream/websocket is closed after this many seconds
 ADMIN_PREFIXES=("/grave/api/admin/",)
 ADMIN_ACTIONS={"gaming","gaming-kill","developer","restart-t3","update-t3","update-grave","reboot","bootmode-developer","bootmode-gaming","gamewatch-on","gamewatch-off","doctor","t3connect-off"}
 
+AUDIT_LOCK=threading.Lock()
 def audit(event, actor=None, target=None, result="ok"):
     AUDIT.parent.mkdir(parents=True,exist_ok=True)
     record={"ts":time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime()),"event":event,"actor":actor,"target":target,"result":result}
-    fd=os.open(AUDIT,os.O_WRONLY|os.O_CREAT|os.O_APPEND,0o600)
-    try: os.write(fd,(json.dumps(record,separators=(",",":"))+"\n").encode())
-    finally: os.close(fd)
+    with AUDIT_LOCK:
+        try:
+            if AUDIT.stat().st_size > AUDIT_MAX: os.replace(AUDIT,AUDIT.with_name(AUDIT.name+".1"))
+        except OSError: pass
+        fd=os.open(AUDIT,os.O_WRONLY|os.O_CREAT|os.O_APPEND,0o600)
+        try: os.write(fd,(json.dumps(record,separators=(",",":"))+"\n").encode())
+        finally: os.close(fd)
 
+_identities=(0.0,{})
 def identities():
+    """Tailscale users by stable ID, cached 5 s so requests don't each spawn the CLI."""
+    global _identities
+    if time.monotonic()-_identities[0] < 5: return _identities[1]
     override=os.environ.get("GRAVE_TAILSCALE_STATUS")
     try:
         raw=Path(override).read_text() if override else subprocess.check_output(["tailscale","status","--json"],text=True,timeout=3)
-        status=json.loads(raw)
-    except Exception: return {}
-    return {str(uid):info.get("LoginName","") for uid,info in status.get("User",{}).items()}
+        known={str(uid):info.get("LoginName","") for uid,info in json.loads(raw).get("User",{}).items()}
+    except Exception as error:
+        print(f"gateway: tailscale status unavailable: {error}",file=sys.stderr); known={}
+    _identities=(time.monotonic(),known)
+    return known
 
 def registry():
     data=json.loads(REGISTRY.read_text())
     if data.get("version") != 1: raise ValueError("unsupported registry")
     return data["workspaces"]
 
-def backend_token(w):
-    """Read the root-owned service environment instead of the owner-readable
-    registry.  Each backend accepts only its own token, injected below."""
-    env=ROOT/"config/workspace-services"/(w["slug"]+".env")
+def env_token(env):
+    """A backend capability from a root-owned service environment, never the
+    owner-readable registry.  Each backend accepts only its own token."""
     try:
         for line in env.read_text().splitlines():
-            if line.startswith("GRAVEDECAY_BACKEND_TOKEN="):
-                token=line.partition("=")[2].strip().strip('"')
-                if len(token) >= 32: return token
-    except OSError: pass
-    return ""
-
-def admin_token():
-    try:
-        for line in ADMIN_TOKEN_FILE.read_text().splitlines():
             if line.startswith("GRAVEDECAY_BACKEND_TOKEN="):
                 token=line.partition("=")[2].strip().strip('"')
                 if len(token) >= 32: return token
@@ -88,13 +92,13 @@ def read_head(sock):
         data+=chunk
     head,sep,rest=data.partition(b"\r\n\r\n")
     if not sep: raise ValueError("incomplete headers")
-    lines=head.decode("iso-8859-1").split("\r\n"); method,path,version=lines[0].split(" ",2)
+    lines=head.decode("iso-8859-1").split("\r\n")
     headers={}
     for line in lines[1:]:
         name,colon,value=line.partition(":")
         if not colon: raise ValueError("malformed header")
         headers[name.strip().lower()]=value.strip()
-    return method,path,version,headers,lines[1:],rest
+    return lines[0],headers,lines[1:],rest
 
 def action_of(path,rest):
     """The action name for /api/action (POST body) or /api/action-stream (GET
@@ -113,15 +117,25 @@ def network_request(path):
     clean=path.split("?",1)[0]
     return clean=="/net" or clean.startswith("/net/")
 
-def admin_request(method,path,rest):
+def admin_request(path,rest):
     clean=path.split("?",1)[0]
     if network_request(path) or any(clean.startswith(p) for p in ADMIN_PREFIXES): return True
     return action_of(path,rest) in ADMIN_ACTIONS
 
+def copy(src,dst,limit=None):
+    """Stream src to dst until EOF, or until exactly limit bytes."""
+    while limit is None or limit > 0:
+        data=src.recv(65536 if limit is None else min(65536,limit))
+        if not data: return
+        dst.sendall(data)
+        if limit is not None: limit-=len(data)
+
 def relay(a,b):
     sel=selectors.DefaultSelector(); sel.register(a,selectors.EVENT_READ,b); sel.register(b,selectors.EVENT_READ,a)
     while sel.get_map():
-        for key,_ in sel.select(timeout=120):
+        events=sel.select(timeout=IDLE)
+        if not events: return
+        for key,_ in events:
             src=key.fileobj; dst=key.data
             try: data=src.recv(65536)
             except OSError: data=b""
@@ -133,7 +147,8 @@ def relay(a,b):
 
 class Handler(socketserver.BaseRequestHandler):
     def handle(self):
-        try: method,path,version,headers,raw_headers,rest=read_head(self.request)
+        self.request.settimeout(CLIENT_TIMEOUT)
+        try: start,headers,raw_headers,rest=read_head(self.request); method,path,version=start.split(" ",2)
         except Exception: self.request.sendall(response(400,"bad request")); return
         if path.split("?",1)[0] == "/healthz": self.request.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"); return
         try: token=TOKEN_FILE.read_text().strip()
@@ -144,9 +159,13 @@ class Handler(socketserver.BaseRequestHandler):
         path=path[len(prefix):]
         try: length=int(headers.get("content-length","0"))
         except ValueError: self.request.sendall(response(400,"bad content length")); return
+        if length < 0: self.request.sendall(response(400,"bad content length")); return
         if length > MAX_BODY: self.request.sendall(response(400,"request too large")); return
+        # One checked request per connection: the body must be length-delimited so
+        # that nothing after it (a pipelined request) can reach the backend.
+        if "transfer-encoding" in headers: self.request.sendall(response(400,"chunked request bodies unsupported")); return
         # Buffer only enough of the body to inspect the action; the remainder is
-        # streamed to the backend by relay() below, so a ~GiB upload is never held
+        # streamed to the backend by copy() below, so a ~GiB upload is never held
         # in the gateway's RAM (ThreadingTCPServer would OOM under a few at once).
         peek=min(length,MAX_PEEK)
         while len(rest)<peek:
@@ -157,9 +176,9 @@ class Handler(socketserver.BaseRequestHandler):
         if state != "ok":
             code=401 if state in ("unknown","malformed") else 403
             audit("access_denied",headers.get("tailscale-user-login"),None,state); self.request.sendall(response(code,state)); return
-        if admin_request(method,path,rest) and w["role"] != "admin":
+        if admin_request(path,rest) and w["role"] != "admin":
             audit("admin_denied",w["id"],w["slug"],"forbidden"); self.request.sendall(response(403,"administrator access required")); return
-        if admin_request(method,path,rest): audit("administrative_action",w["id"],w["slug"])
+        if admin_request(path,rest): audit("administrative_action",w["id"],w["slug"])
         if action_of(path,rest)=="t3-pair": audit("pairing_created",w["id"],w["slug"])
         clean=path
         if path == "/grave": clean="/grave/"
@@ -169,24 +188,37 @@ class Handler(socketserver.BaseRequestHandler):
         elif clean.startswith("/grave/"): kind="dash"; upstream_path=clean[len("/grave"):]
         elif clean.startswith("/term/") or clean == "/term": kind="term"; upstream_path=clean[len("/term"):] or "/"
         else: kind="t3"; upstream_path=clean
-        if kind=="term" or headers.get("upgrade","").lower()=="websocket": audit("session_created",w["id"],w["slug"])
+        websocket=headers.get("upgrade","").lower()=="websocket"
+        if websocket: audit("session_created",w["id"],w["slug"])
         # Appliance mutations execute in the legacy owner dashboard service,
         # whose Unix account alone has the scoped sudoers grant. Developers
         # are denied above; the admin workspace otherwise keeps private state.
-        owner_admin=kind=="dash" and admin_request(method,path,rest) and w["role"]=="admin"
+        owner_admin=kind=="dash" and admin_request(path,rest) and w["role"]=="admin"
         port=NET_PORT if kind=="net" else ADMIN_DASH_PORT if owner_admin else w["ports"][kind]
-        capability="" if kind=="net" else admin_token() if owner_admin else backend_token(w)
+        capability="" if kind=="net" else env_token(ADMIN_TOKEN_FILE if owner_admin else ROOT/"config/workspace-services"/(w["slug"]+".env"))
         if kind!="net" and not capability:
             audit("backend_unavailable",w["id"],w["slug"],"missing_capability"); self.request.sendall(response(502,"workspace service unavailable")); return
         stripped={"tailscale-user-login","tailscale-user-id","x-grave-workspace","x-grave-role","x-forwarded-host","x-forwarded-user","x-grave-backend-token"}
+        if not websocket: stripped|={"connection","keep-alive"}
         forwarded=[line for line in raw_headers if line.partition(":")[0].strip().lower() not in stripped]
         forwarded += [f"X-Grave-Workspace: {w['slug']}",f"X-Grave-Role: {w['role']}",f"X-Forwarded-User: {w['id']}"]
         if capability: forwarded.append(f"X-Grave-Backend-Token: {capability}")
-        request=(f"{method} {upstream_path} {version}\r\n"+"\r\n".join(forwarded)+"\r\n\r\n").encode("iso-8859-1")+rest
+        if not websocket: forwarded.append("Connection: close")
+        body=rest[:length]
+        request=(f"{method} {upstream_path} {version}\r\n"+"\r\n".join(forwarded)+"\r\n\r\n").encode("iso-8859-1")+body
         try:
             with socket.create_connection(("127.0.0.1",port),timeout=5) as backend:
-                backend.sendall(request); relay(self.request,backend)
-        except OSError:
+                backend.settimeout(IDLE); backend.sendall(request); copy(self.request,backend,length-len(body))
+                status,_,lines,more=read_head(backend)
+                # Only a completed upgrade keeps the client->backend direction open;
+                # anything else ends with this response, so keep-alive can't carry
+                # an unchecked second request.
+                upgraded=websocket and status.split(" ")[1:2]==["101"]
+                if not upgraded: lines=[line for line in lines if line.partition(":")[0].strip().lower() not in ("connection","keep-alive")]+["Connection: close"]
+                self.request.sendall(("\r\n".join([status,*lines])+"\r\n\r\n").encode("iso-8859-1")+more)
+                try: relay(self.request,backend) if upgraded else copy(backend,self.request)
+                except OSError: pass
+        except (OSError,ValueError):
             self.request.sendall(response(502,"workspace service unavailable"))
 
 class Server(socketserver.ThreadingTCPServer):

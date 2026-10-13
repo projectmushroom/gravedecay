@@ -18,9 +18,9 @@ Runs as root: NetworkManager lease files are 0600 root, and conntrack
 counters live under /proc/sys/net/netfilter. Read-only throughout — the
 daemon never writes anything and executes no request-derived input.
 
-Env: GRAVENET_PORT (default 4714), GRAVENET_BIND (default 127.0.0.1 — the
-page is exposed via `tailscale serve /net`; widen to 0.0.0.0 only if the
-LAN clients themselves should load it), GRAVENET_WEB (page directory,
+Binds 127.0.0.1 only; the page is exposed via `tailscale serve /net`.
+
+Env: GRAVENET_PORT (default 4714), GRAVENET_WEB (page directory,
 default $GRAVE_ROOT/web/net), GRAVENET_ROLES (see above).
 """
 
@@ -40,7 +40,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 GRAVE_ROOT = os.environ.get("GRAVE_ROOT", "/srv/dev")
 PORT = int(os.environ.get("GRAVENET_PORT", "4714"))
-BIND = os.environ.get("GRAVENET_BIND", "127.0.0.1")
+BIND = "127.0.0.1"
 WEB_ROOT = os.environ.get("GRAVENET_WEB", os.path.join(GRAVE_ROOT, "web/net"))
 HISTORY = 180          # seconds of per-second samples kept and replayed on connect
 SLOW_EVERY = 10        # seconds between lease/neighbour/upstream/tailscale scans
@@ -465,6 +465,7 @@ class Handler(BaseHTTPRequestHandler):
     def sse(self):
         import queue
         q = queue.Queue(maxsize=30)
+        self.close_connection = True
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
@@ -478,10 +479,11 @@ class Handler(BaseHTTPRequestHandler):
                              json.dumps(hist).encode() + b"\n\n")
             self.wfile.flush()
             while True:
-                snap = q.get()
+                # The sampler drops a client whose queue filled; end its stream.
+                snap = q.get(timeout=5)
                 self.wfile.write(b"data: " + json.dumps(snap).encode() + b"\n\n")
                 self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError, OSError):
+        except (BrokenPipeError, ConnectionResetError, OSError, queue.Empty):
             pass
         finally:
             with SAMPLER.lock:
