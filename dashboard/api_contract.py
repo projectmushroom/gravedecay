@@ -230,13 +230,16 @@ SCHEMAS = {
     'KeeperConversationRequest': obj({'id': ID, 'provider': {'enum': ['claude', 'codex']}}, required=['id'], closed=True),
     'KeeperTurnRequest': obj({'conversation': ID, 'turn': ID, 'message': {'type': 'string', 'minLength': 1, 'maxLength': 8000}}, closed=True),
     'KeeperCancelRequest': obj({'conversation': ID}, closed=True),
+    'KeeperMemory': obj({'text': {'type': 'string', 'maxLength': 4000}, 'revision': REVISION,
+                         'updated_at': nullable('number'), 'limit': {'type': 'integer'}}),
+    'KeeperMemoryRequest': obj({'text': {'type': 'string', 'maxLength': 4000}, 'revision': REVISION}, closed=True),
     'Capabilities': obj({'product': {'const': 'gravedecay'}, 'api_version': {'const': 1},
                          'host': STRING, 'platform': STRING,
                          'routes': obj({'GET': array(STRING), 'POST': array(STRING)}), 'actions': array(STRING),
                          'operations': obj({'protocol': {'const': 1}, 'actions': array(STRING),
                                             'retention_seconds': {'type': 'integer'}, 'new_id_max_age_seconds': {'type': 'integer'}}),
                          'keeper': obj({'provider': {'enum': ['claude', 'codex']}, 'model': STRING,
-                                        'tools': array(STRING)}, required=[]),
+                                        'tools': array(STRING), 'memory_limit': {'type': 'integer'}}, required=[]),
                          'resource_contract': obj({'version': {'type':'string', 'pattern': r'^1\.[0-9]+\.[0-9]+$'}, 'schema': {'const': 'openapi.json'},
                                                    'sha256': REVISION, 'build': REVISION, 'resources': array(STRING)})}),
     'LegacyObject': {'type': 'object', 'additionalProperties': True,
@@ -305,7 +308,14 @@ def document(routes, base='/grave'):
             elif name.startswith('keeper'):
                 entry['x-grave-contract'] = VERSION
                 entry['description'] = 'Gravekeeper conversation on this grave only (single-owner Linux). Conversations bind to their owner and host.'
-                if name == 'keeper' and method == 'GET':
+                if name == 'keeper/memory':
+                    entry['description'] = 'Owner-editable Keeper memory: one bounded text, revision-checked like preferences. POST the full text with the revision you read; empty text forgets everything.'
+                    entry['responses']['200'] = response(ref('KeeperMemory'))
+                    if method == 'POST':
+                        entry['requestBody']['content']['application/json']['schema'] = ref('KeeperMemoryRequest')
+                        entry['responses']['400'] = response(ref('Error'), 'Invalid, oversized or unsafe memory (secrets, grants, bypass instructions)')
+                        entry['responses']['409'] = response(ref('Error'), 'Memory revision conflict')
+                elif name == 'keeper' and method == 'GET':
                     entry['parameters'] += [
                         {'name': 'id', 'in': 'query', 'schema': ID, 'description': 'Omit to list conversations.'},
                         {'name': 'after', 'in': 'query', 'schema': {'type': 'integer', 'minimum': 0, 'maximum': 9999999999}}]

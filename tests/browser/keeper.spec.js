@@ -23,12 +23,20 @@ const script = [
 async function keeperFixture(page, request, baseURL, options = {}) {
   await origins(page, request, baseURL, options);
   const posts = []; let record = null;
+  const memory = { text: options.memory || '', revision: 'a'.repeat(64), updated_at: null, limit: 4000 };
   const view = after => { const { pending, ...rest } = record; return { ...rest, events: record.events.filter(e => e.seq > after) }; };
   await page.route(remote + '/grave/api/v1/keeper**', async route => {
     const req = route.request(), url = new URL(req.url()), path = url.pathname.replace('/grave/api/v1/', '');
     if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+    if (path === 'keeper/memory' && req.method() === 'GET') return route.fulfill({ headers: cors, json: memory });
     if (req.method() === 'POST') {
       const body = req.postDataJSON(); posts.push({ path, body });
+      if (path === 'keeper/memory') {
+        if (body.revision !== memory.revision) return route.fulfill({ status: 409, headers: cors, json: { error: 'revision_conflict', output: 'Memory changed on this grave; reload it and apply your change again' } });
+        if (options.memoryMoves) { memory.revision = 'b'.repeat(64); memory.text += '- added by the Keeper\n'; options.memoryMoves = false; return route.fulfill({ status: 409, headers: cors, json: { error: 'revision_conflict', output: 'moved' } }); }
+        Object.assign(memory, { text: body.text, revision: 'c'.repeat(64), updated_at: 5 });
+        return route.fulfill({ headers: cors, json: memory });
+      }
       if (path === 'keeper') {
         if (record && record.id === body.id) return route.fulfill({ status: 200, headers: cors, json: view(0) });
         record = { id: body.id, provider: 'claude', model: '', session_id: null, host: 'REMOTE-MAC', owner: 'browser@example.test',
@@ -211,4 +219,27 @@ test('a grave without the Keeper hides the entry and explains it in the drawer',
   await page.evaluate(() => openKeeper(''));
   await expect(page.locator('#keeper-status')).toContainText('unavailable on mac.tail123.ts.net');
   await expect(page.locator('#keeper-send')).toBeDisabled();
+});
+
+test('Memory shows, saves and forgets the owner notes and a conflict keeps the draft', async ({ page, request, baseURL }) => {
+  const fixture = await keeperFixture(page, request, baseURL, { memory: '- Maintenance after 02:00\n', memoryMoves: true });
+  await summon(page);
+  await page.locator('#keeper-memory-open').click();
+  await expect(page.locator('#keeper-memory-text')).toHaveValue('- Maintenance after 02:00\n');
+  await expect(page.locator('#keeper-memory-status')).toContainText('Empty');
+  await page.locator('#keeper-memory-text').fill('- Maintenance after 02:00\n- Short answers\n');
+  await page.locator('#keeper-memory-save').click();
+  await expect(page.locator('#keeper-memory-status')).toContainText('changed on the grave');
+  await expect(page.locator('#keeper-memory-text')).toHaveValue('- Maintenance after 02:00\n- Short answers\n');
+  await page.locator('#keeper-memory-open').click();
+  await page.locator('#keeper-memory-open').click();
+  await expect(page.locator('#keeper-memory-text')).toHaveValue('- Maintenance after 02:00\n- added by the Keeper\n');
+  await page.locator('#keeper-memory-text').fill('- Short answers\n');
+  await page.locator('#keeper-memory-save').click();
+  await expect(page.locator('#keeper-memory-status')).toContainText('Saved.');
+  expect(fixture.posts.filter(p => p.path === 'keeper/memory').map(p => p.body.revision)).toEqual(['a'.repeat(64), 'b'.repeat(64)]);
+  page.once('dialog', dialog => dialog.accept());
+  await page.locator('#keeper-memory-forget').click();
+  await expect(page.locator('#keeper-memory-status')).toContainText('Forgotten.');
+  await expect(page.locator('#keeper-memory-text')).toHaveValue('');
 });

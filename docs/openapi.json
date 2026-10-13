@@ -579,6 +579,156 @@
         "description": "Gravekeeper conversation on this grave only (single-owner Linux). Conversations bind to their owner and host."
       }
     },
+    "/keeper/memory": {
+      "get": {
+        "operationId": "get_keeper_memory",
+        "summary": "GET keeper/memory",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "1.0.0",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeeperMemory"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Access, validation or availability error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Workspace gateway capability refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "description": "Owner-editable Keeper memory: one bounded text, revision-checked like preferences. POST the full text with the revision you read; empty text forgets everything."
+      },
+      "post": {
+        "operationId": "post_keeper_memory",
+        "summary": "POST keeper/memory",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "1.0.0",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeeperMemory"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Access, validation or availability error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid, oversized or unsafe memory (secrets, grants, bypass instructions)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Memory revision conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Workspace gateway capability refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeeperMemoryRequest"
+              }
+            }
+          }
+        },
+        "description": "Owner-editable Keeper memory: one bounded text, revision-checked like preferences. POST the full text with the revision you read; empty text forgets everything."
+      }
+    },
     "/openapi.json": {
       "get": {
         "operationId": "get_openapi_json",
@@ -3709,6 +3859,53 @@
         ],
         "additionalProperties": false
       },
+      "KeeperMemory": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "updated_at": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "limit": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "text",
+          "revision",
+          "updated_at",
+          "limit"
+        ],
+        "additionalProperties": true
+      },
+      "KeeperMemoryRequest": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "text",
+          "revision"
+        ],
+        "additionalProperties": false
+      },
       "Capabilities": {
         "type": "object",
         "properties": {
@@ -3796,6 +3993,9 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              "memory_limit": {
+                "type": "integer"
               }
             },
             "required": [],
