@@ -38,7 +38,12 @@ def outputs():
                 svg.append(item)
         data = ET.tostring(svg, encoding="unicode") + "\n"
         yield f"clients/omarchy/os-logos/{path.name}", data
-        yield f"{catalog}/os-{path.stem}.imageset/{path.name}", data
+        # The catalog's natural size is width/height (else the viewBox, up to
+        # 512pt); AppKit menus draw images at that size, ignoring SwiftUI frames.
+        sized = copy.deepcopy(svg)
+        sized.set("width", "14")
+        sized.set("height", "14")
+        yield f"{catalog}/os-{path.stem}.imageset/{path.name}", ET.tostring(sized, encoding="unicode") + "\n"
         yield f"{catalog}/os-{path.stem}.imageset/Contents.json", json.dumps({
             "images": [{"filename": path.name, "idiom": "universal"}],
             "info": {"author": "xcode", "version": 1},

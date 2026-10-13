@@ -132,8 +132,20 @@ if [ -f "$NOTIFY_ENV" ]; then
 else
   echo "ntfy: not configured (optional — docs/NOTIFICATIONS.md)"
 fi
-if [ "$PAGE" = 1 ] && [ "$rc" != 0 ] && [ -x "$ROOT/scripts/grave" ]; then
-  GRAVE_ROOT=$ROOT "$ROOT/scripts/grave" notify --event doctor --priority high \
-    "macOS doctor-lite failing" "run macos/status.sh on $(hostname) for details" || true
+# Page on state change only: the LaunchAgent runs every 30 minutes, and a page
+# per run for one ongoing failure is how a channel gets muted.
+# shortcut: tracks failing vs passing, not which check — a second failure while
+# already failing stays quiet; upgrade if this script grows named checks.
+mark="$ROOT/logs/doctor-failing"
+if [ "$PAGE" = 1 ] && [ -x "$ROOT/scripts/grave" ]; then
+  if [ "$rc" != 0 ] && [ ! -e "$mark" ]; then
+    mkdir -p "$ROOT/logs" && : > "$mark"
+    GRAVE_ROOT=$ROOT "$ROOT/scripts/grave" notify --event doctor --priority high \
+      "macOS doctor-lite failing" "run macos/status.sh on $(hostname) for details" || true
+  elif [ "$rc" = 0 ] && [ -e "$mark" ]; then
+    rm -f "$mark"
+    GRAVE_ROOT=$ROOT "$ROOT/scripts/grave" notify --event doctor \
+      "macOS doctor-lite recovered" "all checks pass on $(hostname)" || true
+  fi
 fi
 exit "$rc"
