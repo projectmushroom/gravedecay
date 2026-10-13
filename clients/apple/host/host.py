@@ -24,7 +24,7 @@ def configure(root, port, network_port):
                       GRAVEDECAY_MACOS_NATIVE='1', GRAVEDECAY_MACOS_AGENTS='0',
                       GRAVEDECAY_PORT=str(port), GRAVEDECAY_BASE='/grave',
                       GRAVEDECAY_APPS='📡 Network=/net/',
-                      GRAVENET_PLATFORM='macos', GRAVENET_BIND='127.0.0.1',
+                      GRAVENET_PLATFORM='macos',
                       GRAVENET_PORT=str(network_port), GRAVENET_WEB=str(bundle / 'net'))
     sys.path.insert(0, str(bundle))  # -I excludes even the script directory.
 

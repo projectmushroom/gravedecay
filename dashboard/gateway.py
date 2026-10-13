@@ -123,12 +123,13 @@ def admin_request(path,rest):
     return action_of(path,rest) in ADMIN_ACTIONS
 
 def copy(src,dst,limit=None):
-    """Stream src to dst until EOF, or until exactly limit bytes."""
+    """Stream src to dst until EOF, or until exactly limit bytes; returns the bytes still missing."""
     while limit is None or limit > 0:
         data=src.recv(65536 if limit is None else min(65536,limit))
-        if not data: return
+        if not data: return limit
         dst.sendall(data)
         if limit is not None: limit-=len(data)
+    return 0
 
 def relay(a,b):
     sel=selectors.DefaultSelector(); sel.register(a,selectors.EVENT_READ,b); sel.register(b,selectors.EVENT_READ,a)
@@ -208,7 +209,9 @@ class Handler(socketserver.BaseRequestHandler):
         request=(f"{method} {upstream_path} {version}\r\n"+"\r\n".join(forwarded)+"\r\n\r\n").encode("iso-8859-1")+body
         try:
             with socket.create_connection(("127.0.0.1",port),timeout=5) as backend:
-                backend.settimeout(IDLE); backend.sendall(request); copy(self.request,backend,length-len(body))
+                backend.settimeout(IDLE); backend.sendall(request)
+                # A client gone mid-body: close now, don't wait IDLE on a backend still reading.
+                if copy(self.request,backend,length-len(body)): return
                 status,_,lines,more=read_head(backend)
                 # Only a completed upgrade keeps the client->backend direction open;
                 # anything else ends with this response, so keep-alive can't carry

@@ -494,7 +494,7 @@ freeze_agents() {
   sudo mkdir -p "$TORPOR_CG"
   ALL_PIDS=()
   for p in $pids; do collect_tree "$p"; n=$((n+1)); done
-  for p in "${ALL_PIDS[@]}"; do
+  for p in ${ALL_PIDS[@]+"${ALL_PIDS[@]}"}; do
     echo "$p" | sudo tee "$TORPOR_CG/cgroup.procs" >/dev/null 2>&1 || true
   done
   # Frozen even when empty: the scheduled-job runner reads this flag as gaming mode.
@@ -1161,7 +1161,7 @@ notify_reachable() {
   [[ "${NTFY_URL:-}" =~ ^https?:// ]] || return 1
   local headers=()
   [[ -n "${NTFY_TOKEN:-}" ]] && headers+=("Authorization: Bearer ${NTFY_TOKEN//[$'\r\n']/}")
-  ntfy_config "$NTFY_URL/json?poll=1" "${headers[@]}" | curl -sf -m 10 -o /dev/null --config -
+  ntfy_config "$NTFY_URL/json?poll=1" ${headers[@]+"${headers[@]}"} | curl -sf -m 10 -o /dev/null --config -
 }
 
 claude_notify_hook_present() {

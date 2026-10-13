@@ -161,6 +161,13 @@ class GatewayTests(unittest.TestCase):
         self.assertIn(b"chunked request bodies unsupported",self.request("/","a@example.com",extra="Transfer-Encoding: chunked\r\n"))
         self.assertIn(b"bad content length",self.request("/","a@example.com",extra="Content-Length: -1\r\n"))
 
+    def test_client_gone_mid_body_is_closed_at_once(self):
+        s=socket.create_connection(("127.0.0.1",self.port),timeout=3)
+        s.sendall(f"POST {self.prefix}/upload HTTP/1.1\r\nHost: box\r\nTailscale-User-Login: b@example.com\r\nContent-Length: 100\r\n\r\nshort".encode())
+        s.shutdown(socket.SHUT_WR)
+        self.assertEqual(s.recv(1024),b"")   # not IDLE seconds waiting on a backend still reading
+        s.close()
+
     def test_sessions_are_audited_on_websocket_upgrade_only(self):
         self.assertIn(b"alice-term",self.request("/term/","a@example.com"))
         audit=self.root/"logs/audit.jsonl"
