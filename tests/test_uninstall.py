@@ -72,6 +72,8 @@ class UnitCoverageTests(unittest.TestCase):
         self.assertTrue(os.access(UNINSTALL_SH, os.X_OK), "uninstall.sh must be chmod +x")
 
     def test_both_uninstall_paths_remove_multi_user_boundary_residue(self):
+        dropins = re.compile(r"/etc/systemd/system/[\w@.-]+\.service\.d/[\w.-]+\.conf")
+        self.assertEqual(set(dropins.findall(GRAVE_TEXT)), set(dropins.findall(UNINSTALL_SH.read_text())))
         for text in (GRAVE_TEXT, UNINSTALL_SH.read_text()):
             self.assertIn("multiuser-boundary.conf", text)
             self.assertIn("delete table inet gravedecay", text)
@@ -262,6 +264,19 @@ exit 1
         self.assertFalse((local_bin / "grave-workspaces").exists())
         # sudo is still used for /etc — just never for the user-owned CLI.
         self.assertNotIn(f"sudo rm -f {cli}", self.recorded())
+
+    def test_refuses_from_inside_a_unit_it_would_stop(self):
+        # The web terminal's shell lives in gravedecay-term.service's cgroup;
+        # stopping that unit mid-run killed the uninstall halfway.
+        cg = self.base / "cgroup"
+        cg.write_text("0::/system.slice/gravedecay-term.service\n")
+        os.environ["GRAVE_CGROUP_FILE"] = str(cg)
+        self.addCleanup(os.environ.pop, "GRAVE_CGROUP_FILE", None)
+        proc = self.run_uninstall("--yes", expect_ok=False)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("gravedecay-term.service", proc.stdout)
+        self.assertNotIn("systemctl stop", self.recorded())
+        self.assertTrue(self.grave.exists())
 
     def test_platform_units_are_stopped_and_files_removed(self):
         self.run_uninstall("--yes")

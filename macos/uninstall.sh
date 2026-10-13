@@ -16,11 +16,13 @@ run(){ if [ "$DRY" = 1 ]; then printf 'dry-run: '; printf '%s ' "$@"; printf '\n
 uid=$(id -u); agents="$HOME/Library/LaunchAgents"
 for label in io.gravedecay.dashboard io.gravedecay.network io.gravedecay.t3 io.gravedecay.term io.gravedecay.updater io.gravedecay.keepawake io.gravedecay.doctor; do plist="$agents/$label.plist"; [ -e "$plist" ] && run launchctl bootout "gui/$uid" "$plist" || true; run rm -f "$plist"; done
 [ "$(readlink "$HOME/.local/bin/grave" 2>/dev/null || true)" != "$ROOT/scripts/grave" ] || run rm -f "$HOME/.local/bin/grave"
-[ -z "$TS" ] || { run "$TS" serve --https=443 --set-path=/grave off; run "$TS" serve --https=443 --set-path=/net off; }
+# `serve --set-path=X off` exits non-zero when X was never mounted (e.g. a
+# --dashboard-only install has no /net); under set -e that aborted the uninstall.
+[ -z "$TS" ] || { run "$TS" serve --https=443 --set-path=/grave off 2>/dev/null || true; run "$TS" serve --https=443 --set-path=/net off 2>/dev/null || true; }
 # Only agents mode ever published / and /term; a '/' mount on a Mac that
 # never opted in belongs to someone else and must not be torn down.
 if [ -n "$TS" ] && [ "$(sed -n 's/^agents=//p' "$ROOT/config/components" 2>/dev/null)" = 1 ]; then
-  run "$TS" serve --https=443 --set-path=/ off; run "$TS" serve --https=443 --set-path=/term off
+  run "$TS" serve --https=443 --set-path=/ off 2>/dev/null || true; run "$TS" serve --https=443 --set-path=/term off 2>/dev/null || true
 fi
 if [ "$PURGE" = 1 ]; then
   run rm -rf "$ROOT"

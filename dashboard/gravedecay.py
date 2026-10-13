@@ -101,6 +101,7 @@ FILES_ROOT = os.path.realpath(GRAVE_ROOT)
 # repos/ stay fully editable, since projects get copied across boxes.
 FILES_DENY = (os.path.join(FILES_ROOT, "config", "secrets"),)
 MAX_UPLOAD = 2 * 1024 * 1024 * 1024   # 2 GiB per uploaded file
+UMASK = os.umask(0); os.umask(UMASK)   # read once at import, before threads; mkstemp files are 0600
 # Tailscale serve injects Tailscale-User-Login for tailnet requests; POSTs
 # (actions) are restricted to these identities. Tagged devices have no login
 # header, so absence is never proof of a local request.
@@ -262,21 +263,6 @@ if MACOS:
     DEFAULT_SETTINGS["repo_root"] = MACOS_REPO_ROOT_DEFAULT
 
 
-def _safe_tile_url(url):
-    """Return url only if it is an internal root-relative path or an http(s) URL.
-    Everything else — javascript:, data:, etc. — is dropped: a custom tile is
-    rendered as an <a href> and an iframe src, so a javascript: URL would run in
-    the dashboard origin (stored XSS driving every privileged endpoint)."""
-    url = str(url)[:200]
-    if url.startswith("/"):
-        return url
-    try:
-        scheme = urllib.parse.urlparse(url).scheme.lower()
-    except ValueError:
-        return ""
-    return url if scheme in ("http", "https") else ""
-
-
 def _t3_activity_configured():
     """Only loopback HTTP or tailnet HTTPS can be a read-only T3 source."""
     if not all((T3_ACTIVITY_URL, T3_ACTIVITY_TOKEN, T3_ACTIVITY_ENVIRONMENT,
@@ -292,11 +278,10 @@ def _t3_activity_configured():
 def _sanitize_custom_apps(apps):
     out = []
     for a in apps if isinstance(apps, list) else []:
-        if not isinstance(a, dict) or not a.get("url"):
-            continue
-        url = _safe_tile_url(a.get("url", ""))
-        if url:
-            out.append({"name": str(a.get("name", "app"))[:40], "url": url})
+        # Same check the preferences resource applies on read, so a tile saved
+        # here is never dropped (and lost on the next save) over there.
+        if isinstance(a, dict) and api_contract.tile_url(a.get("url")):
+            out.append({"name": str(a.get("name") or "app")[:40], "url": a["url"]})
     return out[:12]
 
 
@@ -1007,14 +992,6 @@ def collect_macos_work(inventory):
         return {"github": {"login": login, "repos": groups, "error": None, "warning": warning},
                 "ci": {"rows": ci_rows, "error": None, "warning": warning}}
     return cached(cache_key, 120, fetch)
-
-
-def collect_macos_github(inventory):
-    return collect_macos_work(inventory)["github"]
-
-
-def collect_macos_ci(inventory):
-    return collect_macos_work(inventory)["ci"]
 
 
 def collect_journal():
@@ -2163,7 +2140,7 @@ def claude_transcript(path, seen):
     """Priced assistant messages in one Claude Code transcript as (timestamp,
     model, usage, cwd), deduplicated across retries by message and request id."""
     import datetime
-    with open(path) as fh:
+    with open(path, errors="replace") as fh:
         for line in fh:
             if '"usage"' not in line:
                 continue
@@ -2220,7 +2197,7 @@ def codex_rollout(path):
     Totals are cumulative per session file, so the last token_count wins; the
     quota is the newest `rate_limits` event that codex_quota() accepts."""
     cwd = model = last_u = last_rl = None
-    with open(path) as fh:
+    with open(path, errors="replace") as fh:
         for line in fh:
             if '"token_count"' not in line and '"session_meta"' not in line and '"turn_context"' not in line:
                 continue
@@ -3018,10 +2995,17 @@ def fs_op(data):
     _safe_path so a crafted payload can't reach outside FILES_ROOT."""
     op = str(data.get("op", ""))
     rel = str(data.get("path", ""))
-    full = _safe_path(rel)
+    if op in ("delete", "rename"):
+        # Act on the entry itself, never a symlink's target: jail the parent
+        # and leave the last component unresolved.
+        rel = os.path.normpath(rel.replace("\\", "/").lstrip("/"))
+        parent, base = _safe_path(os.path.dirname(rel)), os.path.basename(rel)
+        full = None if parent is None or base == ".." else os.path.normpath(os.path.join(parent, base))
+    else:
+        full = _safe_path(rel)
     if full is None:
         return {"ok": False, "output": "path not allowed"}
-    if op in ("delete", "rename") and any(deny.startswith(full + os.sep) for deny in FILES_DENY):
+    if op in ("delete", "rename") and any(deny == full or deny.startswith(full + os.sep) for deny in FILES_DENY):
         return {"ok": False, "output": "cannot modify a protected directory"}
     try:
         if op == "mkdir":
@@ -3049,10 +3033,10 @@ def fs_op(data):
             name = _clean_name(data.get("name", ""))
             if not name:
                 return {"ok": False, "output": "bad name"}
-            target = _safe_path(os.path.join(os.path.dirname(rel), name))
-            if target is None:
-                return {"ok": False, "output": "path not allowed"}
-            if any(deny.startswith(target + os.sep) for deny in FILES_DENY):
+            target = os.path.join(os.path.dirname(full), name)
+            if os.path.lexists(target):
+                return {"ok": False, "output": "name already exists"}
+            if any(deny == target or deny.startswith(target + os.sep) for deny in FILES_DENY):
                 return {"ok": False, "output": "cannot replace a protected directory"}
             os.rename(full, target)
             return {"ok": True, "output": f"renamed to {name}"}
@@ -3229,23 +3213,33 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, json.dumps({"ok": False, "output": "path not allowed"}))
             return
         length = int(self.headers.get("Content-Length", 0))
+        if length < 0:
+            self._send(400, json.dumps({"ok": False, "output": "bad length"}))
+            return
         if length > MAX_UPLOAD:
             self._send(413, json.dumps({"ok": False, "output": "file too large"}))
             return
-        tmp = dest + ".part"
+        tmp = None
         try:
+            # A unique temp name: concurrent uploads don't collide and a planted
+            # `.part` symlink is never followed.
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(dest), prefix="." + name[:200] + ".", suffix=".part")
             remaining = length
-            with open(tmp, "wb") as out:
+            with os.fdopen(fd, "wb") as out:
+                os.fchmod(fd, 0o666 & ~UMASK)   # an upload gets the mode open() would give it
                 while remaining > 0:
                     chunk = self.rfile.read(min(remaining, 1 << 20))
                     if not chunk:
                         break
                     out.write(chunk)
                     remaining -= len(chunk)
+            if remaining:
+                raise OSError("upload incomplete")
             os.replace(tmp, dest)
         except OSError as e:
             try:
-                os.remove(tmp)
+                if tmp:
+                    os.remove(tmp)
             except OSError:
                 pass
             self._send(500, json.dumps({"ok": False, "output": str(e)}))
@@ -3861,7 +3855,7 @@ class Handler(BaseHTTPRequestHandler):
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,50}", name):
                 self._send(400, json.dumps({"ok": False, "output": "bad session name"}))
                 return
-            rc, out, err = sh(["tmux", "-L", TMUX_SOCKET, "kill-session", "-t", name])
+            rc, out, err = sh(["tmux", "-L", TMUX_SOCKET, "kill-session", "-t", "=" + name])
             self._send(200, json.dumps({"ok": rc == 0, "output": out + err}))
         elif p == "/api/session-resume":
             if PORTABLE:

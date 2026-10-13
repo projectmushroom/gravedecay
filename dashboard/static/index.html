@@ -1748,7 +1748,7 @@ function render(s){
     // T3 tile in official-app mode: hand off to the installed T3 Code app via
     // its registered t3code:// scheme (no env-specific deeplink exists
     // upstream, so this opens the app itself; it holds the pairing). The href
-    // is a constant, never user input — the _safe_tile_url jail is untouched.
+    // is a constant, never user input — the tile_url jail is untouched.
     if(a.url==='/'&&(cfg.t3_tile||'pwa')==='app')
       return `<a class="app" href="t3code://">${esc(a.name)} ↗</a>`;
     // ⚡ skip-perms: a claude/codex /term tile launched with gates off routes

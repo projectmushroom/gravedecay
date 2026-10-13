@@ -2,6 +2,7 @@
 import http.client
 import json
 import pathlib
+import socket
 import tempfile
 import threading
 import unittest
@@ -160,6 +161,38 @@ class ClientAPI(unittest.TestCase):
         for op in ['delete', 'rename']:
             self.assertFalse(self.d.fs_op({'op': op, 'path': 'config', 'name': 'moved'})['ok'])
         self.assertTrue(pathlib.Path(self.d.CLIENT_TRUST_PATH).exists())
+
+    def test_fs_delete_and_rename_act_on_symlinks_not_targets(self):
+        root = pathlib.Path(self.d.FILES_ROOT) / 'linktest'
+        (root / 'realdir').mkdir(parents=True)
+        (root / 'real.md').write_text('keep')
+        secrets = pathlib.Path(self.d.FILES_DENY[0]); secrets.mkdir(parents=True, exist_ok=True)
+        (root / 'filelink').symlink_to('real.md')
+        (root / 'dirlink').symlink_to('realdir')
+        (root / 'secretlink').symlink_to(secrets)
+        for name in ('filelink', 'dirlink', 'secretlink'):
+            self.assertTrue(self.d.fs_op({'op': 'delete', 'path': 'linktest/' + name})['ok'], name)
+            self.assertFalse((root / name).is_symlink())
+        self.assertEqual((root / 'real.md').read_text(), 'keep')
+        self.assertTrue((root / 'realdir').is_dir())
+        self.assertTrue(secrets.is_dir())
+        (root / 'other.md').write_text('other')
+        self.assertEqual(self.d.fs_op({'op': 'rename', 'path': 'linktest/other.md', 'name': 'real.md'}),
+                         {'ok': False, 'output': 'name already exists'})
+        self.assertEqual((root / 'real.md').read_text(), 'keep')
+
+    def test_interrupted_upload_keeps_the_original_file(self):
+        target = pathlib.Path(self.d.FILES_ROOT) / 'upload.txt'
+        target.write_text('original')
+        with socket.create_connection(('127.0.0.1', self.server.server_port), timeout=5) as conn:
+            conn.sendall(b'POST /api/upload?path=&name=upload.txt HTTP/1.1\r\nHost: x\r\n'
+                         b'Tailscale-User-Login: owner@example.test\r\nSec-Fetch-Site: same-origin\r\n'
+                         b'Content-Length: 100\r\n\r\nshort')
+            conn.shutdown(socket.SHUT_WR)
+            status = conn.recv(4096).split(b' ', 2)[1]
+        self.assertEqual(status, b'500')
+        self.assertEqual(target.read_text(), 'original')
+        self.assertEqual(list(target.parent.glob('.upload.txt.*')), [])
 
     def test_public_summary_remains_without_cors(self):
         with mock.patch.object(self.d, 'summary', return_value={'product': 'gravedecay'}):

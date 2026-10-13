@@ -88,7 +88,9 @@ people—not mutually hostile or public tenants.
    configuration, because its random backend path is the gateway's local
    anti-spoofing capability. `grave doctor` enforces the socket mode.
    A separate root-owned nftables `inet gravedecay` output chain rejects every
-   non-root socket owner dialing TCP ports 4711–4713 or 4810–5109. This is
+   non-root socket owner dialing TCP ports 4710–4714 or 4810–5109 (the gateway
+   capability URL in the root `tailscale serve` argv is therefore unusable),
+   and everyone but root and the owner dialing 5432, 6379 or 3050. This is
    required in multi-user mode: it protects T3 and ttyd, which cannot validate
    an HTTP header themselves, and is atomically reapplied by a required
    systemd boundary unit. Dashboard backends also require a random gateway
@@ -379,6 +381,10 @@ so you can move projects onto the box from a browser. It is confined:
   under `repos/` stay fully editable — copying projects across boxes needs
   them. Uploaded filenames are reduced to a single safe component
   (`os.path.basename`, no separators/traversal).
+- **Delete and rename act on the link, not its target.** Only the parent is
+  resolved, so deleting `config/keeper/CLAUDE.md` removes the symlink and
+  leaves `GRAVEKEEPER.md`. Rename never overwrites an existing name, and an
+  interrupted upload leaves the old file untouched.
 
 The jail root is `$GRAVE_ROOT` by design: broad enough to manage repos and
 config, with the secret store carved out. It is not a substitute for the OS

@@ -40,7 +40,9 @@ fi
 for unit in "${units[@]}"; do
   systemctl cat "$unit.service" >/dev/null 2>&1 || missing+=("$unit.service")
 done
-ls /etc/sudoers.d/ 2>/dev/null | grep -q gravedecay || missing+=("scoped sudoers")
+# /etc/sudoers.d is 0750 root, so the owner can't list it: probe the grant
+# itself, the same check grave's need_root_helper uses.
+sudo -n systemctl --version >/dev/null 2>&1 || missing+=("scoped sudoers")
 command -v grave >/dev/null 2>&1 || missing+=("grave CLI")
 
 if ((${#missing[@]})); then

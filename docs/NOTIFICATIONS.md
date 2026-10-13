@@ -163,6 +163,8 @@ load.
   hooks quote with `#{q:...}`, `grave notify` strips CR/LF from ntfy headers
   and builds the push payload with `jq`, and the dashboard drops any deep
   link that isn't an on-origin `/path`.
+- The ntfy URL and token reach `curl` on stdin (`--config -`), never on its
+  command line, which every local user can read from `/proc`.
 - Enrollment endpoints (`/api/push-key`, `/api/push-subscribe`, …) are gated
   to ALLOWED_USERS + CSRF-checked like every other privileged route.
 - Outbound HTTPS only — no new listening port, so no `docs/PORTS.md` entry.

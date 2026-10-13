@@ -158,7 +158,9 @@ APPS=""; [ "$WANT_NET" = 0 ] || APPS="📡 Network=/net/"
 [ "$WANT_AGENTS" = 0 ] || APPS="⌨️ T3 Code=/;🖥️ Terminal=/term/?arg=shell;🤖 Claude=/term/?arg=claude;🧠 Codex=/term/?arg=codex${APPS:+;$APPS}"
 render(){ template=$1; target=$2; if [ "$DRY" = 1 ]; then echo "dry-run: render $template -> $target"; else sed "s|@PYTHON@|$PYTHON|g;s|@ROOT@|$ROOT|g;s|@HOME@|$HOME_CANON|g;s|@APPS@|$APPS|g;s|@ALLOWED_USERS@|$ALLOWED_USERS|g;s|@AGENTS@|$WANT_AGENTS|g;s|@T3@|$T3_BIN|g;s|@TTYD@|$TTYD_BIN|g;s|@JAIL@|$JAIL|g;s|@AGENT_PATH@|$AGENT_PATH|g" "$template" > "$target"; plutil -lint "$target" >/dev/null; fi; }
 unload(){ label=$1; plist="$AGENTS/$label.plist"; [ -e "$plist" ] && run launchctl bootout "gui/$UID_NOW" "$plist" 2>/dev/null || true; run rm -f "$plist"; }
-serve_off(){ path=$1; [ -z "$TAILSCALE" ] || run "$TAILSCALE" serve --https=443 --set-path="$path" off; }
+# `serve --set-path=X off` exits non-zero when X was never mounted; under set -e
+# that aborted the whole install, so a miss is not a failure here.
+serve_off(){ path=$1; [ -z "$TAILSCALE" ] || run "$TAILSCALE" serve --https=443 --set-path="$path" off 2>/dev/null || true; }
 [ "$DRY" = 1 ] || { run mkdir -p "$ROOT/scripts" "$ROOT/web/net" "$ROOT/logs" "$ROOT/config" "$ROOT/config/secrets" "$ROOT/repos" "$ROOT/staging" "$AGENTS"; run chmod 700 "$ROOT/config/secrets"; : > "$ROOT/.gravedecay-macos"; }
 if [ "$DRY" = 0 ]; then
   run cp "$HERE/grave" "$ROOT/scripts/grave"; run cp "$HERE/updater.py" "$ROOT/scripts/updater.py"; run cp "$HERE/status.sh" "$ROOT/scripts/status.sh"; run chmod 700 "$ROOT/scripts/grave" "$ROOT/scripts/updater.py" "$ROOT/scripts/status.sh"
@@ -211,7 +213,7 @@ elif [ "$OLD_AGENTS" = 1 ]; then
   # mounts this installer created in agents mode — a '/' mount on a Mac that
   # never opted in is someone else's and must never be touched.
   unload io.gravedecay.t3; unload io.gravedecay.term
-  serve_off /; serve_off /term
+  [ "${OLD_SERVE:-0}" = 1 ] && { serve_off /; serve_off /term; }
   # Never kill work implicitly — but do say when sessions are left running
   # with no remote surface to observe or end them.
   if [ "$DRY" = 0 ] && command -v tmux >/dev/null && tmux -L agents list-sessions >/dev/null 2>&1; then

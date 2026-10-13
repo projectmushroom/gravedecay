@@ -601,6 +601,42 @@ class MacosContractTests(unittest.TestCase):
             finally: os.environ.clear();os.environ.update(old)
             self.assertTrue((root/"config/update.lock").is_dir()); self.assertTrue(request.exists())
 
+    def test_stale_update_lock_from_a_killed_worker_is_broken(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=pathlib.Path(tmp,"root"); lock=root/"config/update.lock"; lock.mkdir(parents=True); (root/".gravedecay-macos").write_text("")
+            stale=time.time()-3600; os.utime(lock,(stale,stale))
+            request=root/"config/update-request.json"; request.write_text(json.dumps({"channel":"release","tag":None,"requested_at":int(time.time())}))
+            old=dict(os.environ); os.environ.update({"GRAVE_ROOT":str(root),"HOME":tmp})
+            try:
+                loader=importlib.machinery.SourceFileLoader("stale_updater",str(ROOT/"macos/updater.py")); spec=importlib.util.spec_from_loader("stale_updater",loader); updater=importlib.util.module_from_spec(spec);loader.exec_module(updater);updater.main()
+            finally: os.environ.clear();os.environ.update(old)
+            # The worker ran (no managed source here, so it fails loudly) and released the lock.
+            self.assertEqual(json.loads((root/"config/update-status.json").read_text())["state"],"failed")
+            self.assertFalse(lock.exists()); self.assertFalse(request.exists())
+
+    def test_serve_off_on_a_never_mounted_path_does_not_abort_install_or_uninstall(self):
+        # `tailscale serve --set-path=X off` exits non-zero for a path that was
+        # never mounted; under set -eu that aborted both scripts halfway.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path=pathlib.Path(tmp); fake=tmp_path/"bin"; fake.mkdir(); log=tmp_path/"tailscale.log"
+            for name, body in {"uname":"echo Darwin", "plutil":"exit 0", "curl":"exit 0", "launchctl":"exit 0",
+                               "tailscale":f'printf "%s\\n" "$*" >> "{log}"; case "$*" in *" off") exit 1;; esac'}.items():
+                p=fake/name; p.write_text("#!/bin/sh\n"+body+"\n"); p.chmod(0o755)
+            (fake/"python3").symlink_to(sys.executable)
+            home=tmp_path/"home"; root=home/"root"; (root/"config").mkdir(parents=True)
+            # agents was on but never served: the agents-off path must not touch '/' or '/term'.
+            (root/"config/components").write_text("dashboard=1\nnetwork=1\nserve=0\nkeepawake=1\nagents=1\n")
+            env=dict(os.environ,HOME=str(home),PATH=f"{fake}:/usr/bin:/bin")
+            result=subprocess.run(["sh",str(ROOT/"macos/install.sh"),"--no-bootstrap","--dashboard-only","--root",str(root)],env=env,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            calls=log.read_text()
+            self.assertIn("--set-path=/net off",calls); self.assertIn("--set-path=/grave off",calls)
+            self.assertNotIn("--set-path=/ off",calls); self.assertNotIn("--set-path=/term off",calls)
+            (root/"config/components").write_text("dashboard=1\nnetwork=0\nserve=1\nkeepawake=1\nagents=1\n"); log.write_text("")
+            result=subprocess.run(["sh",str(ROOT/"macos/uninstall.sh"),"--root",str(root)],env=env,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertIn("--set-path=/term off",log.read_text())
+
     def test_first_bootstrap_from_clean_linked_worktree_is_idempotent_and_safe(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path=pathlib.Path(tmp); source=tmp_path/"source"; shutil.copytree(ROOT,source,ignore=shutil.ignore_patterns(".git","node_modules","__pycache__"))
@@ -696,7 +732,8 @@ class MacosContractTests(unittest.TestCase):
                     headers={"Content-Type": "application/json", "Sec-Fetch-Site": "same-origin", "Tailscale-User-Login": "owner@example.test", **headers},
                     method="POST"), timeout=2)
             self.assertEqual(post("/api/session-kill", {"name": "claude"}).status, 200)
-            self.assertEqual(kills[-1][:4], ["tmux", "-L", "agents", "kill-session"])
+            # `=` is tmux's exact match: a bare name prefix-matches another session.
+            self.assertEqual(kills[-1], ["tmux", "-L", "agents", "kill-session", "-t", "=claude"])
             self.assertEqual(post("/api/session-capture", {"name": "claude"}).status, 200)
             with self.assertRaises(urllib.error.HTTPError) as denied:
                 post("/api/session-kill", {"name": "claude"}, {"Tailscale-User-Login": "other@example.test"})

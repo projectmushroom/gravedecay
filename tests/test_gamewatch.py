@@ -219,6 +219,21 @@ class GamewatchPolicyAndTimerTests(unittest.TestCase):
         developer = GRAVE_TEXT.split("cmd_developer() {", 1)[1].split("\n}", 1)[0]
         self.assertIn("cancel_auto_thaw", developer)
 
+    def test_both_gaming_tiers_set_the_freezer_without_agent_panes(self):
+        # The scheduled-job runner reads cgroup.freeze as gaming mode; no panes must not skip it.
+        functions = "\n".join("\n" + name + "() {" + GRAVE_TEXT.split("\n" + name + "() {", 1)[1].split("\n}\n", 1)[0] + "\n}"
+                              for name in ("collect_tree", "freeze_agents", "stop_dev"))
+        stubs = ('sudo() { "$@"; }; tmuxa() { return 1; }; ok() { echo "$*"; }; say() { :; }; log() { :; }\n'
+                 'need_root_helper() { :; }; workspace_services() { :; }; dkctl() { return 1; }; DEV_SERVICES=()\n')
+        for tier in ("", "kill"):
+            with tempfile.TemporaryDirectory() as td:
+                result = subprocess.run(["bash", "-c", stubs + functions + f'\nTORPOR_CG="{td}/torpor"; stop_dev {tier}'],
+                                        text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertEqual((pathlib.Path(td) / "torpor/cgroup.freeze").read_text(), "1\n")
+                self.assertIn("agent freezer set", result.stdout)
+                self.assertNotIn("froze 0", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

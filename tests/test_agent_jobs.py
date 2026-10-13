@@ -87,6 +87,9 @@ mode=os.environ.get("FAKE_AGENT", "success")
 if mode=="wait":
     while True: time.sleep(.1)
 if mode=="fail": sys.exit(9)
+if mode=="sigterm":
+    # systemd's KillMode=control-group: the worker and the provider get SIGTERM together.
+    import signal; os.kill(os.getppid(), signal.SIGTERM); sys.exit(143)
 if os.environ.get("FAKE_TRANSCRIPT"):
     # Claude Code files transcripts under a directory named after the cwd; Codex under dated rollouts.
     cwd=os.getcwd(); home=Path(os.environ["HOME"])
@@ -579,6 +582,54 @@ print("<script>literal output</script>", flush=True)
         self.assertEqual(self.records()[0]["status"], "cancelled")
         self.assertEqual(len((self.root / "calls").read_text().splitlines()), 1)
 
+    def test_provider_ending_on_the_workers_sigterm_is_cancelled_not_failed(self):
+        self.add()
+        self.call("worker", "nightly", env=dict(self.env, FAKE_AGENT="sigterm"))
+        record = self.records()[0]
+        self.assertEqual((record["status"], record["result"]["verdict"]), ("cancelled", "cancelled"))
+
+    def test_a_damaged_run_record_does_not_stop_a_due_job(self):
+        self.add()
+        bad = self.store / "nightly/runs/20260101T000000-abcdef.json"
+        bad.write_text("{"); bad.chmod(0o600)
+        self.background("scheduler")
+        self.wait_for(lambda: (self.root / "started").exists())
+
+    def test_scheduler_spawns_no_worker_while_gaming(self):
+        module = self.module()
+        self.add(); self.freeze.write_text("1\n")
+        with patch.dict(os.environ, self.env), patch.object(module.subprocess, "Popen") as popen, \
+                patch.object(module.time, "sleep", side_effect=lambda _: setattr(module, "STOP", True)):
+            module.scheduler()
+        popen.assert_not_called()
+
+    def test_git_timeout_in_the_change_summary_keeps_the_run_unverified(self):
+        module = self.module()
+        self.add("nightly", "--check", str(self.bin / "fakecheck"))
+        real = module.git
+        def slow(*args):
+            if "rev-list" in args:
+                raise subprocess.TimeoutExpired(["git", *args], 30)
+            return real(*args)
+        with patch.dict(os.environ, dict(self.env, FAKE_AGENT="commit")), patch.object(module, "git", side_effect=slow):
+            module.worker("nightly")
+        record = self.records()[0]
+        self.assertEqual((record["status"], record["result"]["verdict"]), ("succeeded", "unverified"))
+        self.assertFalse((self.root / "checked").exists())  # no change summary, no checks: never ready-for-review
+
+    def test_worktree_starts_at_the_recorded_base(self):
+        module = self.module()
+        self.add()
+        real, raced = module.git, []
+        def racing(*args):
+            out = real(*args)
+            if "rev-parse" in args and not raced:
+                raced.append(self.commit("owner work between base and worktree"))
+            return out
+        with patch.dict(os.environ, dict(self.env, FAKE_AGENT="clean")), patch.object(module, "git", side_effect=racing):
+            module.worker("nightly")
+        self.assertEqual(self.records()[0]["result"]["verdict"], "no-changes")
+
     def test_validation_rejects_duplicate_names_bad_times_and_unsafe_prompt(self):
         for args in (("--at", "25:00"), ("--on", "Mon 02:00; touch PWNED"), ("--timeout", "0"), ("--check", ""), ("--check", "x" * 501),
                      ("--serve", "python3 -m http.server 3000"), ("--serve", "")):
@@ -945,6 +996,23 @@ print("<script>literal output</script>", flush=True)
                 self.assertFalse((self.store / name / "preview.json").exists())
                 self.assertEqual(module.listeners(port), [])
         self.call("check", "results"); self.call("check", "previews")
+
+    def test_a_preview_that_cannot_be_recorded_is_stopped_and_keeps_the_verdict(self):
+        module = self.module()
+        self.add("nightly", "--check", "true", "--serve", "python3 -m http.server --bind 127.0.0.1 $PORT")
+        real = module.write_json
+        def full(path, value):
+            if path.name == "preview.json":
+                raise OSError("disk full")
+            return real(path, value)
+        with patch.dict(os.environ, dict(self.env, FAKE_AGENT="commit")), patch.object(module, "write_json", side_effect=full):
+            module.worker("nightly")
+        record = self.records()[0]
+        self.assertEqual((record["status"], record["result"]["verdict"]), ("succeeded", "ready-for-review"))
+        self.assertNotIn("preview", record["result"])
+        port = self.job()["serve"]["port"]
+        self.assertNotIn(port, self.mapped())
+        self.assertEqual(module.listeners(port), [])
 
     def test_scheduler_restores_live_previews_on_start_and_stops_them_on_expiry_or_gaming(self):
         module = load(HELPER, "jobs_preview_sweep")

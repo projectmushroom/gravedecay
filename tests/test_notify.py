@@ -180,7 +180,9 @@ class NotifyExecutionTests(unittest.TestCase):
         bindir.mkdir(exist_ok=True)
         curl_log = tmp / "curl.log"
         fake_curl = bindir / "curl"
-        fake_curl.write_text('#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" > "$CURL_LOG"\nexit 0\n')
+        # argv goes to curl.log; a --config - read goes to curl.log.conf
+        fake_curl.write_text('#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" > "$CURL_LOG"\n'
+                             '[[ " $* " == *" --config - "* ]] && cat > "$CURL_LOG.conf"\nexit 0\n')
         fake_curl.chmod(0o755)
         env = dict(
             os.environ,
@@ -217,8 +219,9 @@ class NotifyExecutionTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         args = curl_log.read_text().splitlines()
-        self.assertIn("Title: agent session ended", args)
-        self.assertIn("https://ntfy.example/topic", args)
+        conf = pathlib.Path(f"{curl_log}.conf").read_text().splitlines()
+        self.assertIn('header = "Title: agent session ended"', conf)
+        self.assertIn('url = "https://ntfy.example/topic"', conf)
         self.assertIn("--data-raw", args)
 
     def test_muted_event_class_does_not_deliver(self):
@@ -236,9 +239,9 @@ class NotifyExecutionTests(unittest.TestCase):
             notify_env="NTFY_URL=https://ntfy.example/topic\n",
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        args = curl_log.read_text().splitlines()
-        self.assertIn("Title: evil Authorization: Bearer stolen", args)
-        self.assertNotIn("Authorization: Bearer stolen", args)
+        conf = pathlib.Path(f"{curl_log}.conf").read_text().splitlines()
+        self.assertIn('header = "Title: evil Authorization: Bearer stolen"', conf)
+        self.assertNotIn('header = "Authorization: Bearer stolen"', conf)
 
     def test_non_https_url_refuses_delivery(self):
         proc, curl_log = self.run_notify(
@@ -248,13 +251,26 @@ class NotifyExecutionTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertFalse(curl_log.exists())
 
-    def test_token_is_sent_as_bearer_header(self):
+    def test_token_and_topic_are_sent_on_stdin_never_argv(self):
+        # argv is world-readable via /proc/<pid>/cmdline; on ntfy.sh the topic
+        # URL is itself the secret.
         proc, curl_log = self.run_notify(
             "hello", "there",
             notify_env="NTFY_URL=https://ntfy.example/topic\nNTFY_TOKEN=tk_secret\n",
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("Authorization: Bearer tk_secret", curl_log.read_text().splitlines())
+        self.assertNotIn("tk_secret", curl_log.read_text())
+        self.assertNotIn("ntfy.example", curl_log.read_text())
+        self.assertIn('header = "Authorization: Bearer tk_secret"',
+                      pathlib.Path(f"{curl_log}.conf").read_text().splitlines())
+
+    def test_quotes_in_title_stay_inside_the_config_value(self):
+        proc, curl_log = self.run_notify(
+            'say "hi" \\ bye', "b", notify_env="NTFY_URL=https://ntfy.example/topic\n",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn('header = "Title: say \\"hi\\" \\\\ bye"',
+                      pathlib.Path(f"{curl_log}.conf").read_text().splitlines())
 
 
 class AgentNotifyExecutionTests(unittest.TestCase):

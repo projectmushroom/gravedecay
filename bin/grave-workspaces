@@ -453,6 +453,10 @@ def prepare_workspace_home(w):
             if info.st_uid!=account.pw_uid or info.st_mode & 0o077:
                 die(f"unsafe workspace home ownership or mode: {w['slug']}")
 
+def backend_token(env_text):
+    token=next((line.partition("=")[2].strip().strip('"') for line in env_text.splitlines() if line.startswith("GRAVEDECAY_BACKEND_TOKEN=")),"")
+    return token if len(token) >= 32 else ""
+
 def provision(w):
     if w.get('removal'): die('workspace removal is pending; retry the confirmed remove command')
     prepare_workspace_home(w)
@@ -460,8 +464,7 @@ def provision(w):
     home=HOME_ROOT/w['slug']
     env=service_env(w)
     with service_directory() as parent: old=read_control(parent,env.name)
-    token=next((line.partition("=")[2].strip().strip('"') for line in old.splitlines()
-                if line.startswith("GRAVEDECAY_BACKEND_TOKEN=") and len(line.partition("=")[2].strip().strip('"')) >= 32),secrets.token_hex(32))
+    token=backend_token(old) or secrets.token_hex(32)
     # Later `grave users add` calls do not carry raise.sh's explicit tool
     # arguments; resolve the appliance's installed binaries instead of
     # reviving a stale /usr/bin assumption.
@@ -1002,8 +1005,7 @@ def cmd_doctor(a):
                 die(f"ownership or mode drift: {w['slug']}")
             env_file=service_env(w)
             if env_file.stat().st_uid != 0 or env_file.stat().st_mode & 0o077: die(f"unsafe service environment: {w['slug']}")
-            token=next((line.partition("=")[2].strip().strip('"') for line in env_file.read_text().splitlines() if line.startswith("GRAVEDECAY_BACKEND_TOKEN=")),"")
-            if len(token) < 32: die(f"missing backend capability: {w['slug']}")
+            if not backend_token(env_file.read_text()): die(f"missing backend capability: {w['slug']}")
             for project in w["projects"]:
                 checkout=home/"repos"/project["name"]
                 if checkout.is_symlink() or not checkout.is_dir() or checkout.stat().st_uid != account.pw_uid: die(f"project ownership drift: {w['slug']}/{project['name']}")

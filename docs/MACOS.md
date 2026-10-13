@@ -273,7 +273,8 @@ run pages you (`--page`, see [NOTIFICATIONS.md](NOTIFICATIONS.md)).
 
 `gravedecay-mac uninstall` (or `macos/uninstall.sh --root PATH` from a source
 checkout) unloads and removes its LaunchAgents
-(including the updater, keep-awake and doctor agents) and Serve path mounts.
+(including the updater, keep-awake and doctor agents) and Serve path mounts
+(a path that was never mounted is skipped, not an error).
 It preserves the Application Support data by default; `--purge`
 explicitly removes it. For a Homebrew removal, run the companion command
 first, then `brew uninstall projectmushroom/gravedecay/gravedecay-companion`;
@@ -324,7 +325,8 @@ service-control permissions.
 
 `io.gravedecay.updater` stages a clean trusted checkout, preserves component
 and Serve choice, and restarts only dashboard/network agents. Failed fetch,
-install, or health work restores the prior payload. Status is bounded in
+install, or health work restores the prior payload. A lock left by an updater
+killed mid-run (power loss) is broken after 30 minutes. Status is bounded in
 `config/update-status.json`, logs stay under `$GRAVE_ROOT/logs`, and no new
 port is added. Normal uninstall keeps source/data; `--purge` is required to
 remove them. T3, Tailscale connection, Docker, SSH and Linux services remain

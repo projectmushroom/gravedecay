@@ -142,7 +142,8 @@ nobody merges around it, see [REQUIRED-CHECKS.md](REQUIRED-CHECKS.md).
 Checks run after the provider, in the worktree (uncommitted work and
 installed dependencies included), with the same working directory, process
 supervision and runtime budget as the provider. They are not run when the
-provider failed or made no changes. The command is the owner's or the
+provider failed or made no changes, or when the change summary could not be
+read (a git error or 30-second git timeout): that run is `unverified`. The command is the owner's or the
 base's, but what it executes is the worktree: agent-written tests, fixtures,
 `pytest` configuration and Makefile recipes all run, as the owner. Checks are
 plain `/bin/sh -c` processes outside the Codex sandbox that confined the
@@ -192,7 +193,9 @@ is the first thing to delete.
 
 `grave agents jobs` shows each job's last status and verdict; `--json` adds
 `last_verdict`. A run record without a valid result (written before results
-existed, or malformed) receives one when the scheduler next reconciles it: a
+existed, or malformed) receives one when the scheduler reconciles the job, at
+service start and after each of its runs ends; a record that cannot be read
+is logged and skipped, never blocking the job's next run, and left to doctor. A
 still-present worktree can show `no-changes`, otherwise the run is
 `unverified`. A record that already carries a valid verdict is never
 rewritten, and a record from an older runner (no `source` on its checks)
@@ -214,9 +217,9 @@ loopback, so a dev server that rejects the `ts.net` host (Vite's
 `allowedHosts`) fails the check. One HTTP 200 within two minutes records
 `preview: {port, url, started}` in the run's `result` and the card shows an
 **Open live** button; the push notification keeps its dashboard link. No
-answer, a wrong bind or a mapping failure yields no preview and no mapping, the
-reason goes to the service journal, and the run still ends
-`ready-for-review`.
+answer, a wrong bind, a mapping failure or a preview that cannot be recorded
+yields no preview, no mapping and no serve process; the reason goes to the
+service journal, and the run still ends `ready-for-review`.
 
 The preview stops, its mapping is removed and the record gains
 `preview.stopped` when: the next run of the same job starts, `grave agents jobs
@@ -258,11 +261,11 @@ the job's next scheduled occurrence (or the job has none), sets the job's
 `provider-failed` verdict. A reset already in the past, a session that
 carried on after the refusal, or a Codex run defers nothing.
 
-Gaming mode is the agent freezer (`/sys/fs/cgroup/grave-torpor/cgroup.freeze`)
-and nothing else: the runner does not consult T3, so a job runs to a verdict
+Gaming mode is the agent freezer (`/sys/fs/cgroup/grave-torpor/cgroup.freeze`),
+set by both `grave gaming` tiers whether or not agent panes exist, and nothing else: the runner does not consult T3, so a job runs to a verdict
 with `t3code` stopped or masked, and `gravedecay-agents.service` neither orders
 after nor depends on it. A run due while gaming keeps its due time and starts
-after the thaw; nothing is recorded. Entering gaming mode during a run cancels
+after the thaw; nothing is recorded and no worker is started. Entering gaming mode during a run cancels
 that run within the next mode check (about two seconds, plus process shutdown)
 and queues it again once: the cancelled record carries `requeued: <run id>`,
 the job's `next_due` becomes now, and the replacement record carries
@@ -270,7 +273,8 @@ the job's `next_due` becomes now, and the replacement record carries
 The runner never starts services or thaws the appliance. Missed schedule times
 while the host was off coalesce into one run at restart. A run interrupted by
 a service or host failure is reported as interrupted; it is not automatically
-retried. Recurring jobs keep their next scheduled occurrence. DST transitions
+retried. A clean service stop or reboot records the running run `cancelled`,
+even when the provider exits on the same signal before the runner sees it. Recurring jobs keep their next scheduled occurrence. DST transitions
 do not replay an already claimed occurrence. Records with status `skipped`
 come from runners before this behaviour and stay valid.
 
