@@ -485,6 +485,8 @@ def provision(w):
 def cmd_add(a):
     check_restore_staging()
     if not SLUG.fullmatch(a.slug): die("slug must match ^[a-z][a-z0-9-]{2,30}$")
+    # grave-digger-<name> is the dedicated digger tier's account namespace.
+    if a.slug.startswith("digger-"): die("slug prefix 'digger-' is reserved for digger identities")
     if not a.identity.isdigit(): die("identity must be the numeric stable Tailscale user ID")
     data=load(); identity=f"ts:{a.identity}"
     existing=[w for w in data["workspaces"] if identity == w["id"] or a.slug == w["slug"]]

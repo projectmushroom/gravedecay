@@ -554,3 +554,49 @@ keeps only conversation and turn IDs, keyed by destination, so a pending turn
 cannot be replayed against another grave. Stop kills the provider process; a
 doctor operation it had already started is reported separately and keeps
 running under its own ID.
+
+## Diggers
+
+A digger ([DIGGERS.md](DIGGERS.md)) is a provider CLI run headless with a tool
+policy compiled from its definition. What each identity tier does and does not
+protect:
+
+- **`shared`** runs as the owner with the owner's provider login. It narrows
+  the tools the provider offers; it protects nothing else. Anything the agent
+  can make the provider do, it does with the owner's files, `~/.config/gh`,
+  SSH keys and secrets in reach.
+- **`separate-login`** is the same Unix account with its own `CODEX_HOME` or
+  `CLAUDE_CONFIG_DIR`. It keeps the digger's traffic off the owner's quota and
+  login; it does **not** keep the agent away from the owner's files or other
+  credentials. A shell or file tool can read `~/.codex/auth.json` as easily
+  as the owner can. Use it for the owner's own work on a second subscription,
+  never for a client.
+- **`dedicated`** runs as `grave-digger-<name>`, a system user without a login
+  shell, in its own 0700 HOME, with its own clone, provider login and (later)
+  GitHub credential. The owner's HOME must be closed to other users (doctor
+  fails otherwise), and `config/secrets` stays 0700, so the digger cannot read
+  the owner's logins or `~/.config/gh`. Its compiled policy, definition and
+  instructions are root-owned and only readable by it. Its unit hides `/home`
+  and `/root` and can write only its HOME. What it still shares: world-readable
+  files under `$GRAVE_ROOT` (repositories in single-owner mode are 0755, docs,
+  installed scripts), the network, the Docker daemon if it were in the docker
+  group (it is not), and the kernel. It is a separate account, not a
+  hostile-tenant boundary.
+
+Root's part is deliberately small. `grave __digger` (behind the owner's
+existing scoped grant for the `grave` CLI, which is already root-equivalent
+for the owner through `grave __install-cli`) creates the account and HOME,
+writes the root-owned policy, copies the owner's provider CLI as a root-owned
+read-only tree with set-id bits removed, and otherwise acts as the digger
+through `runuser` with an empty environment. Root never runs a program the
+digger can write, never follows a symlink inside the digger's HOME, and never
+runs Git in a repository another identity owns; the clone arrives as a bundle
+the owner made. Account or HOME drift is reported, not repaired.
+
+The tool policy is deny by default and comes from the one provider table: no
+bypass flag in any spelling (`policy_ok` covers MCP arguments and Codex
+instructions too), Claude in `dontAsk` mode with no settings file loaded but
+the generated one and only the generated MCP servers, Codex with no
+`config.toml`, approvals never, `workspace-write` and its extra surfaces off.
+Where a provider cannot express a rule, the rule is refused or the gap is
+documented, never silently dropped.

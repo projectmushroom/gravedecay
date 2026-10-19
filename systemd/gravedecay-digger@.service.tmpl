@@ -1,0 +1,33 @@
+[Unit]
+Description=gravedecay digger %i (dedicated identity)
+Documentation=https://github.com/projectmushroom/gravedecay/blob/master/docs/DIGGERS.md
+# Installed by raise.sh but never enabled or started in M1: there is no runner
+# yet. M2 (#246) starts it. No listener, ever: intake is outbound only.
+After=network-online.target
+Wants=network-online.target
+OnFailure=gravedecay-notify@%n.service
+
+[Service]
+Type=simple
+User=grave-digger-%i
+Group=grave-digger-%i
+WorkingDirectory=@GRAVE_ROOT@/diggers/%i
+Environment=HOME=@GRAVE_ROOT@/diggers/%i
+Environment=GRAVE_ROOT=@GRAVE_ROOT@
+# The root-owned provider copy; never the owner's toolchain under their HOME.
+Environment=PATH=@GRAVE_ROOT@/diggers/.tools/bin:/usr/local/bin:/usr/bin:/bin
+Environment=DISABLE_AUTOUPDATER=1
+ExecStart=@PYTHON@ -I @GRAVE_ROOT@/scripts/diggers.py run %i
+Restart=no
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+# /home, /root and /run/user are hidden: the owner's ~/.config/gh and provider
+# logins are unreachable. The digger's own HOME is under GRAVE_ROOT.
+ProtectHome=yes
+ReadWritePaths=@GRAVE_ROOT@/diggers/%i
+UMask=0077
+TasksMax=512
+MemoryHigh=6G
+MemoryMax=8G
+CPUQuota=400%

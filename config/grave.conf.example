@@ -54,6 +54,12 @@ AGENT_CONFIG_DIRS=(.claude .codex .gemini)
 KEEPER_PROVIDER="claude"
 KEEPER_MODEL=""
 
+# Diggers (docs/DIGGERS.md). A dedicated digger gets a root-owned copy of the
+# owner's native provider CLI; it is found through PATH and mise. Set these
+# when a launcher script hides it (the copy refuses scripts).
+#DIGGER_CODEX_BIN="$HOME/.local/share/mise/installs/codex/latest/bin/codex"
+#DIGGER_CLAUDE_BIN="$HOME/.local/share/mise/installs/claude/latest/claude"
+
 # npm -g tools refreshed by `grave update`
 NPM_GLOBAL_TOOLS=(t3)
 

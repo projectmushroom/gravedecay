@@ -100,6 +100,28 @@ back to the appliance owner's `~/.config/gh`. Per-workspace dashboard and T3
 processes provide cache isolation through separate processes, HOME/XDG paths,
 and integration environments.
 
+## Digger logins
+
+Each `separate-login` and `dedicated` digger ([DIGGERS.md](DIGGERS.md)) has
+its own provider credential store, and it is exactly that: a credential store.
+
+- `separate-login`: `$GRAVE_ROOT/config/diggers/<name>/codex/` (`auth.json`)
+  or `…/claude/` (`.credentials.json`), 0700, the owner's.
+- `dedicated`: `$GRAVE_ROOT/diggers/<name>/.codex/` or `…/.claude/`, inside the
+  digger user's 0700 HOME; root does not read them and the owner cannot.
+
+Nightly backups leave both out unless you run `grave backup --include-secrets`
+(dedicated HOMES are never in the platform archive). Restoring a digger
+therefore means logging it in again, which is the point: a backup must not be
+a second copy of a client-paid seat. Rotate or revoke with the provider (sign
+out the device or delete the API key), then `grave digger login <name>`; for a
+lost box, revoke first. `grave digger status` prints only `loggedIn`, never
+the account or a token. An API key given to `grave digger login --api-key` is
+read without echo and passed on stdin, never as an argument or into the
+definition. Keep secrets out of `DIGGER.md` and `digger.json`: both are
+instructions and policy, and the Codex compile passes `DIGGER.md` as an
+argument.
+
 ## Shared coding provider
 
 Multi-user v1 supports administrator-managed API-key authentication only:

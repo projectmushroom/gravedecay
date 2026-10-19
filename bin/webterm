@@ -32,6 +32,9 @@ case "$name" in
   auth-claude) cmd=(claude /login) ;;
   auth-codex)  cmd=(codex login) ;;
   auth-github) cmd=(gh auth login) ;;
+  # A digger's own provider login (docs/DIGGERS.md): the CLI validates the
+  # name and runs the flow as that digger's identity and config dir.
+  auth-digger-*) [[ "$WORKSPACE_ROLE" == admin ]] || { echo "diggers are admin-only"; exit 126; }; cmd=(grave digger login "${name#auth-digger-}") ;;
   # T3 Connect links are interactive (out-of-band OAuth code + relay client
   # install confirm), so they run here rather than as dashboard stream actions.
   auth-t3publish) [[ "$WORKSPACE_ROLE" == admin ]] || { echo "T3 Connect is admin-only"; exit 126; }; cmd=(grave t3 connect publish) ;;

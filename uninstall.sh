@@ -87,6 +87,7 @@ UNITS=(
   gravedecay-gateway.service gravedecay-boundary.service gravedecay.service
   gravedecay-notify@.service
   gravedecay-t3@.service gravedecay-term@.service gravedecay-dashboard@.service
+  gravedecay-digger@.service gravedecay-digger-owner@.service
 )
 step "Services"
 present=()
