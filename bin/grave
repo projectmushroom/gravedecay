@@ -630,6 +630,7 @@ agent_worktrees_prune() {
     jq -e '.worktree == true and .pruned != true' "$meta" >/dev/null || continue
     name=$(basename "$(dirname "$meta")")
     agent_worktree_valid "$name" || { bad "$name: invalid worktree metadata; retained"; continue; }
+    if jq -e '.digger' "$meta" >/dev/null; then say "  $name: digger conversation; use grave digger prune"; continue; fi
     repo=$(jq -r '.repo' "$meta"); dir=$(jq -r '.dir' "$meta"); base=$(jq -r '.base' "$meta")
     if [[ -e "$GRAVE_ROOT/agents/$name/.run.lock" ]] && ! flock -n "$GRAVE_ROOT/agents/$name/.run.lock" true; then
       say "  $name: scheduled run active; retained"; continue
@@ -1595,9 +1596,9 @@ upgrade_checkout_clean() {
   [[ -z "$dirty" ]]
 }
 
+# Each digger's own unit state is a diggers.py finding (enabled ⇔ running).
 diggers_units_installed() {
-  systemctl cat gravedecay-digger@.service gravedecay-digger-owner@.service >/dev/null 2>&1 || return 1
-  ! systemctl list-units --no-legend --plain --state=active 'gravedecay-digger*@*.service' 2>/dev/null | grep -q .
+  systemctl cat gravedecay-digger@.service gravedecay-digger-owner@.service >/dev/null 2>&1
 }
 digger_report() { # one doctor line per diggers.py finding: ok / warn (login) / fail
   local report level message
@@ -1636,7 +1637,7 @@ cmd_doctor() { # grave doctor [--no-page]
       ok "keeper provider installed and logged in"
     else say "  ${YLW}– keeper provider not ready: ${keeper_status:-unknown} — log in as the appliance owner${RST}"; fi
     check "digger runner installed" test -r "$GRAVE_ROOT/scripts/diggers.py"
-    check "digger unit templates installed (not started until M2)" diggers_units_installed
+    check "digger unit templates installed" diggers_units_installed
     digger_report
   fi
   check "issue agent task runner installed" test -r "$GRAVE_ROOT/scripts/agent-task.py"
@@ -2055,7 +2056,8 @@ dashboard_layout_ok() {
   grep -q 'data-dashboard-layout="2"' "$shell" &&
     grep -q 'aria-label="Dashboard"' "$shell" &&
     grep -q 'id="configuration"' "$shell" &&
-    grep -q 'id="keeper"' "$shell"
+    grep -q 'id="keeper"' "$shell" &&
+    grep -q 'id="diggers"' "$shell"
 }
 dashboard_shell_ok() { [[ "$(sha256sum "$GRAVE_ROOT/scripts/dashboard-static/index.html" | cut -d' ' -f1)" == "$(dashboard_probe health | jq -r .shell)" ]]; }
 # The overnight review card and its diff route ship together (docs/DASHBOARD.md):
@@ -2958,6 +2960,11 @@ grave — gravedecay appliance control 🪦
   grave digger [list|show|login|status|enable|disable|remove] <n>
                              login opens its own Codex/Claude login; remove keeps
                              HOME, clone and login unless --purge (docs/DIGGERS.md)
+  grave digger ask <n> "<request>"     one conversation: a checkout, the digger's
+                             turns, then the runner's checks and a verdict
+  grave digger [resume <n> <id> "<reply>"|cancel <n> <id>|finish <n> <id>|kill <n>|prune <n>]
+                             reply, stop a turn, package the result now, stop
+                             everything (disables it), remove merged checkouts
 
   grave preview <port>       expose a running dev server (e.g. :3000) to the
                              tailnet at https://<box>.ts.net:<port> — root path,

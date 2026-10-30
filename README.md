@@ -148,8 +148,9 @@ or until the next run. Details and the verdict table are in
   the box's own state, logs and docs; it diagnoses, it does not change anything.
 - **Diggers**: `grave digger new` defines a focused agent bound to one job and
   one repository, with a deny-by-default tool policy and, for client-facing
-  work, its own Unix user and its own Codex or Claude login
-  ([docs/DIGGERS.md](docs/DIGGERS.md)). The runner arrives next.
+  work, its own Unix user and its own Codex or Claude login. Ask it from the
+  CLI or **Summon** it on the dashboard; each conversation ends in a branch,
+  checks it did not choose and a verdict ([docs/DIGGERS.md](docs/DIGGERS.md)).
 - **Notifications**: Web Push to the installed PWA and/or an ntfy topic, for
   finished runs, failing units and a failing doctor
   ([docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md)).
@@ -172,6 +173,7 @@ grave agents attach <name>                # detach with Ctrl-b d; the session su
 grave agents prune                        # drop clean, merged, idle worktrees
 grave digger new <name> --repo <r> --identity dedicated   # a focused agent on its own login
 grave digger login <name>                 # that digger's own Codex/Claude login
+grave digger ask <name> "<request>"       # one conversation: branch, checks, verdict
 grave preview 3000                        # expose a loopback dev server on the tailnet
 grave gaming [--kill] [--for 2h]          # torpor: freeze agents, free RAM and GPU
 grave developer                           # thaw and restore

@@ -7,6 +7,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import unittest.mock
 
@@ -397,6 +398,284 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(module.owner_tool("codex"), str(self.bin / "codex"))   # refused later, with the fix named
 
 
+RUNNER_CODEX = r"""#!/usr/bin/env python3
+import json, os, subprocess, sys, time
+args = sys.argv[1:]
+home = os.environ.get("CODEX_HOME") or os.path.join(os.environ["HOME"], ".codex")
+if args[:2] == ["login", "status"]:
+    sys.exit(0 if os.path.exists(os.path.join(home, "auth.json")) else 1)
+if args[:2] == ["login", "--device-auth"]:
+    os.makedirs(home, exist_ok=True); open(os.path.join(home, "auth.json"), "w").write("{}"); sys.exit(0)
+if args[:1] != ["exec"]:
+    sys.exit(2)
+os.makedirs(home, exist_ok=True)
+with open(os.path.join(home, "argv.jsonl"), "a") as log:
+    log.write(json.dumps({"argv": args, "cwd": os.getcwd()}) + "\n")
+prompt = sys.stdin.read()
+emit = lambda value: print(json.dumps(value), flush=True)
+emit({"type": "thread.started", "thread_id": args[2] if args[1] == "resume" else "thread-1"})
+if "sleep" in prompt:
+    time.sleep(30)
+config = dict(args[i + 1].split("=", 1) for i, word in enumerate(args) if word == "-c")
+if "acme" in prompt:   # the one tool: as Codex would, start the configured MCP command
+    command = [json.loads(config["mcp_servers.wl.command"]), *json.loads(config["mcp_servers.wl.args"]), "acme"]
+    emit({"type": "item.started", "item": {"type": "mcp_tool_call", "server": "wl", "tool": "create", "arguments": {"name": "acme"}}})
+    subprocess.run(command, check=True)
+    emit({"type": "item.completed", "item": {"type": "mcp_tool_call", "server": "wl", "tool": "create", "result": "created"}})
+sessions = os.path.join(home, "sessions/2026/10/30")
+os.makedirs(sessions, exist_ok=True)
+with open(os.path.join(sessions, "rollout-%d.jsonl" % time.time_ns()), "w") as rollout:
+    rollout.write(json.dumps({"type": "session_meta", "payload": {"cwd": os.getcwd()}}) + "\n")
+    rollout.write(json.dumps({"type": "turn_context", "payload": {"cwd": os.getcwd(), "model": "gpt-5-codex"}}) + "\n")
+    rollout.write(json.dumps({"type": "event_msg", "payload": {"type": "token_count",
+        "info": {"total_token_usage": {"input_tokens": 1000, "output_tokens": 100}},
+        "rate_limits": {"limit_id": "codex", "plan_type": "plus",
+                        "primary": {"window_minutes": 300, "used_percent": 12.5, "resets_at": 2000000000}}}}) + "\n")
+done = "acme" in prompt or "finish up" in prompt
+emit({"type": "item.completed", "item": {"type": "agent_message", "text": "Worked on it." + ("\n[[digger:done]]" if done else "")}})
+emit({"type": "turn.completed"})
+"""
+RUNNER_CLAUDE = r"""#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+home = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.environ["HOME"], ".claude")
+if args[:2] == ["auth", "status"]:
+    ok = os.path.exists(os.path.join(home, ".credentials.json"))
+    print(json.dumps({"loggedIn": ok})); sys.exit(0 if ok else 1)
+os.makedirs(home, exist_ok=True)
+with open(os.path.join(home, "argv.jsonl"), "a") as log:
+    log.write(json.dumps({"argv": args, "cwd": os.getcwd()}) + "\n")
+prompt = sys.stdin.read()
+emit = lambda value: print(json.dumps(value), flush=True)
+emit({"type": "system", "subtype": "init", "session_id": "session-1"})
+text = "Here is what I would do." + ("\n[[digger:done]]" if "finish up" in prompt else "")
+emit({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
+emit({"type": "result", "subtype": "success", "session_id": "session-1"})
+"""
+WL_TOOL = """import json, os, sys
+os.makedirs("config/whitelabels", exist_ok=True)
+json.dump({"name": sys.argv[1]}, open(f"config/whitelabels/{sys.argv[1]}.json", "w"))
+"""
+
+
+class RunnerTests(unittest.TestCase):
+    """Conversations end to end in test mode: the serve loop, fake providers, a real repository."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        base = pathlib.Path(self.tmp.name)
+        self.root = base / "root"
+        (self.root / "config").mkdir(parents=True)
+        self.root.chmod(0o755)
+        repo = self.root / "repos/app"
+        (repo / ".grave/mcp").mkdir(parents=True)
+        (repo / ".grave/diggers").mkdir()
+        (repo / ".grave/mcp/wl.py").write_text(WL_TOOL)
+        (repo / ".grave/diggers/wl.md").write_text("White labels live in config/whitelabels/<name>.json.\n")
+        (repo / "README").write_text("app\n")
+        self.git = lambda *a, cwd=repo: subprocess.run(["git", "-C", str(cwd), "-c", "user.name=t", "-c", "user.email=t@example.test", *a],
+                                                       check=True, capture_output=True, text=True).stdout.strip()
+        subprocess.run(["git", "init", "-q", "-b", "trunk", str(repo)], check=True)
+        self.git("add", "-A"); self.git("commit", "-q", "-m", "init")
+        origin = base / "origin.git"
+        subprocess.run(["git", "clone", "-q", "--bare", str(repo), str(origin)], check=True)
+        self.git("remote", "add", "origin", str(origin)); self.git("fetch", "-q", "origin")
+        self.bin = base / "bin"
+        self.bin.mkdir()
+        for name, text in (("codex", RUNNER_CODEX), ("claude", RUNNER_CLAUDE)):
+            (self.bin / name).write_text(text)
+            (self.bin / name).chmod(0o755)
+        self.owner = base / "owner"
+        self.owner.mkdir(mode=0o700)
+        self.freeze = base / "freeze"
+        self.freeze.write_text("0\n")
+        self.env = dict(os.environ, GRAVE_ROOT=str(self.root), GRAVE_DIGGER_TEST="1", HOME=str(self.owner),
+                        PATH=f"{self.bin}:{os.environ['PATH']}", GRAVE_FREEZE_FILE=str(self.freeze),
+                        GRAVE_CONF=str(base / "grave.conf"), GRAVE_BIN="/bin/true")
+        for key in ("CODEX_HOME", "CLAUDE_CONFIG_DIR"):
+            self.env.pop(key, None)
+        self.loops = []
+
+    def tearDown(self):
+        for loop in self.loops:
+            if loop.poll() is None:
+                loop.terminate()
+                loop.wait(timeout=30)
+        self.tmp.cleanup()
+
+    def grave(self, *args, ok=True, timeout=60):
+        proc = subprocess.run([sys.executable, str(SCRIPT), *args], env=self.env, capture_output=True, text=True,
+                              cwd=self.tmp.name, timeout=timeout)
+        if ok:
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        return proc
+
+    def serve(self, name, *extra):
+        log = open(pathlib.Path(self.tmp.name) / f"serve-{name}.log", "w")   # read it when a runner test fails
+        self.addCleanup(log.close)
+        loop = subprocess.Popen([sys.executable, str(SCRIPT), "serve", name, *extra], env=self.env,
+                                stdout=log, stderr=subprocess.STDOUT)
+        self.loops.append(loop)
+        status = (self.root / "diggers/.records" / name) if extra else (self.root / "config/diggers" / name / "conversations")
+        self.wait(lambda: (status / ".status").exists(), "the loop never wrote its status")
+        return loop
+
+    def wait(self, condition, message, seconds=30):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            value = condition()
+            if value:
+                return value
+            time.sleep(.2)
+        self.fail(message)
+
+    def records(self, path):
+        return {p.stem: json.loads(p.read_text()) for p in path.glob("*.json")}
+
+    def doctor(self):
+        return {tuple(line.split("\t", 1)) for line in self.grave("check").stdout.splitlines()}
+
+    def test_dedicated_codex_conversation_uses_only_the_pinned_tool_and_ends_with_a_verdict(self):
+        self.grave("new", "wl", "--repo", "app", "--provider", "codex", "--identity", "dedicated",
+                   "--mcp", "wl=python3 .grave/mcp/wl.py", "--check", "test -f config/whitelabels/acme.json")
+        self.grave("login", "wl")
+        loop = self.serve("wl", "--identity", "dedicated")
+        asked = self.grave("ask", "wl", "create white label acme with domain acme.example")
+        self.assertIn("Worked on it.", asked.stdout)
+        self.assertIn("verdict: ready-for-review", asked.stderr)
+        self.assertIn("codex plan quota: 12.5% of the 300-minute window", asked.stderr)
+        records = self.root / "diggers/.records/wl"
+        (cid, record), = self.records(records).items()
+        self.assertEqual((record["state"], record["phase"], record["finished_by"]), ("succeeded", "finished", "done marker"))
+        result = record["result"]
+        self.assertEqual(result["changes"]["commits"], 1)
+        self.assertEqual([c["source"] for c in result["checks"]], ["owner"])
+        self.assertEqual(result["quota"]["windows"][0]["window_minutes"], 300)
+        self.assertEqual(result["cost"]["model"], "gpt-5-codex")
+        self.assertEqual([e["name"] for e in record["events"] if e["type"] == "tool_call"], ["wl__create"])
+        home = self.root / "diggers/wl"
+        checkout = home / "worktrees" / cid
+        self.assertEqual(record["checkout"], str(checkout))
+        self.assertEqual(self.git("branch", "--show-current", cwd=checkout), f"digger/wl/{cid}")
+        self.assertEqual(self.git("log", "--format=%an", "-1", cwd=checkout), "digger wl")
+        self.assertEqual(self.git("status", "--porcelain", cwd=checkout), "")
+        (call,) = [json.loads(line) for line in (home / ".codex/argv.jsonl").read_text().splitlines()]
+        pin = home / "pins" / cid
+        self.assertEqual(call["argv"][1:3], ["-C", str(checkout)])
+        self.assertIn(f'mcp_servers.wl.args={json.dumps([str(pin / ".grave/mcp/wl.py")])}', call["argv"])
+        instructions = next(a for a in call["argv"] if a.startswith("developer_instructions="))
+        self.assertIn("White labels live in config/whitelabels", instructions)
+        self.assertIn("[[digger:done]]", instructions)
+        self.assertTrue(providers.policy_ok(call["argv"]))
+        self.assertFalse(os.access(pin / ".grave/mcp/wl.py", os.W_OK) and os.stat(pin).st_mode & 0o200)
+        self.assertIn("+{\"name\": \"acme\"}", (records / f"{cid}.diff").read_text())
+        self.assertEqual(stat.S_IMODE(os.stat(records / f"{cid}.json").st_mode), 0o640)
+        self.assertFalse((self.owner / ".codex").exists())   # the owner's login and transcripts untouched
+        findings = self.doctor()
+        self.assertNotIn("fail", {level for level, _ in findings}, findings)
+        self.assertIn(("ok", "digger wl: 1 conversation record(s) valid; checkouts and pinned tools intact"), findings)
+        # Tampering with the pinned tool is drift doctor names.
+        os.chmod(pin / ".grave/mcp", 0o755); os.chmod(pin / ".grave/mcp/wl.py", 0o644)
+        (pin / ".grave/mcp/wl.py").write_text("print('pwned')\n")
+        self.assertTrue(any(level == "fail" and "pinned tools changed" in message for level, message in self.doctor()))
+        # Unmerged work is retained by prune.
+        self.assertIn("not merged into the source checkout; retained", self.grave("prune", "wl").stdout)
+        self.grave("kill", "wl")
+        self.assertEqual(loop.wait(timeout=30), 0)
+        self.assertFalse(json.loads((self.root / "config/diggers/wl/digger.json").read_text())["enabled"])
+        self.assertIn("is disabled", self.grave("ask", "wl", "again", ok=False).stderr)
+
+    def test_separate_login_claude_conversation_waits_for_a_reply_then_finishes_on_the_marker(self):
+        self.grave("new", "wl", "--repo", "app", "--provider", "claude", "--identity", "separate-login",
+                   "--mcp", "wl=python3 .grave/mcp/wl.py")
+        (self.root / "config/diggers/wl/claude/.credentials.json").write_text("{}")
+        self.serve("wl")
+        first = self.grave("ask", "wl", "make a white label")
+        cid = first.stderr.split()[1]
+        self.assertIn("waiting for you: grave digger resume wl " + cid, first.stderr)
+        record = json.loads((self.root / f"config/diggers/wl/conversations/{cid}.json").read_text())
+        self.assertEqual((record["state"], record["phase"]), ("succeeded", "open"))
+        second = self.grave("resume", "wl", cid, "thanks, finish up")
+        self.assertIn("verdict: no-changes", second.stderr)
+        calls = [json.loads(l)["argv"] for l in (self.root / "config/diggers/wl/claude/argv.jsonl").read_text().splitlines()]
+        pin = self.root / "config/diggers/wl/pins" / cid
+        self.assertNotIn("--resume", calls[0])
+        self.assertEqual(calls[1][-2:], ["--resume", "session-1"])
+        for call in calls:
+            self.assertEqual(call[call.index("--mcp-config") + 1], str(pin / ".mcp.json"))
+            self.assertEqual(call[call.index("--append-system-prompt-file") + 1], str(pin / ".instructions.md"))
+        servers = json.loads((pin / ".mcp.json").read_text())["mcpServers"]
+        self.assertEqual(servers["wl"]["args"], [str(pin / ".grave/mcp/wl.py")])
+        self.assertFalse((self.owner / ".claude").exists())
+        self.assertIn("finished; start a new one", self.grave("resume", "wl", cid, "more", ok=False).stderr)
+        self.assertIn("checkout removed", self.grave("prune", "wl").stdout)   # an untouched branch is disposable
+        meta = json.loads((self.root / f"agents/digger-wl-{cid}/meta.json").read_text())
+        self.assertEqual((meta["digger"], meta["pruned"]), ("wl", True))
+
+    def test_cancel_stops_the_turn_and_gaming_mode_requeues_it_once(self):
+        self.grave("new", "wl", "--repo", "app", "--provider", "codex", "--identity", "separate-login",
+                   "--mcp", "wl=python3 .grave/mcp/wl.py")
+        self.grave("login", "wl")
+        self.serve("wl")
+        conversations = self.root / "config/diggers/wl/conversations"
+        asking = subprocess.Popen([sys.executable, str(SCRIPT), "ask", "wl", "sleep on it"], env=self.env,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        running = lambda: next((r for r in self.records(conversations).values() if r["state"] == "running"), None)
+        cid = self.wait(running, "the turn never started")["id"]
+        time.sleep(.5)
+        self.freeze.write_text("1\n")   # gaming mode
+        record = self.wait(lambda: (r := self.records(conversations)[cid])["state"] == "cancelled" and r, "gaming did not stop it")
+        self.assertIn("gaming mode entered during run; requeued", record["message"])
+        self.assertEqual(asking.wait(timeout=30), 1)
+        time.sleep(2)
+        self.assertNotEqual(self.records(conversations)[cid]["state"], "running")   # nothing starts while frozen
+        self.freeze.write_text("0\n")
+        record = self.wait(lambda: (r := self.records(conversations)[cid])["state"] == "running" and r, "requeue never ran")
+        self.assertEqual(len(record["requeues"]), 1)
+        self.grave("cancel", "wl", cid)
+        record = self.wait(lambda: (r := self.records(conversations)[cid])["state"] == "cancelled" and r, "cancel ignored")
+        self.assertEqual(record["message"], "Cancelled by the owner")
+        self.grave("finish", "wl", cid, ok=False)   # an explicit finish packages what is there
+        record = self.records(conversations)[cid]
+        self.assertEqual((record["phase"], record["finished_by"], record["result"]["verdict"]), ("finished", "owner", "no-changes"))
+
+    def test_requests_are_validated_queued_and_idempotent(self):
+        module = load("diggers_requests", {"GRAVE_ROOT": str(self.root), "GRAVE_DIGGER_TEST": "1"})
+        self.grave("new", "wl", "--repo", "app", "--provider", "codex", "--identity", "separate-login")
+        definition, _ = module.load("wl")
+        cid, rid = module.new_id(), module.new_id()
+        self.assertEqual(module.submit(definition, "ask", cid, "hi", request_id=rid), (rid, True))
+        self.assertEqual(module.submit(definition, "ask", cid, "hi", request_id=rid), (rid, False))
+        self.assertEqual(module.conversation_view(definition, cid)["state"], "queued")
+        for op, message, fragment in (("rm", "x", "unknown request"), ("ask", "", "message must be")):
+            with self.assertRaises(module.DiggerError) as caught:
+                module.submit(definition, op, cid, message)
+            self.assertIn(fragment, str(caught.exception))
+        for _ in range(module.QUEUE_LIMIT - 1):
+            module.submit(definition, "ask", module.new_id(), "more")
+        with self.assertRaises(module.DiggerError) as caught:
+            module.submit(definition, "ask", module.new_id(), "one too many")
+        self.assertIn("requests waiting", str(caught.exception))
+        row = module.summary(definition)
+        self.assertEqual((row["queue"], row["live"], row["running"]), (module.QUEUE_LIMIT, False, None))
+        inbox = self.root / "config/diggers/wl/inbox"
+        (inbox / (module.new_id() + ".json")).write_text('{"op": "kill"}')
+        os.chmod(next(inbox.glob("*.json")), 0o644)   # a loose mode is refused by the loop, not trusted
+        self.serve("wl")
+        self.wait(lambda: len(json.loads((self.root / "config/diggers/wl/conversations/.status").read_text())["rejected"]) >= 2,
+                  "malformed requests were not refused")
+
+    def test_definitions_take_checks_and_prompt_chips(self):
+        module = load("diggers_optional", {"GRAVE_DIGGER_TEST": "1"})
+        value = definition(checks=["npm test"], prompts=[{"label": "New white label", "template": "Create {name} at {domain}"}])
+        self.assertEqual(module.validate(value)["checks"], ["npm test"])
+        for bad in ([{"label": "x", "template": "{Name}"}], [{"label": "x", "template": "a } b"}], [{"label": "x"}]):
+            with self.assertRaises(module.DiggerError):
+                module.validate(definition(prompts=bad))
+        with self.assertRaises(module.DiggerError):
+            module.validate(definition(checks=[""]))
+
+
 class InstallContractTests(unittest.TestCase):
     def test_cli_dispatches_digger_and_a_root_half_without_a_new_sudo_rule(self):
         self.assertIn('python3 "$GRAVE_ROOT/scripts/diggers.py" "$@"', GRAVE)
@@ -413,20 +692,22 @@ class InstallContractTests(unittest.TestCase):
         self.assertIn('fail) fail "$message"', GRAVE)
         self.assertIn("digger_report", GRAVE.split("cmd_doctor() {")[1])
 
-    def test_raise_installs_runner_and_units_but_never_starts_them(self):
+    def test_raise_installs_runner_and_units_and_only_the_cli_enables_them(self):
         self.assertIn('install -m 755 "$REPO_DIR/libexec/diggers.py" "$GRAVE_ROOT/scripts/diggers.py"', RAISE)
-        for unit in ("gravedecay-digger@", "gravedecay-digger-owner@"):
+        for unit, serve in (("gravedecay-digger@", "serve %i --identity dedicated"), ("gravedecay-digger-owner@", "serve %i")):
             self.assertIn(f"install_unit {unit}.service", RAISE)
             self.assertNotIn(f"enable_restart {unit}", RAISE)
             text = (ROOT / f"systemd/{unit}.service.tmpl").read_text()
             for line in ("NoNewPrivileges=yes", "ProtectSystem=strict", "UMask=0077", "MemoryMax=8G", "CPUQuota=400%",
-                         "ExecStart=@PYTHON@ -I @GRAVE_ROOT@/scripts/diggers.py run %i"):
+                         f"ExecStart=@PYTHON@ -I @GRAVE_ROOT@/scripts/diggers.py {serve}\n", "WantedBy=multi-user.target"):
                 self.assertIn(line, text, unit)
-            self.assertNotIn("[Install]", text, unit)
+            self.assertNotRegex(text, r"(?m)^(After|Wants|Requires|BindsTo|PartOf)=.*t3code", unit)
+        self.assertIn('sudo systemctl try-restart "$unit"', RAISE)
+        self.assertIn('"systemctl", "enable", wanted', SCRIPT.read_text())
         dedicated = (ROOT / "systemd/gravedecay-digger@.service.tmpl").read_text()
         self.assertIn("User=grave-digger-%i", dedicated)
         self.assertIn("ProtectHome=yes", dedicated)
-        self.assertIn("ReadWritePaths=@GRAVE_ROOT@/diggers/%i", dedicated)
+        self.assertIn("ReadWritePaths=@GRAVE_ROOT@/diggers/%i @GRAVE_ROOT@/diggers/.records/%i\n", dedicated)
         self.assertNotIn("@HOME@", dedicated)
         self.assertIn("User=@USER@", (ROOT / "systemd/gravedecay-digger-owner@.service.tmpl").read_text())
         self.assertIn("gravedecay-digger@.service gravedecay-digger-owner@.service", (ROOT / "uninstall.sh").read_text())
