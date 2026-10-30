@@ -119,7 +119,10 @@ worktrees/ isolated per-agent checkouts; branches share their source repo's Git 
 agents/    per-agent state: t3code server state, tmux session logs + meta.json
            (dir a session lived in — outlive the session for history/resume)
 docker/    compose stacks (core, browsers, yours)
-config/    grave.conf source-of-truth copies, tmux.conf, secrets/ (600, git-ignored)
+config/    grave.conf source-of-truth copies, tmux.conf, secrets/ (600, git-ignored),
+           diggers/<name>/ digger definitions, compiled policy, separate logins (700)
+diggers/   dedicated digger HOMEs (one Unix user each, 700), plus root-owned
+           .policy/<name>/ and the shared .tools/ provider copy (docs/DIGGERS.md)
 scripts/   gravedecay.py, dashboard-static/ PWA shell assets, and helpers
 logs/      grave.log, notifications.jsonl (🔔 inbox — durable copy of sent pages, 600)
 backups/   timestamped: git bundles + config tars + volume tars

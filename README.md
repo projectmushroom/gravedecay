@@ -146,6 +146,10 @@ or until the next run. Details and the verdict table are in
   peers, one stdlib Python daemon.
 - **Gravekeeper**: `grave keeper ask "<question>"` runs a read-only agent over
   the box's own state, logs and docs; it diagnoses, it does not change anything.
+- **Diggers**: `grave digger new` defines a focused agent bound to one job and
+  one repository, with a deny-by-default tool policy and, for client-facing
+  work, its own Unix user and its own Codex or Claude login
+  ([docs/DIGGERS.md](docs/DIGGERS.md)). The runner arrives next.
 - **Notifications**: Web Push to the installed PWA and/or an ntfy topic, for
   finished runs, failing units and a failing doctor
   ([docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md)).
@@ -166,6 +170,8 @@ grave agents jobs                         # schedules and last verdicts; jobs ca
 grave agents new <name> --repo <r>        # interactive session in an isolated worktree
 grave agents attach <name>                # detach with Ctrl-b d; the session survives
 grave agents prune                        # drop clean, merged, idle worktrees
+grave digger new <name> --repo <r> --identity dedicated   # a focused agent on its own login
+grave digger login <name>                 # that digger's own Codex/Claude login
 grave preview 3000                        # expose a loopback dev server on the tailnet
 grave gaming [--kill] [--for 2h]          # torpor: freeze agents, free RAM and GPU
 grave developer                           # thaw and restore
@@ -237,6 +243,7 @@ grave backup                              # bundles, configs, volumes; grave res
 | [docs/REQUIRED-CHECKS.md](docs/REQUIRED-CHECKS.md) | Making a test-integrity workflow required on a GitHub repository |
 | [docs/DASHBOARD.md](docs/DASHBOARD.md) | Dashboard layout and the Overnight report |
 | [docs/DISPATCH.md](docs/DISPATCH.md) | Starting work from a Linear issue |
+| [docs/DIGGERS.md](docs/DIGGERS.md) | Focused agents: definitions, identity tiers, their own logins |
 | [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md) | Web Push and ntfy |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, sudoers scope, T3 Connect, the shared account |
 | [docs/INSTALL.md](docs/INSTALL.md) | Choosing the appliance account |

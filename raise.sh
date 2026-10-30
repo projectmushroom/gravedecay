@@ -681,6 +681,7 @@ install -m 755 "$REPO_DIR/libexec/backup-integrity.py" "$GRAVE_ROOT/scripts/back
 install -m 755 "$REPO_DIR/libexec/agent-task.py" "$GRAVE_ROOT/scripts/agent-task.py"
 install -m 755 "$REPO_DIR/libexec/agent-jobs.py" "$GRAVE_ROOT/scripts/agent-jobs.py"
 install -m 644 "$REPO_DIR/libexec/providers.py" "$GRAVE_ROOT/scripts/providers.py"
+install -m 755 "$REPO_DIR/libexec/diggers.py" "$GRAVE_ROOT/scripts/diggers.py"
 install -m 755 "$REPO_DIR/dashboard/gateway.py" "$GRAVE_ROOT/scripts/gateway.py"
 install -m 755 "$REPO_DIR/libexec/t3-connect-diagnose.py" "$GRAVE_ROOT/scripts/t3-connect-diagnose.py"
 install -d -m 755 "$GRAVE_ROOT/scripts/dashboard-static"
@@ -942,6 +943,22 @@ if [[ "${MULTI_USER:-0}" == 0 ]]; then
 else
   sudo systemctl disable --now gravedecay-agents.service >/dev/null 2>&1 || true
 fi
+
+# Digger units (docs/DIGGERS.md): installed, never enabled or started here.
+# Dedicated diggers run as grave-digger-<name>; owner-account tiers as the owner.
+step "Digger units"
+# A dedicated digger cannot reach the owner's HOME, so not a Homebrew python there.
+DIGGER_PYTHON="$PYTHON_BIN"
+[[ "$DIGGER_PYTHON" != "$HOME_DIR"/* ]] || DIGGER_PYTHON=/usr/bin/python3
+sed -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" -e "s|@PYTHON@|$DIGGER_PYTHON|g" \
+    "$REPO_DIR/systemd/gravedecay-digger@.service.tmpl" \
+  | install_unit gravedecay-digger@.service
+sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
+    -e "s|@HOME@|$HOME_DIR|g" -e "s|@TOOLPATH@|$TOOLPATH|g" -e "s|@PYTHON@|$PYTHON_BIN|g" \
+    "$REPO_DIR/systemd/gravedecay-digger-owner@.service.tmpl" \
+  | install_unit gravedecay-digger-owner@.service
+sudo systemctl daemon-reload
+ok "digger unit templates installed (not started; the runner arrives in M2)"
 
 # -------------------------------------------------------------- 7. docker ----
 step "Docker stacks"

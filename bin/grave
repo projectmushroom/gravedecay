@@ -1595,6 +1595,25 @@ upgrade_checkout_clean() {
   [[ -z "$dirty" ]]
 }
 
+diggers_units_installed() {
+  systemctl cat gravedecay-digger@.service gravedecay-digger-owner@.service >/dev/null 2>&1 || return 1
+  ! systemctl list-units --no-legend --plain --state=active 'gravedecay-digger*@*.service' 2>/dev/null | grep -q .
+}
+digger_report() { # one doctor line per diggers.py finding: ok / warn (login) / fail
+  local report level message
+  report=$(env GRAVE_ROOT="$GRAVE_ROOT" GRAVE_BIN="$(readlink -f "$0")" DIGGER_CODEX_BIN="${DIGGER_CODEX_BIN:-}" \
+    DIGGER_CLAUDE_BIN="${DIGGER_CLAUDE_BIN:-}" python3 "$GRAVE_ROOT/scripts/diggers.py" check 2>&1) \
+    || report=$'fail\tdigger probe crashed: '"${report//$'\n'/ }"
+  while IFS=$'\t' read -r level message; do
+    case "$level" in
+      ok)   ok "$message" ;;
+      warn) warn "$message" ;;
+      fail) fail "$message" "${message%%:*}" ;;
+      *)    [[ -z "$level" ]] || fail "digger probe: $level $message" "digger probe" ;;
+    esac
+  done <<<"$report"
+}
+
 cmd_doctor() { # grave doctor [--no-page]
   # --no-page suppresses the failure notification: `grave digest` embeds the
   # doctor verdict in its own single morning page, and two pages about one
@@ -1616,6 +1635,9 @@ cmd_doctor() { # grave doctor [--no-page]
     if keeper_status=$(env GRAVE_ROOT="$GRAVE_ROOT" GRAVE_CONF="$CONF" python3 "$GRAVE_ROOT/scripts/keeper.py" check provider 2>&1); then
       ok "keeper provider installed and logged in"
     else say "  ${YLW}– keeper provider not ready: ${keeper_status:-unknown} — log in as the appliance owner${RST}"; fi
+    check "digger runner installed" test -r "$GRAVE_ROOT/scripts/diggers.py"
+    check "digger unit templates installed (not started until M2)" diggers_units_installed
+    digger_report
   fi
   check "issue agent task runner installed" test -r "$GRAVE_ROOT/scripts/agent-task.py"
   check "issue tasks private and consistent with session metadata" agent_tasks_check
@@ -2211,7 +2233,7 @@ cmd_backup() (
     fi
   done
 
-  local excludes=(--exclude='config/secrets' --exclude='workspaces/*/config/secrets' --exclude='workspaces/*/.config/gh' --exclude='workspaces/*/config/gh' --exclude='workspaces/*/.codex/auth.json' --exclude='workspaces/*/.claude/.credentials.json' --exclude='workspaces/*/.claude.json')
+  local excludes=(--exclude='config/secrets' --exclude='workspaces/*/config/secrets' --exclude='workspaces/*/.config/gh' --exclude='workspaces/*/config/gh' --exclude='workspaces/*/.codex/auth.json' --exclude='workspaces/*/.claude/.credentials.json' --exclude='workspaces/*/.claude.json' --exclude='config/diggers/*/codex' --exclude='config/diggers/*/claude' --exclude='config/diggers/.removed/*/codex' --exclude='config/diggers/.removed/*/claude')
   (( include_secrets )) && excludes=()
   backup_tar "platform config" "$dest/configs/grave-platform.tar.gz" \
     "${excludes[@]}" --exclude='config/workspace-restores' --exclude='config/workspace-migrations' \
@@ -2499,6 +2521,7 @@ UNINSTALL_UNITS=(
   gravedecay-gateway.service gravedecay-boundary.service gravedecay.service
   gravedecay-notify@.service
   gravedecay-t3@.service gravedecay-term@.service gravedecay-dashboard@.service
+  gravedecay-digger@.service gravedecay-digger-owner@.service
 )
 
 # Descriptions are written as completed results ("units stopped"), so the ✓ line
@@ -2875,6 +2898,8 @@ cmd_uninstall() { # grave uninstall [--purge] [--yes] [--dry-run]
   say "  • docker, tailscale, node/npm, ttyd, t3 and distro packages — remove them yourself if unwanted"
   command -v tailscale >/dev/null 2>&1 && say "  • this node is still on the tailnet — 'sudo tailscale logout' to leave"
   (( purge )) || say "  • $GRAVE_ROOT and every docker volume"
+  local diggers; diggers=$(getent passwd 2>/dev/null | cut -d: -f1 | grep '^grave-digger-' | tr '\n' ' ' || true)
+  [[ -n "$diggers" ]] && say "  • ${YLW}digger unix users: $diggers${RST} — their own provider logins live in their homes; remove each with 'grave digger remove <name> --purge' before uninstalling, or 'userdel' deliberately"
   if [[ "${MULTI_USER:-0}" == 1 ]]; then
     local slugs; slugs=$(getent passwd 2>/dev/null | cut -d: -f1 | grep '^grave-' | tr '\n' ' ' || true)
     [[ -n "$slugs" ]] && say "  • ${YLW}workspace unix users: $slugs${RST} — collaborator credentials live in their homes; delete deliberately with 'userdel -r'"
@@ -2928,6 +2953,11 @@ grave — gravedecay appliance control 🪦
   grave logs [--tail <n>] [t3|dash|ssh|tailscale|system|grave|agent <n>|<container/unit>]
   grave keeper ask "<prompt>"          🪦 ask the Gravekeeper about this box
   grave keeper resume <id> "<prompt>"  continue a saved Keeper conversation
+  grave digger new <n> --repo <r> [--provider codex|claude] [--identity shared|separate-login|dedicated]
+                             ⛏️ define a digger: one job, one repo, its own login
+  grave digger [list|show|login|status|enable|disable|remove] <n>
+                             login opens its own Codex/Claude login; remove keeps
+                             HOME, clone and login unless --purge (docs/DIGGERS.md)
 
   grave preview <port>       expose a running dev server (e.g. :3000) to the
                              tailnet at https://<box>.ts.net:<port> — root path,
@@ -3009,6 +3039,19 @@ case "${1:-help}" in
   keepalive)  shift || true; cmd_keepalive "$@" ;;
   logs)       shift; cmd_logs "$@" ;;
   keeper)     shift || true; exec env GRAVE_ROOT="$GRAVE_ROOT" GRAVE_CONF="$CONF" python3 "$GRAVE_ROOT/scripts/keeper.py" "$@" ;;
+  digger)     shift || true
+              [[ "${MULTI_USER:-0}" == 0 ]] || { bad "diggers require single-owner mode"; exit 1; }
+              exec env GRAVE_ROOT="$GRAVE_ROOT" GRAVE_BIN="$(readlink -f "$0")" \
+                DIGGER_CODEX_BIN="${DIGGER_CODEX_BIN:-}" DIGGER_CLAUDE_BIN="${DIGGER_CLAUDE_BIN:-}" \
+                python3 "$GRAVE_ROOT/scripts/diggers.py" "$@" ;;
+  # Root half of the dedicated tier (useradd, root-owned policy, runuser as the
+  # digger). Reached through the owner's existing scoped grant for this CLI; the
+  # owner's password-protected (root) ALL rule cannot `sudo -u` another user.
+  __digger)   shift || true; [[ $EUID == 0 ]] || { bad "internal digger helper requires root"; exit 1; }
+              [[ "${MULTI_USER:-0}" == 0 ]] || { bad "diggers require single-owner mode"; exit 1; }
+              exec env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+                GRAVE_ROOT="$GRAVE_ROOT" TERM="${TERM:-dumb}" LANG="${LANG:-C.UTF-8}" \
+                python3 -I "$GRAVE_ROOT/scripts/diggers.py" __root "$@" ;;
   notify)     shift || true; cmd_notify "$@" ;;
   digest)     shift || true; cmd_digest "$@" ;;
   bench)      shift; exec python3 "$GRAVE_ROOT/scripts/benchmark.py" --root "$GRAVE_ROOT" "$@" ;;

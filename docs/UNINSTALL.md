@@ -67,6 +67,7 @@ $GRAVE_ROOT/repos/gravedecay/raise.sh --profile <your-profile>
 | `~/Projects` symlink | kept (still valid) | removed |
 | docker, tailscale login, toolchain, distro packages | kept | kept |
 | workspace unix users (`grave-<slug>`) | kept | kept |
+| digger unix users (`grave-digger-<name>`) and their logins | kept | kept |
 | appliance owner account (`grave` or custom) and its home | kept | kept |
 
 The installer-created password-required sudo rule `40-gravedecay-owner` is
@@ -83,6 +84,9 @@ administrator may need to restore that account's sudo access before reinstalling
   Deleting them is a decision about someone else's data, so uninstall reports
   the accounts and leaves them. Remove them yourself when you mean to:
   `sudo userdel -r grave-<slug>`.
+- **Delete digger unix users.** A `dedicated` digger's home holds its own
+  provider login, often a seat someone else pays for. Run `grave digger remove
+  <name> --purge` first if you mean to delete it ([DIGGERS.md](DIGGERS.md)).
 - **Remove snapper configs or snapshots.** If `CHECK_SNAPPER=1` was set, the
   timeline config and its snapshots are reported and left in place.
 - **Uninstall packages.** `pacman`/`apt`/`dnf`/Homebrew are untouched.

@@ -870,7 +870,8 @@ print("<script>literal output</script>", flush=True)
 
     def test_one_provider_table_and_sandbox_policy_serve_jobs_dispatch_and_keeper(self):
         providers = load(PROVIDERS, "providers_contract")
-        self.assertEqual(providers.SANDBOX, {"job": "workspace-write", "dispatch": "workspace-write", "keeper": "read-only"})
+        self.assertEqual(providers.SANDBOX, {"job": "workspace-write", "dispatch": "workspace-write", "keeper": "read-only",
+                                             "digger": "workspace-write"})
         job, dispatch = providers.job_command("codex"), providers.dispatch_command("codex", "task text")
         self.assertEqual(job[:4], ["codex", "exec", "-c", 'sandbox_mode="workspace-write"'])
         self.assertEqual(dispatch, ["codex", "-c", 'sandbox_mode="workspace-write"', "task text"])
@@ -885,8 +886,21 @@ print("<script>literal output</script>", flush=True)
                      runner.command({"provider": "claude", "model": "", "session_id": None})):
             self.assertTrue(providers.policy_ok(argv), argv)
         self.assertFalse(providers.policy_ok(["codex", "--dangerously-bypass-approvals-and-sandbox"]))
+        # Newer spellings: Claude's opt-in bypass, Codex hook trust and auto-approval.
+        for word in ("--allow-dangerously-skip-permissions", "--auto", "--dangerously-bypass-hook-trust",
+                     "--approve-for-me", "--permission-mode=bypassPermissions"):
+            self.assertFalse(providers.policy_ok(["claude", word]), word)
+        definition = {"name": "wl", "provider": "codex", "model": "", "identity": "separate-login", "repo": "app",
+                      "work": "worktree", "tools": {"mcp": {}, "allow": ["Read"], "deny": []},
+                      "budget": {"max_turns": 30, "timeout_s": 1800, "daily_turns": 200, "daily_usd": 10.0},
+                      "pause_in_gaming": True, "enabled": True}
+        layout = {"policy": "/p", "instructions": "/p/DIGGER.md", "instructions_text": "dig", "provider_home": "/h"}
+        for provider in providers.PROVIDERS:
+            argv, _ = providers.digger_command(dict(definition, provider=provider), "digger", True, layout)
+            self.assertTrue(providers.policy_ok(argv), argv)
+        self.assertIn('sandbox_mode="workspace-write"', argv)
         # Only the table spells a sandbox; consumers cannot drift from it.
-        for path in ("libexec/agent-jobs.py", "libexec/agent-task.py", "dashboard/keeper.py"):
+        for path in ("libexec/agent-jobs.py", "libexec/agent-task.py", "dashboard/keeper.py", "libexec/diggers.py"):
             source = (ROOT / path).read_text()
             self.assertNotIn("sandbox_mode", source, path); self.assertNotIn("--sandbox", source, path)
             self.assertIn("providers", source, path)
