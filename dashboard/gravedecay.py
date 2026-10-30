@@ -158,13 +158,14 @@ CLIENT_ROUTES = {
     "GET": frozenset(("state", "settings", "capabilities", "t3-activity",
                       "admin/benchmark", "admin/releases", "admin/update-status",
                       "files", "download", "agent-log", "dispatch-pr", "operations", "openapi.json", "keeper",
+                      "diggers", "diggers/conversation",
                       "resources/system", "resources/services", "resources/containers", "resources/sessions",
                       "resources/repositories", "resources/preferences")),
     "POST": frozenset(("settings", "admin/benchmark", "admin/upgrade", "admin/update-check",
                        "action", "action-stream", "fs", "upload", "session-kill",
                        "session-resume", "session-capture", "agent-job-cancel",
                        "linear-issue", "linear-dispatch", "notify-test", "operations", "resources/preferences",
-                       "keeper", "keeper/turn", "keeper/cancel")),
+                       "keeper", "keeper/turn", "keeper/cancel", "diggers/ask", "diggers/cancel", "diggers/finish")),
 }
 
 
@@ -469,6 +470,36 @@ if keeper_supported():
     KEEPER = keeper.Runner(os.path.join(GRAVE_ROOT, "config", "secrets", "keeper"), HOST,
                            script=os.path.join(os.path.dirname(__file__), "keeper.py"), grave=GRAVE,
                            api=f"http://127.0.0.1:{PORT}{BASE}", work_dir=os.path.join(GRAVE_ROOT, "config", "keeper"))
+
+# Diggers (docs/DIGGERS.md): the dashboard is channel zero. It only reads digger
+# records and writes requests into a digger's inbox; the digger's own unit runs
+# every turn, so nothing here launches a provider.
+diggers = None
+if keeper_supported():
+    for _candidate in (os.path.join(os.path.dirname(__file__), "diggers.py"),
+                       os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "libexec", "diggers.py")):
+        if os.path.isfile(_candidate):
+            _diggers_spec = importlib.util.spec_from_file_location("grave_diggers", _candidate)
+            diggers = importlib.util.module_from_spec(_diggers_spec)
+            _diggers_spec.loader.exec_module(diggers)
+            break
+
+
+def digger_definition(name):
+    """A valid definition by name, or DiggerError (an unknown name reads as not found)."""
+    if not isinstance(name, str) or name not in diggers.names():
+        raise diggers.DiggerError("no such digger")
+    return diggers.load(name)[0]
+
+
+def digger_list():
+    rows, invalid = [], []
+    for name in diggers.names():
+        try:
+            rows.append(diggers.summary(diggers.load(name)[0]))
+        except (diggers.DiggerError, OSError, ValueError) as error:
+            invalid.append({"name": name, "error": str(error)[:300]})
+    return {"diggers": rows, "invalid": invalid}
 
 
 def operation_actions():
@@ -2279,23 +2310,24 @@ def _modified_since(path, since):
         return False
 
 
-def _claude_files(cwd, since):
+def _claude_files(cwd, since, claude_dir=None):
     """Claude Code files a transcript under a directory named after its cwd."""
-    project = re.sub(r"[^A-Za-z0-9]", "-", cwd)
-    return glob.glob(f"{HOME}/.claude/projects/{project}/*.jsonl") \
-        or [f for f in glob.glob(f"{HOME}/.claude/projects/*/*.jsonl") if _modified_since(f, since)]
+    project, claude_dir = re.sub(r"[^A-Za-z0-9]", "-", cwd), claude_dir or f"{HOME}/.claude"
+    return glob.glob(f"{claude_dir}/projects/{project}/*.jsonl") \
+        or [f for f in glob.glob(f"{claude_dir}/projects/*/*.jsonl") if _modified_since(f, since)]
 
 
-def transcript_cost(cwd, since=0):
+def transcript_cost(cwd, since=0, claude_dir=None, codex_dir=None):
     """Estimated spend of the agent sessions that worked in one directory (a
     scheduled run's worktree), from the same transcripts as the Usage panel.
     None when no transcript ran there; otherwise always marked estimated.
     When the run's own Codex rollout carries a plan quota (codex_quota), the
     newest one is returned under `quota`: an account-wide snapshot at the
-    time of the run, not this run's share of it."""
+    time of the run, not this run's share of it. A digger with its own login
+    passes its CLAUDE_CONFIG_DIR / CODEX_HOME instead of the owner's."""
     targets = {cwd, os.path.realpath(cwd)}
     usd, models, seen = 0.0, {}, set()
-    for f in _claude_files(cwd, since):
+    for f in _claude_files(cwd, since, claude_dir):
         try:
             for _ts, model, u, where in claude_transcript(f, seen):
                 if where in targets:
@@ -2305,7 +2337,7 @@ def transcript_cost(cwd, since=0):
         except OSError:
             continue
     quota, newest = None, 0
-    for f in glob.glob(f"{HOME}/.codex/sessions/*/*/*/rollout-*.jsonl"):
+    for f in glob.glob(f"{codex_dir or HOME + '/.codex'}/sessions/*/*/*/rollout-*.jsonl"):
         if not _modified_since(f, since):
             continue
         try:
@@ -3440,6 +3472,29 @@ class Handler(BaseHTTPRequestHandler):
             except (OSError, ValueError, KeyError, AssertionError):
                 self._client_error(503, "history_unavailable", "Cannot read Keeper conversations; run grave doctor")
             return
+        if self._client_authorized and p in ("/api/diggers", "/api/diggers/conversation"):
+            if diggers is None:
+                self._client_error(501, "unsupported", "Diggers require a single-owner Linux grave"); return
+            try:
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                name = query.get("name", [None])[0]
+                if p == "/api/diggers":
+                    result = {"conversations": diggers.conversation_rows(digger_definition(name))} if name else digger_list()
+                else:
+                    cursor = query.get("after", ["0"])[0]
+                    if not re.fullmatch(r"[0-9]{1,10}", cursor):
+                        raise ValueError("Invalid progress cursor")
+                    result = diggers.conversation_view(digger_definition(name), query.get("id", [""])[0], int(cursor))
+                    if result is None:
+                        self._client_error(404, "not_found", "No such conversation for this digger, or it expired"); return
+                self._send(200, json.dumps(result))
+            except diggers.DiggerError as error:
+                self._client_error(404 if "no such digger" in str(error) else 400, "invalid_request", str(error))
+            except ValueError as error:
+                self._client_error(400, "invalid_request", str(error))
+            except OSError:
+                self._client_error(503, "history_unavailable", "Cannot read digger records; run grave doctor")
+            return
         if p == "/api/operations":
             if not client_api_supported() or MACOS:
                 self._client_error(501, "unsupported", "Durable actions require a single-owner Linux grave"); return
@@ -3600,6 +3655,21 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, json.dumps({"ok": False, "output": "no diff for this run"}))
                 return
             self._send(200, text, ctype="text/plain; charset=utf-8")
+        elif p == "/api/digger-diff":
+            # A finished digger conversation's committed work, written beside its
+            # record by the digger (whose checkout the owner may not read).
+            # Owner-gated like /api/run-diff; text/plain, 256 KiB cap, no-store.
+            if self._forbidden():
+                return
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            try:
+                if diggers is None:
+                    raise ValueError("unsupported")
+                text = diggers.diff_text(digger_definition(query.get("name", [""])[0]), query.get("id", [""])[0])
+            except (OSError, ValueError, diggers.DiggerError if diggers else ValueError):
+                self._send(404, json.dumps({"ok": False, "output": "no diff for this conversation"}))
+                return
+            self._send(200, text, ctype="text/plain; charset=utf-8")
         elif p == "/api/push-key":
             # The VAPID public key a device needs to subscribe. Gated like the
             # file manager: only allowed viewers (and authenticated local maintenance) may enroll.
@@ -3715,6 +3785,38 @@ class Handler(BaseHTTPRequestHandler):
                 self._client_error(400, "invalid_request", str(error))
             except OSError:
                 self._client_error(503, "history_unavailable", "Cannot save Keeper conversations; run grave doctor")
+            return
+        if self._client_authorized and p in ("/api/diggers/ask", "/api/diggers/cancel", "/api/diggers/finish"):
+            if diggers is None:
+                self._client_error(501, "unsupported", "Diggers require a single-owner Linux grave"); return
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                if not 0 < length <= 65536:
+                    raise ValueError("Invalid digger payload size")
+                data = json.loads(self.rfile.read(length))
+                op = p.rsplit("/", 1)[1]
+                fields = {"name", "conversation", "request", "message"} if op == "ask" else {"name", "conversation", "request"}
+                if not isinstance(data, dict) or set(data) != fields:
+                    raise ValueError("Supply " + ", ".join(sorted(fields)))
+                definition = digger_definition(data["name"])
+                if not definition["enabled"]:
+                    self._client_error(409, "disabled", f"{data['name']} is disabled; enable it with grave digger enable"); return
+                record = diggers.read_conversation(definition, data["conversation"])
+                if record is not None and record.get("phase") != "open":
+                    self._client_error(409, "finished", "This conversation has finished; start a new one"); return
+                if op != "ask" and record is None:
+                    self._client_error(404, "not_found", "No such conversation for this digger"); return
+                _, created = diggers.submit(definition, op, data["conversation"], data.get("message", ""),
+                                            requested_by="owner", request_id=data["request"])
+                view = diggers.conversation_view(definition, data["conversation"]) or {"id": data["conversation"], "state": "queued"}
+                self._send(202 if created else 200, json.dumps(dict(view, request=data["request"])))
+            except diggers.DiggerError as error:
+                code = 404 if "no such digger" in str(error) else 409 if "waiting" in str(error) else 400
+                self._client_error(code, "invalid_request", str(error))
+            except (ValueError, TypeError) as error:
+                self._client_error(400, "invalid_request", str(error))
+            except OSError:
+                self._client_error(503, "history_unavailable", "Cannot write to the digger's inbox; run grave doctor")
             return
         if p == "/api/operations":
             if not client_api_supported() or MACOS:

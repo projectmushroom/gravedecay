@@ -13,11 +13,11 @@ narrower: tools the definition allows and nothing else, a sandbox where the
 provider has one, and, for the `dedicated` tier, a Unix identity that cannot
 read the owner's secrets.
 
-This is milestone 1 of the epic (#243): definitions, identity tiers, the
-digger's own provider login, the compiled deny-by-default policy and the doctor
-checks. **Nothing runs a turn yet.** The runner and the dashboard channel
-arrive in M2 (#246); Slack intake, approvals and budget enforcement in M3
-(#247). OpenCode is a later provider (#245).
+Milestones 1 and 2 of the epic (#243) are here: definitions, identity tiers,
+the digger's own login, the compiled policy, and the conversation runner with
+the dashboard and CLI as its channels. A digger with no Slack binding is
+complete. Slack intake, approvals and budget enforcement are M3 (#247);
+OpenCode is a later provider (#245).
 
 ## Quick start
 
@@ -29,6 +29,8 @@ grave digger login wl              # device code; confirm on your phone
 grave digger status wl             # {"loggedIn": true, ...}; never prints a token
 grave doctor                       # every digger invariant, login as a warning
 
+grave digger ask wl "create white label acme with domain acme.example"
+
 # a second subscription on the owner's account, no new Unix user
 grave digger new wl2 --repo app --provider claude --identity separate-login
 grave digger login wl2             # Claude subscription; --console for API billing
@@ -38,8 +40,9 @@ grave digger login wl2             # Claude subscription; --console for API bill
 terminal tile opens the same one-shot flow at `/term/?arg=auth-digger-<name>`.
 The `auth-` prefix is what makes that session end when the flow ends.
 
-Other verbs: `list`, `show <name>`, `enable <name>` (validate and recompile
-after editing the definition), `disable <name>`, `remove <name> [--purge]`.
+Other verbs: `list`, `show <name>`, `enable <name>` (validate, recompile and
+restart its unit after editing the definition), `disable <name>`,
+`remove <name> [--purge]`, and the conversation verbs below.
 
 ## The definition
 
@@ -51,6 +54,7 @@ Each digger lives in `$GRAVE_ROOT/config/diggers/<name>/` (0700, the owner's):
 | `DIGGER.md` (0600) | Instructions and job knowledge. Not a credential store and not a guardrail |
 | `policy/` (0700) | Compiled provider policy for the owner-account tiers; generated, never edited |
 | `codex/` or `claude/` (0700) | `separate-login` only: the digger's own `CODEX_HOME` / `CLAUDE_CONFIG_DIR` |
+| `inbox/`, `conversations/`, `pins/` (0700) | Owner-account tiers: requests, conversation records, pinned tools (below) |
 
 ```json
 {"name": "whitelabel", "provider": "codex", "model": "",
@@ -81,6 +85,12 @@ Each digger lives in `$GRAVE_ROOT/config/diggers/<name>/` (0700, the owner's):
   running text-only.
 - `budget`: recorded now, enforced from M3; `max_turns` is compiled into the
   Claude command already.
+- `checks` (optional): the commands the runner runs when a conversation
+  finishes (`new --check CMD`, repeatable). Absent means the base commit's
+  `package.json` test script, `pytest` or `make test`, as for scheduled jobs.
+- `prompts` (optional): up to 8 `{"label", "template"}` chips above the
+  dashboard composer; `{field}` placeholders (lowercase words) open a small
+  form before sending.
 
 Unknown keys anywhere are refused, so a typo cannot silently mean "default".
 `grave digger new` writes a starter `DIGGER.md` and, unless you pass
@@ -114,8 +124,8 @@ done *as* the digger through `runuser`:
   name, with `origin` set to the source repo's origin. No identity ever runs
   Git in a repository another identity owns. Pushing needs the digger's own
   GitHub credential (a deploy key, or `gh auth login` as that user); the
-  owner's `~/.config/gh` is never reachable. A GitHub login verb arrives with
-  the runner, which is the first thing that pushes.
+  owner's `~/.config/gh` is never reachable. The runner never pushes; a
+  GitHub login verb arrives with the first milestone that does.
 - **Provider CLI**: the owner's CLI usually lives under the owner's 0700 HOME
   (mise, Homebrew, `~/.local`), which the digger must not reach. Provisioning
   copies the owner's native build into a root-owned, read-only
@@ -209,7 +219,11 @@ HOME and a non-zero uid, HOME is a real 0700 directory it owns, the clone is a
 real checkout the digger owns with the source repo's `origin`, the root-owned
 policy and the Codex rules match, the provider is executable by that user, and
 that the owner's HOME is closed to other users. It verifies the digger unit
-templates are installed and that none is running yet.
+templates are installed; an enabled digger's unit is enabled and running and a
+disabled one's is not; no unit orders after T3; every unfinished record
+belongs to the live loop; every finished one carries a valid result whose
+checks came from the owner or the base; and every retained checkout is a
+worktree of the recorded repo or clone with an unchanged, read-only pin.
 
 A missing login is a **warning**, not a failure: logging in is a post-raise
 owner step, like the Keeper's. `grave digger login <name>` clears it.
@@ -221,22 +235,103 @@ worktree: budget the size of `.git` plus a checkout per digger. The provider
 copy is shared by every digger and replaced on refresh (Codex about 400 MB,
 Claude about 270 MB; on btrfs with reflinks the copy is nearly free).
 
-## Units
+## Conversations
+
+```sh
+grave digger ask wl "create white label acme"   # new conversation; prints its id
+grave digger resume wl <id> "use acme.example"  # answer the digger
+grave digger cancel wl <id>                     # stop the running turn
+grave digger finish wl <id>                     # package the result now
+grave digger kill wl                            # stop everything; disables wl
+grave digger prune wl                           # remove merged, clean checkouts
+```
+
+A **conversation** is a sequence of provider turns in one checkout. The first
+request creates it: a branch `digger/<name>/<conversation>` at the base, in a
+worktree of the repo (owner tiers, `$GRAVE_ROOT/worktrees/<repo>/`) or of the
+digger's own clone after `git fetch origin` (dedicated, `$HOME/worktrees/`;
+when the fetch fails the conversation starts from the clone's branch and says
+so). Each turn is one provider process through the Keeper's runner: same
+event schema, caps and 30-day retention; Codex and Claude resume their own
+session for the next turn. One turn runs at a time per digger; up to 8
+requests wait in its inbox.
+
+**How it ends.** The runner appends a short protocol to the instructions: when
+the job is done, the agent ends its final message with the line
+`[[digger:done]]`. Only that exact last line, or `grave digger finish`, ends a
+conversation; the runner never guesses that a turn "looks finished". Without
+it the conversation waits for the requester's reply.
+
+**The result** is the scheduled-job result package
+([SCHEDULES.md](SCHEDULES.md)): the runner commits what the agent left
+uncommitted (as `digger <name>`, hooks off), then records the change summary,
+the checks (`checks`, else the base commit's test entry point), the verdict,
+the diff and the cost from the digger's **own** transcripts, plus the Codex
+plan quota of the digger's own login. Same 48 KiB cap and `valid_result`
+rules. Checks run by the runner with a command the agent did not choose; they
+still execute the agent's code in the checkout, as the digger. A finished
+conversation takes no more turns.
+
+**Pinned tools.** Before the first turn the runner copies, with `git archive`
+at the base, the directory of every file an MCP command or argument names and
+the repo's optional `.grave/diggers/<name>.md` (job knowledge, appended after
+`DIGGER.md`) into `pins/<conversation>/`, read-only, and starts the MCP servers
+from there. The agent edits the checkout, not the tool it calls or the rules it
+was given; doctor compares the pin with its recorded digest. A server that
+needs files outside its own directory should live in one.
+
+**Gaming mode** (the agent freezer flag, like jobs): no turn starts while it
+is set; a running turn is cancelled and requeued once for after the thaw.
+`pause_in_gaming: false` is honoured only for `dedicated` diggers: you are
+choosing to let a client job run during a game.
+
+**Notifications** use the `agent-done` event, title `Digger <name>: <verdict>`,
+deep-linking the conversation. The owner's scheduler sends them (a dedicated
+digger cannot read the notification secrets).
+
+**Prune** applies the agent-worktree rules to finished conversations: a clean
+checkout whose branch is untouched, or merged and pushed, is removed with its
+pin; records stay. `grave agents prune` leaves digger checkouts alone.
+
+## The dashboard
+
+The Work tab's **Diggers** section lists each digger (tier, provider, login,
+live or paused, queue, today's turns and cost, last verdict). **Summon** opens
+the Keeper's drawer bound to that digger: each thread is one conversation,
+Stop cancels the turn, Finish packages it, and the result card from the
+Overnight report renders at the end. It works from the installed PWA. API:
+[API.md](API.md#diggers).
+
+## Records and units
+
+| Tier | Requests (owner writes) | Records (digger writes) |
+| --- | --- | --- |
+| owner tiers | `config/diggers/<name>/inbox/` (0700) | `config/diggers/<name>/conversations/` (0700) |
+| `dedicated` | `diggers/.inbox/<name>/` (owner, digger's group, 2750) | `diggers/.records/<name>/` (digger, owner's group, 2750) |
+
+The dedicated pair sits outside both HOMEs and each side reads the other's
+files through a setgid group directory root creates, so the dashboard reads
+records directly and the digger reads only requests. Beside each record are
+its `.diff` and check `.log`; `.status` is the loop's heartbeat (login state,
+pause, refused requests).
 
 `raise.sh` installs `gravedecay-digger@.service` (`User=grave-digger-%i`,
-`ProtectHome=yes`, writes only to the digger's HOME) and
-`gravedecay-digger-owner@.service` (`User=` the owner, for the owner-account
-tiers). Both run `diggers.py run <name>` with `NoNewPrivileges`,
-`ProtectSystem=strict`, a private `/tmp` and the workspace CPU and memory
-ceilings. Neither has an `[Install]` section and neither is started in this
-milestone. A digger never listens on a port: intake is outbound only, so
-`docs/PORTS.md` is unchanged.
+`ProtectHome=yes`, writes only its HOME and records) and
+`gravedecay-digger-owner@.service` (`User=` the owner). `new` and `enable`
+enable and (re)start the one for the digger's tier, `disable`, `kill` and
+`remove` stop it; a re-raise restarts the running ones. Both run
+`diggers.py serve <name>` with `NoNewPrivileges`, `ProtectSystem=strict`, a
+private `/tmp` and the workspace CPU and memory ceilings, and neither waits on
+T3. Starting a unit goes through the root half, so run `new` and `enable` from
+the terminal tile or SSH. A digger never listens on a port: requests arrive as
+files, so `docs/PORTS.md` is unchanged.
 
 ## Removing
 
 `grave digger remove <name>` moves the definition (and a `separate-login`
 login) to `config/diggers/.removed/<name>-<time>/`, removes the root-owned
 policy and disables the unit. A `dedicated` digger's Unix user, HOME, clone
-and login are kept; defining the same name again adopts them. `--purge`
-deletes all of it, the Unix user included. `grave uninstall` lists remaining
+and login are kept, and so are every tier's conversation records; defining the
+same name again adopts them. `--purge` deletes all of it, the Unix user,
+inbox and records included. `grave uninstall` lists remaining
 `grave-digger-*` users rather than deleting them.

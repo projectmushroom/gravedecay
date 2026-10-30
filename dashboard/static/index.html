@@ -336,7 +336,7 @@ dialog::backdrop{background:#000a;backdrop-filter:blur(3px)}
    agents Macs unless it is explicitly opted in with macagents-setting.
    Hiding is UI polish — the server allowlist is the authorization boundary. */
 body.macos:not(.macagents) [data-panel="tmux"],body.macos [data-panel="sessions"],body.macos [data-panel="usage"],body.macos [data-panel="inbox"],
-body.macos [data-panel="journal"],body.macos #game-banner,body.macos #mode,
+body.macos [data-panel="journal"],body.macos [data-panel="diggers"],body.macos #game-banner,body.macos #mode,
 body.macos #boot-mode-head,body.macos #boot-mode-row,body.macos #throttle-head,
 body.macos #throttle-row,body.macos #t3connect-head,body.macos #t3connect-row{display:none!important}
 body.macos .mac-linux-setting,body.macos .linear-create{display:none!important}
@@ -348,7 +348,7 @@ body.macos [data-panel="actions"] .actions{display:none!important}
 #update-notice[hidden]{display:none}
 /* Portable workspaces intentionally cannot observe or control their Docker host. */
 body.portable [data-panel="benchmark"],body.portable [data-panel="stats"],body.portable [data-panel="actions"],body.portable [data-panel="services"],
-body.portable [data-panel="docker"],body.portable [data-panel="journal"],body.portable #game-banner,
+body.portable [data-panel="docker"],body.portable [data-panel="journal"],body.portable [data-panel="diggers"],body.portable #game-banner,
 body.portable #mode,body.portable #keepalive-head,body.portable #keepalive-row,
 body.portable #boot-mode-head,body.portable #boot-mode-row,body.portable #throttle-head,
 body.portable #throttle-row,body.portable .t3connect-only,body.portable #notify-head,
@@ -486,7 +486,16 @@ body.remote-pending #panels,body.remote-pending #launcher,body.remote-pending #a
 .keeper-tool{margin:4px 0;font-size:12px;color:var(--muted)}
 .keeper-tool summary{cursor:pointer}
 .keeper-tool pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:200px;overflow:auto;margin:4px 0;font-size:11px}
-#keeper-chips{display:flex;gap:6px;flex-wrap:wrap;padding:6px 0}
+#keeper-chips,#digger-chips{display:flex;gap:6px;flex-wrap:wrap;padding:6px 0}
+#digger-fields{display:flex;gap:6px;flex-wrap:wrap;align-items:flex-end;padding:6px 0}
+#digger-fields label{display:flex;flex-direction:column;font-size:12px;color:var(--muted);flex:1;min-width:120px}
+#digger-fields input{min-height:44px;font-size:16px;background:var(--inset);color:var(--ink);border:1px solid var(--hairline);padding:0 8px;box-sizing:border-box}
+#digger-chips button,#digger-fields button{min-height:44px}
+#keeper-chips[hidden],#digger-chips[hidden],#digger-fields[hidden]{display:none}
+#panels>[data-panel].unsupported{display:none!important}
+.digger-row{border:1px solid var(--hairline);border-radius:8px;padding:8px 10px;margin-top:10px;font-size:13px;overflow-wrap:anywhere}
+.digger-row [data-digger-summon]{min-height:44px;margin-top:6px}
+.digger-row details button{display:block;width:100%;text-align:left;margin:4px 0;min-height:44px;font-size:12px;overflow-wrap:anywhere}
 #keeper-form{display:flex;gap:6px;align-items:flex-end;padding:6px 0 8px}
 #keeper-input{flex:1;min-height:44px;max-height:30dvh;font-size:16px;font-family:inherit;background:var(--inset);color:var(--ink);
   border:1px solid var(--hairline);padding:10px;resize:none;box-sizing:border-box}
@@ -804,6 +813,7 @@ body.remote-pending #panels,body.remote-pending #launcher,body.remote-pending #a
       <button class="mini" id="add-linear">➕</button></div>
   </div>
   <div class="panel" data-panel="usage"><h2>🧾 Agent usage</h2><table id="usage"></table></div>
+  <div class="panel unsupported" data-panel="diggers"><h2>⛏️ Diggers</h2><div id="diggers"></div></div>
   <div class="panel" data-panel="tmux"><h2>🤖 Terminal sessions</h2><table id="tmux"></table><button id="kill-open">End sessions…</button></div>
   <div class="panel" data-panel="t3activity"><h2>🛰️ T3 activity</h2><table id="t3activity"><tr><td class="dim">not configured</td></tr></table></div>
   <div class="panel" data-panel="scheduled"><h2>🌙 Overnight report</h2><div id="scheduled"></div></div>
@@ -889,10 +899,13 @@ body.remote-pending #panels,body.remote-pending #launcher,body.remote-pending #a
     <button class="mini" data-keeper-chip="Run doctor">Run doctor</button>
     <button class="mini" data-keeper-chip="Anything to update?">Anything to update?</button>
   </div>
+  <div id="digger-chips" hidden></div>
+  <form id="digger-fields" hidden></form>
   <form id="keeper-form">
     <textarea id="keeper-input" rows="1" maxlength="8000" placeholder="Ask about this grave…" aria-label="Message for the Keeper" enterkeyhint="send" autocomplete="off"></textarea>
     <button class="mini" id="keeper-send" type="submit">Send</button>
     <button class="mini" id="keeper-stop" type="button" hidden>■ Stop</button>
+    <button class="mini" id="digger-finish" type="button" hidden title="Commit, run the checks and record a verdict now">Finish</button>
   </form>
 </aside>
 <script>
@@ -1193,12 +1206,12 @@ const appUrl=u=>portableCompanion?u:remoteGrave?(u==='grave:files'?u:new URL(u,t
 // 'claude' or 'codex' if this tile launches that agent CLI via /term/?arg=…,
 // else null. Gates the ⚡ skip-perms toggle and the -yolo session rewrite.
 const agentArg=u=>{const m=/[?&]arg=(claude|codex)(?=$|&)/.exec(u||'');return m?m[1]:null;};
-const PANEL_NAMES={scheduled:'Overnight report',prs:'Pull requests',ci:'CI status',
+const PANEL_NAMES={diggers:'Diggers',scheduled:'Overnight report',prs:'Pull requests',ci:'CI status',
   linear:'Linear issues',usage:'Agent usage',tmux:'Agent sessions',t3activity:'T3 activity',repos:'Repos',
   sessions:'Session history',inbox:'Inbox',
   stats:'Resources',benchmark:'Development benchmark',actions:'Updates & restart',services:'Services',docker:'Docker',
   journal:'Diagnostics'};
-const PANEL_TABS={scheduled:'work',prs:'work',ci:'work',linear:'work',usage:'work',
+const PANEL_TABS={diggers:'work',scheduled:'work',prs:'work',ci:'work',linear:'work',usage:'work',
   tmux:'work',t3activity:'work',repos:'work',sessions:'work',inbox:'work',
   stats:'system',benchmark:'system',actions:'system',services:'system',docker:'system',journal:'system'};
 let linearConfigured=false,lastMode=null,lastTmux=[];
@@ -1267,10 +1280,10 @@ let scrollInput=0;
 {const qp=new URLSearchParams(location.search).get('tab');
  if(qp==='work'||qp==='system')activeTab=qp;}
 function allApps(){return envApps.concat(cfg&&cfg.custom_apps||[])}
-const PANEL_GROUPS={t3activity:'Active work',tmux:'Active work',prs:'Work queue',linear:'Work queue',ci:'Work queue',
+const PANEL_GROUPS={t3activity:'Active work',diggers:'Active work',tmux:'Active work',prs:'Work queue',linear:'Work queue',ci:'Work queue',
   repos:'Repositories & usage',usage:'Repositories & usage',scheduled:'Recent activity',sessions:'Recent activity',inbox:'Recent activity',
   stats:'Health',services:'Health',docker:'Health',journal:'Health',actions:'Maintenance',benchmark:'Maintenance'};
-const DEFAULT_PANEL_ORDER=['t3activity','tmux','prs','linear','ci','repos','usage','scheduled','sessions','inbox',
+const DEFAULT_PANEL_ORDER=['t3activity','diggers','tmux','prs','linear','ci','repos','usage','scheduled','sessions','inbox',
   'stats','services','docker','journal','actions','benchmark'];
 const OLD_PANEL_ORDER=['prs','linear','ci','t3activity','tmux','scheduled','sessions','usage','inbox','repos',
   'stats','benchmark','actions','services','docker','journal'];
@@ -1403,7 +1416,7 @@ function runCard(r){
     ${preview}
     <div class="dim">${esc(cost)}</div>
     ${quota?`<div class="dim" data-quota>${quota}</div>`:''}
-    <details data-report="${esc(r.name+'-'+r.started)}"><summary>Output</summary>${r.session&&r.log?`<a class="viewlog" href="#" data-log="${esc(r.session)}" data-file="${esc(r.log)}">Transcript</a> · <a class="viewdiff" href="#" data-diff="${esc(r.session)}">Diff</a> · <a href="${esc(appUrl('/term/?arg='+encodeURIComponent(r.session)))}">Open worktree</a>`:''}<pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto">${esc(r.tail||'No output recorded.')}</pre></details>
+    <details data-report="${esc(r.name+'-'+r.started)}"><summary>Output</summary>${r.session&&r.log?`<a class="viewlog" href="#" data-log="${esc(r.session)}" data-file="${esc(r.log)}">Transcript</a> · <a class="viewdiff" href="#" data-diff="${esc(r.session)}">Diff</a> · <a href="${esc(appUrl('/term/?arg='+encodeURIComponent(r.session)))}">Open worktree</a>`:r.diffUrl?`<a class="viewdiff" href="#" data-diff="${esc(r.name)}" data-diff-url="${esc(r.diffUrl)}">Diff</a>`:''}<pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto">${esc(r.tail||'No output recorded.')}</pre></details>
   </div>`;
 }
 function renderOverview(s){
@@ -1957,6 +1970,7 @@ async function poll(){
     render(await r.json());
     if(!document.body.classList.contains('public-view'))pollT3Activity(); // deliberately detached: a remote T3 must not hold up vitals
     if(!keeperInfo&&!portableCompanion&&Date.now()-keeperProbed>60000)paintKeeperEntry();
+    if(!portableCompanion&&Date.now()-diggersProbed>15000)paintDiggers();
   }catch(e){pollFailures++;lastConnectionError=e.message;paintConnection();}
   finally{pollBusy=false;}
 }
@@ -2622,12 +2636,12 @@ async function openLog(name,file){
     $('log-text').textContent=r.ok?(r.text||'(empty log)'):r.output;
   }catch(e){$('log-text').textContent='failed to load: '+e;}
 }
-async function openDiff(name){
+async function openDiff(name,url){
   $('log-title').textContent=`± ${name} — committed work since the base commit`;
   $('log-text').textContent='loading…';
   $('log-dlg').style.display='block';lockBody();
   try{
-    const r=await apiFetch(`api/run-diff?name=${encodeURIComponent(name)}`);
+    const r=await apiFetch(url||`api/run-diff?name=${encodeURIComponent(name)}`);
     $('log-text').textContent=await r.text();
   }catch(e){$('log-text').textContent='failed to load: '+e;}
 }
@@ -2636,7 +2650,7 @@ document.addEventListener('click',async e=>{
   const v=e.target.closest('a.viewlog');
   if(v){e.preventDefault();openLog(v.dataset.log,v.dataset.file);return;}
   const d=e.target.closest('a.viewdiff');
-  if(d){e.preventDefault();openDiff(d.dataset.diff);return;}
+  if(d){e.preventDefault();openDiff(d.dataset.diff,d.dataset.diffUrl);return;}
   const r=e.target.closest('a.resume');
   if(r){e.preventDefault();r.textContent='…';
     const res=await apiFetch('api/session-resume',{method:'POST',
@@ -2937,14 +2951,24 @@ let timer=null;
 // launching the provider again. Cursor polling only; closing the drawer
 // detaches, the turn finishes on the grave, reopening resumes it. Storage is
 // keyed by destination, so another grave never sees this conversation.
+// The same drawer speaks to a digger (docs/DIGGERS.md): drawerDigger is its
+// row from api/v1/diggers, null for the Keeper. A digger turn's ID is its
+// request ID, saved before the ask exactly like a Keeper turn.
 const keeperKey='grave-keeper:'+targetLocation.href;
+const diggerKey=name=>'grave-digger:'+targetLocation.href+':'+name;
 const validId=v=>/^[0-9]{10}-[0-9a-f]{32}$/.test(v);
 let keeperSaved=null,keeperInfo=null,keeperProbed=0,keeperAborter=null,keeperRun=0,keeperReturn=null,keeperRecord=null,keeperCursor=0,keeperTools={},keeperLastOwner='';
-try{const k=JSON.parse(localStorage.getItem(keeperKey));
-  if(k&&validId(k.conversation))keeperSaved={conversation:k.conversation,
-    turn:k.turn&&validId(k.turn.id)&&typeof k.turn.message==='string'?{id:k.turn.id,message:k.turn.message,accepted:!!k.turn.accepted}:null};
-}catch(_){}
-function rememberKeeper(){if(keeperSaved)localStorage.setItem(keeperKey,JSON.stringify(keeperSaved));else localStorage.removeItem(keeperKey);}
+let drawerDigger=null,drawerMode='',diggerFinish=null;
+const drawerKey=()=>drawerDigger?diggerKey(drawerDigger.name):keeperKey;
+function loadSaved(){
+  keeperSaved=null;
+  try{const k=JSON.parse(localStorage.getItem(drawerKey()));
+    if(k&&validId(k.conversation))keeperSaved={conversation:k.conversation,
+      turn:k.turn&&validId(k.turn.id)&&typeof k.turn.message==='string'?{id:k.turn.id,message:k.turn.message,accepted:!!k.turn.accepted}:null};
+  }catch(_){}
+}
+loadSaved();
+function rememberKeeper(){if(keeperSaved)localStorage.setItem(drawerKey(),JSON.stringify(keeperSaved));else localStorage.removeItem(drawerKey());}
 function keeperFetch(path,options={}){
   // Local pages use the versioned owner-gated route directly, like preferenceFetch.
   if(remoteGrave)return apiFetch('api/'+path,options);
@@ -2969,18 +2993,22 @@ async function paintKeeperEntry(){
   $('keeper-open').hidden=!keeperInfo;
 }
 function keeperStatus(text){$('keeper-status').textContent=text;}
-function keeperProviderLine(){return `${keeperInfo.provider}${keeperInfo.model?' · '+keeperInfo.model:''} · speaks only for ${targetLocation.hostname}`;}
+function keeperProviderLine(){
+  if(drawerDigger)return `${drawerDigger.provider}${drawerDigger.model?' · '+drawerDigger.model:''} · ${drawerDigger.identity} · works in ${drawerDigger.repo} on ${targetLocation.hostname}`;
+  return `${keeperInfo.provider}${keeperInfo.model?' · '+keeperInfo.model:''} · speaks only for ${targetLocation.hostname}`;}
 function keeperBusy(on){
   $('keeper-send').hidden=on;$('keeper-stop').hidden=!on;$('keeper-stop').disabled=false;
   ['keeper-new','keeper-conversations'].forEach(id=>$(id).disabled=on);
   $('keeper-chips').querySelectorAll('button').forEach(b=>b.disabled=on);
+  $('digger-chips').querySelectorAll('button').forEach(b=>b.disabled=on);
+  $('digger-finish').hidden=on||!(drawerDigger&&keeperRecord?.phase==='open'&&keeperRecord?.checkout);
 }
 function renderKeeperEvent(event){
   // Model output is text only: textContent everywhere, never markup.
   const log=$('keeper-log');let node;
   const name=(event.name||'tool').replace(/^mcp__keeper__/,'');
   if(event.type==='text'){
-    node=document.createElement('div');node.className='keeper-msg'+(event.name==='owner'?' owner':'');node.textContent=event.text;
+    node=document.createElement('div');node.className='keeper-msg'+(event.name==='owner'?' owner':event.name==='runner'?' dim':'');node.textContent=event.text;
     if(event.name==='owner'){keeperTools={};keeperLastOwner=event.text;}
   }else if(event.type==='error'){node=document.createElement('div');node.className='keeper-msg error';node.textContent='⚠ '+event.text;}
   else if(event.type==='tool_call'||event.type==='tool_result'){
@@ -2998,8 +3026,34 @@ function applyKeeper(data){
   keeperRecord=data;
   for(const event of data.events||[])if(event.seq>keeperCursor){renderKeeperEvent(event);keeperCursor=event.seq;}
 }
+function diggerFinal(data){
+  const name=drawerDigger.name;
+  diggerFinish=null;diggerResult(data);
+  if(data.phase==='finished'){keeperStatus(`Finished: ${data.result?.verdict||data.state}. ${data.message||''}`.trim()+' Use New for the next request.');return;}
+  keeperStatus({
+    succeeded:'Reply complete. Answer to continue, or Finish to commit, check and record a verdict.',
+    idle:keeperProviderLine(),
+    cancelled:`Stopped. ${data.message||''}`.trim(),
+    interrupted:`${data.message||'The digger restarted during this turn; outcome unknown.'} Send again to retry.`,
+    timed_out:`${data.message||'The turn exceeded its time limit.'} Send again to continue.`,
+    failed:`${data.message||'The turn failed.'}${/log ?in|auth|401|credential/i.test(data.message||'')?` Log ${name} in: grave digger login ${name}.`:' Send again to retry.'}`,
+  }[data.state]||data.state);
+}
+function diggerResult(data){
+  // The finished conversation's result, in the Overnight report's card (all text escaped there).
+  const log=$('keeper-log');log.querySelector('.digger-result')?.remove();
+  if(data.phase!=='finished'||!data.result)return;
+  const box=document.createElement('div');box.className='digger-result';
+  const status=data.result_status||'succeeded';
+  box.innerHTML=runCard({name:drawerDigger.name,started:data.finished_at||data.updated_at,status,exit_code:null,
+    reason:status==='succeeded'?'':data.message,repo:[drawerDigger.repo,data.branch].filter(Boolean).join(' · '),
+    result:data.result,tail:data.summary||'',
+    diffUrl:`api/digger-diff?name=${encodeURIComponent(drawerDigger.name)}&id=${encodeURIComponent(data.id)}`});
+  log.appendChild(box);log.scrollTop=log.scrollHeight;
+}
 function keeperFinal(data){
   keeperSaved.turn=null;rememberKeeper();
+  if(drawerDigger)return diggerFinal(data);
   const provider=keeperInfo?.provider||data.provider,host=targetLocation.hostname,message=data.message||'';
   const pending=Object.keys(keeperTools).filter(k=>keeperTools[k]>0);
   let text={
@@ -3020,10 +3074,17 @@ async function followKeeper(turn){
   if(keeperAborter||!keeperSaved)return;
   const myRun=++keeperRun,controller=new AbortController(),conversation=keeperSaved.conversation;
   keeperAborter=controller;keeperBusy(true);
-  const read=()=>keeperJSON('keeper?id='+encodeURIComponent(conversation)+'&after='+(keeperRecord?.id===conversation?keeperCursor:0),null,controller.signal);
+  const digger=drawerDigger,after=()=>keeperRecord?.id===conversation?keeperCursor:0;
+  const read=()=>keeperJSON(digger?`diggers/conversation?name=${encodeURIComponent(digger.name)}&id=${encodeURIComponent(conversation)}&after=${after()}`
+    :'keeper?id='+encodeURIComponent(conversation)+'&after='+after(),null,controller.signal);
   try{
-    let data=await read();
-    if(turn&&data.turn?.id!==turn.id){
+    let data;
+    if(digger&&turn){
+      // The ask is idempotent by its saved request ID: a lost reply is retried with the SAME ID.
+      data=await keeperJSON('diggers/ask',{name:digger.name,conversation,request:turn.id,message:turn.message},controller.signal);
+      keeperSaved.turn.accepted=true;rememberKeeper();
+    }else data=await read();
+    if(!digger&&turn&&data.turn?.id!==turn.id){
       if(data.state==='running')throw Object.assign(new Error('A turn is already running in this conversation'),{status:409,code:'busy'});
       // Unreceived submission: retry the SAME saved turn ID, never a new one.
       data=await keeperJSON('keeper/turn',{conversation,turn:turn.id,message:turn.message},controller.signal);
@@ -3031,8 +3092,17 @@ async function followKeeper(turn){
     while(!controller.signal.aborted){
       applyKeeper(data);
       if(keeperSaved.turn&&data.turn?.id===keeperSaved.turn.id&&!keeperSaved.turn.accepted){keeperSaved.turn.accepted=true;rememberKeeper();}
-      if(data.state!=='running'){if(data.state==='idle')keeperStatus(keeperProviderLine());else keeperFinal(data);break;}
-      keeperStatus(`The Keeper is working… closing this drawer leaves the turn running on ${targetLocation.hostname}.`);
+      // A digger is still working while its ask waits in the inbox, a turn runs, or the result is being packaged.
+      const refused=digger&&diggerFinish&&data.refused?.find(r=>r.request===diggerFinish);
+      if(refused){diggerFinish=null;keeperStatus('Finish refused: '+refused.reason);break;}
+      const working=digger?['queued','running'].includes(data.state)||data.phase==='finishing'||data.settling||data.queued>0
+        ||(diggerFinish&&data.phase==='open'):data.state==='running';
+      if(!working){if(data.state==='idle'&&!digger)keeperStatus(keeperProviderLine());else keeperFinal(data);break;}
+      keeperStatus(!digger?`The Keeper is working… closing this drawer leaves the turn running on ${targetLocation.hostname}.`
+        :data.state==='queued'&&data.live===false?`Queued, but ${digger.name} is not running on ${targetLocation.hostname}; it picks this up once started: grave digger enable ${digger.name}.`
+        :data.state==='queued'||data.queued>0?`Queued for ${digger.name}; it runs one request at a time.`
+        :data.phase==='finishing'||data.state!=='running'?`Packaging the result: committing, running checks ${digger.name} did not choose…`
+        :`${digger.name} is working… closing this drawer leaves the turn running on ${targetLocation.hostname}.`);
       await new Promise(resolve=>{const timer=setTimeout(done,1000);function done(){clearTimeout(timer);controller.signal.removeEventListener('abort',done);resolve();}controller.signal.addEventListener('abort',done,{once:true});});
       if(controller.signal.aborted)break;
       data=await read();
@@ -3050,11 +3120,11 @@ async function followKeeper(turn){
 }
 async function sendKeeper(message){
   message=message.trim();
-  if(!message||keeperAborter||!keeperInfo)return;
+  if(!message||keeperAborter||!(drawerDigger||keeperInfo))return;
   keeperBusy(true);
   try{
     if(!keeperSaved){keeperSaved={conversation:newId(),turn:null};rememberKeeper();} // saved before the request: a lost reply reuses it
-    if(keeperRecord?.id!==keeperSaved.conversation)applyKeeper(await keeperJSON('keeper',{id:keeperSaved.conversation}));
+    if(!drawerDigger&&keeperRecord?.id!==keeperSaved.conversation)applyKeeper(await keeperJSON('keeper',{id:keeperSaved.conversation}));
     keeperSaved.turn={id:newId(),message,accepted:false};rememberKeeper();
     $('keeper-input').value='';$('keeper-input').style.height='';
   }catch(e){
@@ -3067,11 +3137,27 @@ async function sendKeeper(message){
 async function stopKeeper(){
   if(!keeperSaved||!keeperAborter)return;
   $('keeper-stop').disabled=true;keeperStatus('Stopping…');
-  try{await keeperJSON('keeper/cancel',{conversation:keeperSaved.conversation});} // the poll loop reports the cancelled outcome
+  try{await (drawerDigger?keeperJSON('diggers/cancel',{name:drawerDigger.name,conversation:keeperSaved.conversation,request:newId()})
+    :keeperJSON('keeper/cancel',{conversation:keeperSaved.conversation}));} // the poll loop reports the cancelled outcome
   catch(e){keeperStatus('Stop failed: '+e.message);$('keeper-stop').disabled=false;}
+}
+async function finishDigger(){
+  if(!drawerDigger||!keeperSaved||keeperAborter)return;
+  $('digger-finish').hidden=true;keeperStatus('Finishing…');
+  const request=newId();
+  try{await keeperJSON('diggers/finish',{name:drawerDigger.name,conversation:keeperSaved.conversation,request});}
+  catch(e){keeperStatus('Finish failed: '+e.message);return;}
+  diggerFinish=request; // polled until the result lands or the digger refuses this request
+  await followKeeper(null);
 }
 async function resumeKeeper(){
   if(keeperAborter)return;
+  if(drawerDigger){
+    $('keeper-form').querySelectorAll('textarea,button').forEach(el=>el.disabled=!drawerDigger.enabled);
+    keeperStatus(drawerDigger.enabled?keeperProviderLine():`${drawerDigger.name} is disabled; enable it with grave digger enable ${drawerDigger.name}.`);
+    if(keeperSaved)await followKeeper(keeperSaved.turn&&!keeperSaved.turn.accepted?keeperSaved.turn:null);
+    return;
+  }
   try{keeperInfo=await keeperCapabilities();}catch(e){keeperStatus(`Cannot reach ${targetLocation.hostname}: ${e.message}`);return;}
   $('keeper-open').hidden=!keeperInfo;
   $('keeper-form').querySelectorAll('textarea,button').forEach(el=>el.disabled=!keeperInfo);
@@ -3085,10 +3171,10 @@ async function toggleKeeperList(){
   list.hidden=!open;if(!open)return;
   list.textContent='Loading…';
   try{
-    const rows=(await keeperJSON('keeper')).conversations;
+    const rows=(await keeperJSON(drawerDigger?'diggers?name='+encodeURIComponent(drawerDigger.name):'keeper')).conversations;
     list.replaceChildren(...(rows.length?rows.map(c=>{
       const button=document.createElement('button');button.className='mini';
-      button.textContent=`${new Date(c.updated_at*1000).toLocaleString()} · ${c.state} · ${c.summary||'(no reply yet)'}`;
+      button.textContent=`${new Date(c.updated_at*1000).toLocaleString()} · ${c.state}${c.verdict?' · '+c.verdict:''} · ${c.summary||'(no reply yet)'}`;
       button.setAttribute('aria-current',String(c.id===keeperSaved?.conversation));
       button.onclick=()=>{if(keeperAborter)return;keeperSaved={conversation:c.id,turn:null};rememberKeeper();toggleKeeperList();followKeeper(null);};
       return button;
@@ -3102,7 +3188,45 @@ function fitKeeper(){
   drawer.style.height=vv.height+'px';drawer.style.top=vv.offsetTop+'px';
   $('keeper-log').scrollTop=$('keeper-log').scrollHeight;
 }
-function openKeeper(prefill,returnTo=document.activeElement){
+function bindDrawer(digger){
+  // Switching between the Keeper and a digger swaps the saved conversation, title and chips.
+  const mode=digger?digger.name:'';
+  drawerDigger=digger;
+  if(mode!==drawerMode){
+    drawerMode=mode;loadSaved();keeperRecord=null;keeperCursor=0;keeperTools={};keeperLastOwner='';
+    $('keeper-log').replaceChildren();$('keeper-list').hidden=true;$('digger-fields').hidden=true;
+  }
+  $('keeper-title').textContent=digger?`⛏️ ${digger.name}`:'🕯 The Gravekeeper';
+  $('keeper-log').setAttribute('aria-label',digger?`Conversation with ${digger.name}`:'Conversation with the Keeper');
+  $('keeper-input').placeholder=digger?`Ask ${digger.name} for its job…`:'Ask about this grave…';
+  $('keeper-input').setAttribute('aria-label',digger?`Request for ${digger.name}`:'Message for the Keeper');
+  $('keeper-chips').hidden=!!digger;
+  const chips=$('digger-chips');
+  chips.replaceChildren(...(digger?.prompts||[]).map(p=>{
+    const b=document.createElement('button');b.className='mini';b.type='button';b.textContent=p.label;b.dataset.diggerChip=p.label;
+    b.onclick=()=>promptChip(p.template);return b;}));
+  chips.hidden=!chips.children.length;
+  $('digger-finish').hidden=true;
+}
+const FIELD=/\{([a-z][a-z0-9_]{0,19})\}/g;
+function promptChip(template){
+  const fields=[...new Set([...template.matchAll(FIELD)].map(m=>m[1]))];
+  if(!fields.length)return sendKeeper(template);
+  const form=$('digger-fields');
+  form.replaceChildren(...fields.map(f=>{
+    const label=document.createElement('label'),input=document.createElement('input');
+    label.textContent=f.replaceAll('_',' ');input.name=f;input.required=true;input.maxLength=500;input.autocomplete='off';
+    label.appendChild(input);return label;}));
+  const send=document.createElement('button');send.className='mini';send.type='submit';send.textContent='Send';
+  const cancel=document.createElement('button');cancel.className='mini';cancel.type='button';cancel.textContent='Cancel';
+  cancel.onclick=()=>{form.hidden=true;$('keeper-input').focus({preventScroll:true});};
+  form.append(send,cancel);form.hidden=false;
+  form.onsubmit=e=>{e.preventDefault();form.hidden=true;
+    sendKeeper(template.replace(FIELD,(_,f)=>form.elements[f].value.trim()));};
+  form.querySelector('input').focus({preventScroll:true});
+}
+function openKeeper(prefill,returnTo=document.activeElement,digger=null){
+  bindDrawer(digger);
   keeperReturn=returnTo;
   $('keeper').hidden=false;lockBody();fitKeeper();
   $('keeper-host').textContent=targetLocation.hostname;$('keeper-host').style.color=plotAccent(targetLocation.hostname);
@@ -3114,15 +3238,17 @@ function closeKeeper(){
   if($('keeper').hidden)return;
   if(keeperAborter){keeperAborter.abort();keeperAborter=null;keeperBusy(false);}
   $('keeper').hidden=true;$('keeper').style.height='';$('keeper').style.top='';unlockBody();
+  if(drawerDigger)paintDiggers();
   if(keeperReturn?.isConnected)keeperReturn.focus({preventScroll:true});
 }
 $('keeper-open').onclick=()=>openKeeper('',$('keeper-open'));
 $('keeper-x').onclick=closeKeeper;
 $('keeper-stop').onclick=stopKeeper;
+$('digger-finish').onclick=finishDigger;
 $('keeper-new').onclick=()=>{
   if(keeperAborter)return;
   keeperSaved=null;rememberKeeper();keeperRecord=null;keeperCursor=0;keeperTools={};keeperLastOwner='';
-  $('keeper-log').replaceChildren();if(keeperInfo)keeperStatus(keeperProviderLine());$('keeper-input').focus({preventScroll:true});
+  $('keeper-log').replaceChildren();if(keeperInfo||drawerDigger)keeperStatus(keeperProviderLine());diggerFinish=null;$('digger-finish').hidden=true;$('keeper-input').focus({preventScroll:true});
 };
 $('keeper-conversations').onclick=toggleKeeperList;
 $('keeper-chips').querySelectorAll('[data-keeper-chip]').forEach(b=>b.onclick=()=>sendKeeper(b.dataset.keeperChip));
@@ -3133,6 +3259,76 @@ $('keeper').addEventListener('keydown',trapTab);
 window.visualViewport?.addEventListener('resize',fitKeeper);
 window.visualViewport?.addEventListener('scroll',fitKeeper);
 paintKeeperEntry();
+// ---------- Diggers: the Work tab section; Summon opens the drawer above ----------
+// Rows and conversations are read from the grave; every turn runs in the
+// digger's own unit, so this page only reads records and writes requests.
+let diggersProbed=0,diggersSeen='',diggerRows=[];
+const deepDigger=new URLSearchParams(location.search).get('digger'),deepConversation=new URLSearchParams(location.search).get('conversation');
+let deepPending=!!deepDigger;
+function diggerLine(d){
+  const state=!d.enabled?'disabled':!d.live?'not running':d.paused?'paused (gaming mode)':d.running?'working':'idle';
+  const login=d.loggedIn===true?'logged in':d.loggedIn===false?'not logged in':'login unknown';
+  return `${state} · ${login} · ${counted(d.queue,'queued request')} · today ${counted(d.today.turns,'turn')}, $${Number(d.today.usd||0).toFixed(2)}${d.last_verdict?' · last: '+d.last_verdict:''}`;
+}
+async function paintDiggers(){
+  diggersProbed=Date.now();
+  const panel=document.querySelector('[data-panel="diggers"]');
+  let data;
+  try{
+    const info=await capabilities();
+    if(!info.routes.GET.includes('diggers'))throw Object.assign(new Error('unsupported'),{status:501});
+    data=await keeperJSON('diggers');
+  }catch(e){
+    if(e.status===501){panel.classList.add('unsupported');diggersProbed=Date.now()+300000;return;}
+    panelSummary('diggers',e.message,true);return;
+  }
+  panel.classList.remove('unsupported');
+  diggerRows=data.diggers||[];
+  activePreview('diggers',diggerRows.length);
+  const working=diggerRows.filter(d=>d.running).length,bad=(data.invalid||[]).length;
+  panelSummary('diggers',diggerRows.length?`${counted(diggerRows.length,'digger')}${working?` · ${working} working`:''}${bad?` · ${bad} invalid`:''}`:'none defined',bad>0);
+  const seen=JSON.stringify(data);
+  if(seen!==diggersSeen){
+    diggersSeen=seen;
+    const open=new Set([...document.querySelectorAll('#diggers details[open]')].map(d=>d.dataset.diggerConversations));
+    $('diggers').innerHTML=(diggerRows.length?'':'<p class="dim">No diggers on this grave. Define one: <code>grave digger new &lt;name&gt; --repo &lt;repo&gt;</code></p>')
+      +diggerRows.map(d=>`<div class="digger-row" data-digger="${esc(d.name)}">
+        <div class="runhead"><b>${esc(d.name)}</b> <span class="dim2">${esc(d.identity)} · ${esc(d.provider)}${d.model?' · '+esc(d.model):''} · ${esc(d.repo)}</span></div>
+        <div class="dim">${esc(diggerLine(d))}</div>
+        <button class="mini" data-digger-summon="${esc(d.name)}" ${d.enabled?'':'disabled'}>⛏️ Summon</button>
+        <details data-digger-conversations="${esc(d.name)}" ${open.has(d.name)?'open':''}><summary>Conversations</summary><div class="dim">Loading…</div></details>
+      </div>`).join('')
+      +(data.invalid||[]).map(d=>`<div class="digger-row"><b>${esc(d.name)}</b> <span class="verdict" style="color:var(--crit)">invalid</span><div class="dim">${esc(d.error)}</div></div>`).join('');
+    $('diggers').querySelectorAll('[data-digger-summon]').forEach(b=>b.onclick=()=>openKeeper('',b,diggerRows.find(d=>d.name===b.dataset.diggerSummon)));
+    $('diggers').querySelectorAll('details[data-digger-conversations]').forEach(det=>{
+      det.ontoggle=()=>{if(det.open)diggerConversations(det);};
+      if(det.open)diggerConversations(det);
+    });
+  }
+  if(deepPending){
+    deepPending=false;
+    const row=diggerRows.find(d=>d.name===deepDigger);
+    if(row){if(validId(deepConversation))localStorage.setItem(diggerKey(row.name),JSON.stringify({conversation:deepConversation,turn:null}));openKeeper('',null,row);}
+  }
+}
+async function diggerConversations(det){
+  const name=det.dataset.diggerConversations,box=det.lastElementChild;
+  try{
+    const rows=(await keeperJSON('diggers?name='+encodeURIComponent(name))).conversations;
+    box.replaceChildren(...(rows.length?rows.map(c=>{
+      const b=document.createElement('button');b.className='mini';
+      b.textContent=`${new Date(c.updated_at*1000).toLocaleString()} · ${c.phase==='finished'?(c.verdict||c.state):c.state} · ${c.summary||'(no reply yet)'}`;
+      b.onclick=()=>{
+        if(drawerMode===name&&keeperAborter)return;
+        localStorage.setItem(diggerKey(name),JSON.stringify({conversation:c.id,turn:null}));
+        if(drawerMode===name)drawerMode=''; // force a reload of the saved conversation
+        openKeeper('',b,diggerRows.find(d=>d.name===name));
+      };
+      return b;
+    }):[Object.assign(document.createElement('p'),{className:'dim',textContent:'No conversations yet.'})]));
+  }catch(e){box.textContent=e.message;}
+}
+paintDiggers();
 function schedule(){clearInterval(timer);
   // game mode: back off to 30s — the dashboard must not cost resources
   timer=setInterval(poll,lastMode==='gaming'?30000:((cfg&&cfg.poll_ms)||5000));}

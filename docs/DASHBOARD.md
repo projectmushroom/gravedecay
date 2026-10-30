@@ -16,7 +16,7 @@ services reported by the available data sources. These are reported states,
 not inferred agent liveness. Selecting a notice opens its section, including a
 normally hidden widget, without changing saved visibility.
 
-The default order is active work (T3 and terminal sessions), work queue (PRs,
+The default order is active work (T3, diggers and terminal sessions), work queue (PRs,
 Linear and CI), repositories and usage, then recent activity (overnight reports,
 session history and notification history). Active sections initially show up
 to three records when present; **Show all** opens the full list. Empty active
@@ -101,6 +101,29 @@ restart are reported with the next step. Conversation identity is stored per
 grave in this browser, so switching graves never carries a pending turn along.
 Runner and limits: [API.md](API.md#gravekeeper-conversations),
 [SECURITY.md](SECURITY.md#the-gravekeeper).
+
+## Diggers
+
+**Diggers**, under active work on the Work tab, lists each digger defined on
+this grave (single-owner Linux only; the section is absent elsewhere). It shows
+the tier, provider and repository, whether the digger is enabled, running,
+paused for gaming mode and logged in, its queue depth, today's turns and cost,
+and its last verdict. **Conversations** on a row lists that digger's saved
+conversations; an invalid definition shows its error instead of a row.
+
+**Summon** opens the Keeper's drawer bound to that digger (⛏️ and its name in
+the header). Each drawer thread is one conversation: one checkout, the digger's
+turns, then the result. The definition's `prompts` become chips; a `{field}` in
+a template asks for each field before sending. A request that waits in the
+inbox reads as queued, and as not running when the digger's unit is stopped.
+**Stop** cancels the turn. When the digger ends its reply with the done marker,
+or you press **Finish**, the runner commits, runs its checks and the drawer
+shows the Overnight report's review card with a **Diff** link. As with the
+Keeper, IDs are saved before each request, so closing the drawer or reloading
+the PWA resumes the same conversation without re-sending. A finished
+conversation's notification opens it through
+`/grave/?tab=work&digger=<name>&conversation=<id>`. Lifecycle and records:
+[DIGGERS.md](DIGGERS.md).
 
 ## Host and access differences
 

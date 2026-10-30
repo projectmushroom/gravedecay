@@ -60,6 +60,7 @@ Subscribe to the topic in the ntfy app, then `grave notify "hello"`.
 | `bell` | an agent rings the terminal bell or asks for attention | tmux `alert-bell`, Claude `Notification` hook | that session's terminal, or T3 root |
 | `agent-done` | an agent CLI turn completes, including a Gravekeeper turn | Claude `Stop` hook, Codex `notify` | that session's terminal, or T3 root |
 | `agent-done` | a scheduled run ends; the title carries the lifecycle status and the runner's verdict | `grave agents` runner ([SCHEDULES.md](SCHEDULES.md)) | the Overnight report's review cards on the dashboard origin (`/grave/?tab=work`) |
+| `agent-done` | a digger conversation finishes; title `Digger <name>: <verdict>` | the owner's scheduler, from the digger's records ([DIGGERS.md](DIGGERS.md)) | that conversation in the Diggers drawer (`/grave/?tab=work&digger=<name>&conversation=<id>`) |
 | `unit-failure` | a platform unit enters failed state (t3code, dashboard, terminal, gateway, upgrades, gamewatch, selfheal) | `OnFailure=gravedecay-notify@%n` | System tab |
 | `doctor` | the set of failing `grave doctor` checks changes (a new failure, or recovery) | doctor itself | System tab |
 | `digest` | every morning ~08:00 — one summary of the graveyard shift: agent sessions, spend, doctor verdict, backup freshness | `gravedecay-digest.timer` → `grave digest` | dashboard |
