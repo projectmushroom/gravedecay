@@ -383,6 +383,15 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(self.mode(copied), 0o755)
         self.assertTrue((copied.parent.parent / "codex-resources/rg").exists())
         self.assertFalse(module.install_tool("codex", str(binary)))   # unchanged source: no second copy
+        # Found on the box: a purge that followed a link in a digger HOME left the shared copy 0600.
+        home = self.root / "diggers/victim"
+        (home / ".codex/tmp").mkdir(parents=True)
+        (home / ".codex/tmp/codex").symlink_to(copied)
+        module.make_writable(home)
+        self.assertEqual(self.mode(copied), 0o755)                    # never through a link
+        copied.chmod(0o600)
+        self.assertTrue(module.install_tool("codex", str(binary)))    # a copy others cannot run is rebuilt
+        self.assertEqual(self.mode((link.parent / os.readlink(link)).resolve()), 0o755)
 
 
     def test_the_owner_tool_is_found_past_a_launcher_script(self):

@@ -519,6 +519,9 @@ def install_tool(provider, path):
         pass
     version = f"{provider}-{digest(source)}"
     target = TOOLS / version
+    binary = (Path(version) / "install" / source.relative_to(tree)) if tree else Path(version) / "install" / provider
+    if target.exists() and not (os.path.isfile(TOOLS / binary) and os.stat(TOOLS / binary).st_mode & 0o001):
+        shutil.rmtree(target)  # a copy whose binary others cannot execute is rebuilt, never reused
     if not target.exists():
         partial = Path(tempfile.mkdtemp(dir=TOOLS, prefix=".partial-"))
         try:
@@ -540,7 +543,6 @@ def install_tool(provider, path):
             os.rename(partial, target)
         finally:
             shutil.rmtree(partial, ignore_errors=True)
-    binary = (Path(version) / "install" / source.relative_to(tree)) if tree else Path(version) / "install" / provider
     link = TOOLS / "bin" / f".{provider}.new"
     if os.path.lexists(link):
         os.unlink(link)
