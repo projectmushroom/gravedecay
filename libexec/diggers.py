@@ -1851,7 +1851,7 @@ def print_result(record):
 def follow(definition, conversation, request_id, until_finished=False, cursor=0):
     """Print a conversation's events after ``cursor`` as they land until the request's
     turn has settled (or, with ``until_finished``, the result is in). Returns the exit status."""
-    said = False
+    said, started = False, time.monotonic()
     while True:
         record = read_conversation(definition, conversation)
         status = loop_status(definition)
@@ -1876,13 +1876,13 @@ def follow(definition, conversation, request_id, until_finished=False, cursor=0)
                 if record["state"] not in ("succeeded", "idle"):
                     print(f"{record['state']}: {record['message']}", file=sys.stderr)
                 return 0 if record["state"] in ("succeeded", "idle") else 1
-        elif not said:
+        elif not said and live(status):
             said = True
-            if not live(status):
-                print(f"queued, but {definition['name']} is not running; it starts on: grave digger enable"
-                      f" {definition['name']}", file=sys.stderr)
-                return 3
             print("queued", file=sys.stderr)
+        elif not said and time.monotonic() - started > 15:  # a just-restarted loop has not beaten yet
+            print(f"queued, but {definition['name']} is not running; it starts on: grave digger enable"
+                  f" {definition['name']}", file=sys.stderr)
+            return 3
         time.sleep(1)
 
 
