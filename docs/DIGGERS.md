@@ -293,6 +293,30 @@ digger cannot read the notification secrets).
 checkout whose branch is untouched, or merged and pushed, is removed with its
 pin; records stay. `grave agents prune` leaves digger checkouts alone.
 
+## Selftest
+
+`grave digger selftest` checks the whole path on this box, unattended:
+
+1. It creates a scratch repo with a real stdio MCP tool and a `make test` check.
+2. It defines `selftest-own` (shared, on the owner's login) and `selftest`
+   (dedicated), each through `grave digger new` and its real unit.
+3. Each digger gets one real conversation, which must end with
+   `ready-for-review`, one commit, the pinned tool called and the owner's
+   check passing.
+4. The doctor findings for both must be clean.
+5. It removes every trace. `--keep` leaves the diggers in place for
+   inspection.
+
+It exits 1 on a failure. A dedicated digger needs its own login, which a
+script cannot create. With no key the selftest checks that the dedicated digger
+refuses the request with the login hint, and warns. With a Codex API key in
+`config/secrets/digger-selftest-key` (0600) the dedicated digger logs in with
+it and runs the full conversation too.
+
+Each run costs one or two short provider turns. Agents start it remotely as
+the `digger-selftest` durable operation ([API.md](API.md)), the same way as
+`doctor`.
+
 ## The dashboard
 
 The Work tab's **Diggers** section lists each digger (tier, provider, login,

@@ -410,6 +410,8 @@ ACTIONS = {
     "update-grave": ["sudo", "-n", "systemctl", "--no-block", "start",
                      "gravedecay-upgrade.service"],
     "doctor": [GRAVE, "doctor"],
+    # End-to-end digger check an agent can run unattended (docs/DIGGERS.md "Selftest").
+    "digger-selftest": [GRAVE, "digger", "selftest"],
     # one-time device pairing token for T3 (viewer-gated like everything
     # else); --base-url is appended per-request from the Host header so the
     # printed /pair#token=... link lands on the right origin
@@ -506,7 +508,7 @@ def operation_actions():
     # Pairing output contains credentials. Updater/benchmark have dedicated jobs.
     if MACOS or not client_api_supported():
         return []
-    return sorted(set(ACTIONS) & {"doctor", "gaming", "gaming-kill", "developer",
+    return sorted(set(ACTIONS) & {"doctor", "digger-selftest", "gaming", "gaming-kill", "developer",
                   "restart-t3", "update-t3", "t3connect-off", "reboot"})
 
 

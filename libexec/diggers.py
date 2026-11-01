@@ -45,6 +45,8 @@ POLICIES = HOMES / ".policy"
 GRAVE = os.environ.get("GRAVE_BIN", "/usr/local/bin/grave")
 # Tests run every identity as the current user and skip useradd/chown/runuser/systemctl.
 TEST = os.environ.get("GRAVE_DIGGER_TEST") == "1"
+# Tests of the selftest: a "unit" is a background serve process instead of systemd.
+TEST_UNITS = TEST and os.environ.get("GRAVE_DIGGER_TEST_UNITS") == "1"
 NAME = re.compile(r"[a-z][a-z0-9-]{1,19}")
 RESERVED = ("keeper",)
 IDENTITIES = ("shared", "separate-login", "dedicated")
@@ -1037,6 +1039,7 @@ def cmd_remove(args):
     if dedicated:
         root("remove", args.name, *(["--purge"] if args.purge else []), capture=True)
     if args.purge:
+        make_writable(STORE / args.name)  # pinned tools are read-only
         shutil.rmtree(STORE / args.name)
         print(f"{args.name}: purged (definition and login"
               + (", Unix user, HOME and clone deleted)" if dedicated else " deleted)"))
@@ -1287,10 +1290,13 @@ def read_only(path):
 
 
 def make_writable(path):
+    """Owner write bits back so a pin can be deleted. Never follows a link: root runs
+    this over a dedicated digger's HOME, where the digger could plant one."""
     for directory, dirs, files in os.walk(path):
         os.chmod(directory, 0o700)
         for name in files:
-            os.chmod(Path(directory, name), 0o600)
+            if not os.path.islink(Path(directory, name)):
+                os.chmod(Path(directory, name), 0o600)
 
 
 def dashboard_module():
@@ -1515,6 +1521,11 @@ class DiggerRunner(keeper.Runner):
     def ask(self, request):
         d, cid, rid = self.definition, request["conversation"], request["id"]
         self.seen.add(rid)
+        if not self.login:  # probe again now: a login since the last probe must not be refused
+            self.login, self.login_at = self.probe_login(), time.time()
+        if not self.login:
+            self.reject(rid, f"{d['provider']} is not logged in for this digger — run: grave digger login {d['name']}")
+            return
         try:
             record = self._read(self._path(cid))
             if record is None:
@@ -1643,6 +1654,8 @@ class DiggerRunner(keeper.Runner):
         d = self.definition
         home = layout(d)["provider_home"] if d["identity"] == "separate-login" else None
         extra = {("CODEX_HOME" if d["provider"] == "codex" else "CLAUDE_CONFIG_DIR"): home} if home else {}
+        if d["identity"] == "dedicated":
+            extra["HOME"] = layout(d)["home"]  # its own login, whatever HOME the loop inherited
         try:
             result = subprocess.run([self.binary, *status_argv(d["provider"])[1:]], capture_output=True, text=True,
                                     timeout=30, env=scrubbed(extra))
@@ -1801,15 +1814,33 @@ def unit(definition, start):
     root("unit", definition["name"], "start" if start else "stop", capture=True)
 
 
+def test_unit(name, definition=None):
+    """TEST_UNITS: stop the background loop named in a status file, then start one."""
+    for status in (STORE / name / "conversations/.status", RECORDS / name / ".status"):
+        try:
+            os.kill(json.loads(status.read_text())["pid"], signal.SIGTERM)
+            time.sleep(1)
+        except (OSError, ValueError, KeyError):
+            pass
+    if definition:
+        identity = ["--identity", "dedicated"] if definition["identity"] == "dedicated" else []
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "serve", name, *identity],
+                         start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def root_unit(args):
     check_name(args.name)
     units = [f"gravedecay-digger@{args.name}.service", f"gravedecay-digger-owner@{args.name}.service"]
     if args.action == "stop":
+        if TEST_UNITS:
+            test_unit(args.name)
         if not TEST:
             subprocess.run(["systemctl", "disable", "--now", *units], capture_output=True, check=False)
         return
     definition, _ = load(args.name)
     wanted = unit_name(definition)
+    if TEST_UNITS:
+        test_unit(args.name, definition)
     if TEST:
         return
     subprocess.run(["systemctl", "disable", "--now", *[u for u in units if u != wanted]], capture_output=True, check=False)
@@ -2039,6 +2070,159 @@ def notify_finished(seen):
                 pass  # the record stays; a page is best effort
 
 
+# --------------------------------------------------------------- selftest ----
+SELFTEST_REPO = "digger-selftest"
+SELFTEST_KEY = ROOT / "config/secrets/digger-selftest-key"   # optional: a Codex API key for the dedicated run
+SELFTEST_ASK = "Create white label acme with domain acme.example."
+SELFTEST_MCP = r'''"""One validated operation: create config/whitelabels/<name>.json. Stdio MCP, stdlib only."""
+import json, os, re, sys
+
+TOOL = {"name": "create_whitelabel", "description": "Create one white label: a lowercase name and a domain.",
+        "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}, "domain": {"type": "string"}},
+                        "required": ["name", "domain"]}}
+
+
+def call(args):
+    name, domain = args.get("name", ""), args.get("domain", "")
+    if not re.fullmatch(r"[a-z][a-z0-9-]{1,30}", name) or not re.fullmatch(r"[a-z0-9.-]+\.[a-z]{2,}", domain):
+        raise ValueError("name must be lowercase letters, digits or hyphens and domain a hostname")
+    os.makedirs("config/whitelabels", exist_ok=True)
+    path = f"config/whitelabels/{name}.json"
+    if os.path.exists(path):
+        raise ValueError(name + " already exists")
+    with open(path, "w") as out:
+        json.dump({"name": name, "domain": domain}, out, indent=2)
+        out.write("\n")
+    return "created " + path
+
+
+for line in sys.stdin:
+    try:
+        request = json.loads(line)
+    except ValueError:
+        continue
+    method, rid = request.get("method"), request.get("id")
+    if rid is None:
+        continue
+    if method == "initialize":
+        result = {"protocolVersion": request.get("params", {}).get("protocolVersion", "2024-11-05"),
+                  "capabilities": {"tools": {}}, "serverInfo": {"name": "whitelabel", "version": "1"}}
+    elif method == "tools/list":
+        result = {"tools": [TOOL]}
+    elif method == "tools/call":
+        try:
+            text, error = call(request["params"].get("arguments") or {}), False
+        except Exception as problem:
+            text, error = str(problem), True
+        result = {"content": [{"type": "text", "text": text}], "isError": error}
+    else:
+        result = {}
+    print(json.dumps({"jsonrpc": "2.0", "id": rid, "result": result}), flush=True)
+'''
+
+
+def selftest_repo():
+    repo = ROOT / "repos" / SELFTEST_REPO
+    (repo / ".grave/mcp").mkdir(parents=True)
+    (repo / ".grave/diggers").mkdir()
+    (repo / ".grave/mcp/whitelabel.py").write_text(SELFTEST_MCP)
+    for name in ("selftest", "selftest-own"):
+        (repo / f".grave/diggers/{name}.md").write_text(
+            "White labels live in config/whitelabels/<name>.json; create them only with the create_whitelabel tool.\n")
+    (repo / "Makefile").write_text("test:\n\tpython3 -c \"import glob, json; [json.load(open(f)) for f in"
+                                   " glob.glob('config/whitelabels/*.json')]\"\n")
+    git("init", "-q", "-b", "main", repo)
+    git("-C", repo, "add", "-A")
+    git("-C", repo, "-c", "user.name=grave selftest", "-c", "user.email=selftest@localhost", "commit", "-q", "-m", "selftest")
+
+
+def selftest_cleanup():
+    """Every trace of a run: both diggers, the owner tier's checkouts and the repo."""
+    repo = ROOT / "repos" / SELFTEST_REPO
+    for name in ("selftest-own", "selftest"):
+        if not (STORE / name).is_dir():
+            continue
+        try:
+            for record in read_records(load(name)[0]):
+                if record.get("session"):  # owner tier: a worktree of the selftest repo
+                    subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", record["checkout"]],
+                                   capture_output=True)
+                    shutil.rmtree(ROOT / "agents" / record["session"], ignore_errors=True)
+        except (DiggerError, OSError):
+            pass
+        subprocess.run([sys.executable, str(Path(__file__).resolve()), "remove", name, "--purge"], capture_output=True)
+    shutil.rmtree(ROOT / "worktrees" / SELFTEST_REPO, ignore_errors=True)
+    shutil.rmtree(repo, ignore_errors=True)
+
+
+def selftest_run(name, lines, expect_refusal=False):
+    """One real conversation through the CLI and the digger's unit; findings appended."""
+    asked = subprocess.run([sys.executable, str(Path(__file__).resolve()), "ask", name, SELFTEST_ASK],
+                           capture_output=True, text=True, timeout=1800)
+    why = f" (exit {asked.returncode}: {asked.stderr.strip()[-300:]})"
+    if expect_refusal:
+        ok = asked.returncode == 1 and "not logged in" in asked.stderr
+        lines.append(["ok" if ok else "fail", f"{name}: an unlogged digger refuses the request with the login hint"
+                      + ("" if ok else why)])
+        return
+    finished = [r for r in read_records(load(name)[0]) if r.get("phase") == "finished"]
+    result = finished[0]["result"] if finished else {}
+    tools = sorted({e["name"] for e in finished[0]["events"] if e["type"] == "tool_call"}) if finished else []
+    for passed, what, detail in (
+            (asked.returncode == 0, "the conversation ends on the done marker", why),
+            (result.get("verdict") == "ready-for-review", "verdict ready-for-review", f" (got {result.get('verdict')})"),
+            ((result.get("changes") or {}).get("commits") == 1, "one commit on the conversation branch", ""),
+            (any("create_whitelabel" in t for t in tools), "the pinned MCP tool was called", f" (tools: {tools})"),
+            ([c.get("source") for c in result.get("checks", [])] == ["owner"], "the owner's check ran and passed", "")):
+        lines.append(["ok" if passed else "fail", f"{name}: {what}" + ("" if passed else detail)])
+
+
+def cmd_selftest(args):
+    """End to end on this grave, unattended: a scratch repo with a real MCP tool, a
+    shared digger on the owner's login and a dedicated one, each through the real CLI
+    and its unit, then their doctor findings, then every trace removed. Exit 1 on a
+    failure; warnings name what could not run (no owner login, no selftest key)."""
+    me, lines = [sys.executable, str(Path(__file__).resolve())], []
+    selftest_cleanup()
+    selftest_repo()
+    provider = next((p for p in ("codex", "claude") if shutil.which(p) and logged_in(
+        p, subprocess.run(status_argv(p), capture_output=True, text=True, timeout=30, env=scrubbed()))), None)
+    if provider is None:
+        lines.append(["warn", "no provider is logged in as the owner: conversation steps skipped"])
+    try:
+        common = ["--repo", SELFTEST_REPO, "--provider", provider or "codex",
+                  "--mcp", "whitelabel=python3 .grave/mcp/whitelabel.py", "--check", "make test"]
+        for name, identity in (("selftest-own", "shared"), ("selftest", "dedicated")):
+            made = subprocess.run([*me, "new", name, "--identity", identity, *common], capture_output=True, text=True,
+                                  timeout=900)
+            lines.append(["ok" if made.returncode == 0 else "fail", f"{name}: {identity} digger defined and its unit started"
+                          + ("" if made.returncode == 0 else ": " + made.stderr.strip()[-300:])])
+            if made.returncode or provider is None:
+                continue
+            if identity == "shared":
+                selftest_run(name, lines)
+            elif provider == "codex" and SELFTEST_KEY.is_file():
+                key = read_private(SELFTEST_KEY, owner_uid(), 4096)
+                login = subprocess.run([*me, "login", name, "--api-key"], input=key, capture_output=True, text=True,
+                                       timeout=120)
+                lines.append(["ok" if login.returncode == 0 else "fail", f"{name}: its own Codex login from the selftest key"])
+                selftest_run(name, lines)
+            else:
+                selftest_run(name, lines, expect_refusal=True)
+                lines.append(["warn", f"{name}: the full dedicated run needs its own login; put a Codex API key in"
+                                      f" {SELFTEST_KEY} (0600) to include it"])
+        problems = [m for level, m in check_lines() if level == "fail"
+                    and m.startswith(("digger selftest:", "digger selftest-own:"))]
+        lines += [["fail", "doctor: " + m] for m in problems] or [["ok", "doctor: no failures for the selftest diggers"]]
+    finally:
+        if not args.keep:
+            selftest_cleanup()
+    for level, message in lines:
+        print(f"{level}\t{message}", flush=True)
+    if any(level == "fail" for level, _ in lines):
+        sys.exit(1)
+
+
 # ------------------------------------------------------------------ doctor ----
 def owner_home_closed():
     home = Path(pwd.getpwuid(owner_uid()).pw_dir)
@@ -2241,11 +2425,12 @@ def main(argv):
     p.add_argument("--console", action="store_true", help="Claude: Anthropic Console (API billing) instead of a subscription")
     p = sub.add_parser("remove"); p.add_argument("name"); p.add_argument("--purge", action="store_true")
     sub.add_parser("check")
+    p = sub.add_parser("selftest"); p.add_argument("--keep", action="store_true", help="leave the selftest diggers in place")
     args = parser.parse_args(argv)
     {"new": cmd_new, "list": cmd_list, "show": cmd_show, "status": cmd_status, "login": cmd_login,
      "enable": cmd_enable, "disable": lambda a: cmd_enable(a, False), "remove": cmd_remove,
      "check": cmd_check, "serve": cmd_serve, "ask": cmd_ask, "resume": cmd_ask, "cancel": cmd_cancel,
-     "finish": cmd_finish, "kill": cmd_kill, "prune": cmd_prune}[args.verb](args)
+     "finish": cmd_finish, "kill": cmd_kill, "prune": cmd_prune, "selftest": cmd_selftest}[args.verb](args)
 
 
 if __name__ == "__main__":

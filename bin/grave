@@ -2965,6 +2965,8 @@ grave — gravedecay appliance control 🪦
   grave digger [resume <n> <id> "<reply>"|cancel <n> <id>|finish <n> <id>|kill <n>|prune <n>]
                              reply, stop a turn, package the result now, stop
                              everything (disables it), remove merged checkouts
+  grave digger selftest      ⛏️ end to end on this box with throwaway diggers;
+                             exit 1 on a failure (also the digger-selftest action)
 
   grave preview <port>       expose a running dev server (e.g. :3000) to the
                              tailnet at https://<box>.ts.net:<port> — root path,

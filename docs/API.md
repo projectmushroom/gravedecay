@@ -141,7 +141,8 @@ currently assemble a Blob in the client and are limited to 64 MiB; use the
 destination directly for larger files. Local downloads retain browser streaming.
 
 Console actions advertised in `capabilities.operations.actions` use the durable
-operation protocol below. Other mutations are not automatically retried. Existing
+operation protocol below. `doctor` and `digger-selftest` are the two an agent
+uses to verify a change on a grave without a terminal. Other mutations are not automatically retried. Existing
 update/benchmark status can be queried after reconnect. An interrupted legacy
 stream does not cancel its server operation.
 `grave doctor`'s dashboard auth probe checks version/capabilities, operation journal

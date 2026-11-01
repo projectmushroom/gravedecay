@@ -416,7 +416,7 @@ args = sys.argv[1:]
 home = os.environ.get("CODEX_HOME") or os.path.join(os.environ["HOME"], ".codex")
 if args[:2] == ["login", "status"]:
     sys.exit(0 if os.path.exists(os.path.join(home, "auth.json")) else 1)
-if args[:2] == ["login", "--device-auth"]:
+if args[:2] in (["login", "--device-auth"], ["login", "--with-api-key"]):
     os.makedirs(home, exist_ok=True); open(os.path.join(home, "auth.json"), "w").write("{}"); sys.exit(0)
 if args[:1] != ["exec"]:
     sys.exit(2)
@@ -429,11 +429,17 @@ emit({"type": "thread.started", "thread_id": args[2] if args[1] == "resume" else
 if "sleep" in prompt:
     time.sleep(30)
 config = dict(args[i + 1].split("=", 1) for i, word in enumerate(args) if word == "-c")
-if "acme" in prompt:   # the one tool: as Codex would, start the configured MCP command
-    command = [json.loads(config["mcp_servers.wl.command"]), *json.loads(config["mcp_servers.wl.args"]), "acme"]
-    emit({"type": "item.started", "item": {"type": "mcp_tool_call", "server": "wl", "tool": "create", "arguments": {"name": "acme"}}})
-    subprocess.run(command, check=True)
-    emit({"type": "item.completed", "item": {"type": "mcp_tool_call", "server": "wl", "tool": "create", "result": "created"}})
+servers = sorted({key.split(".")[1] for key in config if key.startswith("mcp_servers.")})
+if "acme" in prompt and servers:   # the one tool: as Codex would, start the configured MCP server and call it
+    server = servers[0]
+    command = [json.loads(config[f"mcp_servers.{server}.command"]), *json.loads(config[f"mcp_servers.{server}.args"])]
+    calls = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+             {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+              "params": {"name": "create_whitelabel", "arguments": {"name": "acme", "domain": "acme.example"}}}]
+    emit({"type": "item.started", "item": {"type": "mcp_tool_call", "server": server, "tool": "create_whitelabel", "arguments": {"name": "acme"}}})
+    reply = subprocess.run(command, input="".join(json.dumps(c) + "\n" for c in calls), capture_output=True, text=True, check=True)
+    text = json.loads(reply.stdout.splitlines()[-1])["result"]["content"][0]["text"]
+    emit({"type": "item.completed", "item": {"type": "mcp_tool_call", "server": server, "tool": "create_whitelabel", "result": text}})
 sessions = os.path.join(home, "sessions/2026/10/30")
 os.makedirs(sessions, exist_ok=True)
 with open(os.path.join(sessions, "rollout-%d.jsonl" % time.time_ns()), "w") as rollout:
@@ -464,10 +470,7 @@ text = "Here is what I would do." + ("\n[[digger:done]]" if "finish up" in promp
 emit({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
 emit({"type": "result", "subtype": "success", "session_id": "session-1"})
 """
-WL_TOOL = """import json, os, sys
-os.makedirs("config/whitelabels", exist_ok=True)
-json.dump({"name": sys.argv[1]}, open(f"config/whitelabels/{sys.argv[1]}.json", "w"))
-"""
+WL_TOOL = load("diggers_selftest_tool", {}).SELFTEST_MCP   # a real stdio MCP server
 
 
 class RunnerTests(unittest.TestCase):
@@ -564,7 +567,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual([c["source"] for c in result["checks"]], ["owner"])
         self.assertEqual(result["quota"]["windows"][0]["window_minutes"], 300)
         self.assertEqual(result["cost"]["model"], "gpt-5-codex")
-        self.assertEqual([e["name"] for e in record["events"] if e["type"] == "tool_call"], ["wl__create"])
+        self.assertEqual([e["name"] for e in record["events"] if e["type"] == "tool_call"], ["wl__create_whitelabel"])
         home = self.root / "diggers/wl"
         checkout = home / "worktrees" / cid
         self.assertEqual(record["checkout"], str(checkout))
@@ -580,7 +583,7 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("[[digger:done]]", instructions)
         self.assertTrue(providers.policy_ok(call["argv"]))
         self.assertFalse(os.access(pin / ".grave/mcp/wl.py", os.W_OK) and os.stat(pin).st_mode & 0o200)
-        self.assertIn("+{\"name\": \"acme\"}", (records / f"{cid}.diff").read_text())
+        self.assertIn('+  "name": "acme",', (records / f"{cid}.diff").read_text())
         self.assertEqual(stat.S_IMODE(os.stat(records / f"{cid}.json").st_mode), 0o640)
         self.assertFalse((self.owner / ".codex").exists())   # the owner's login and transcripts untouched
         findings = self.doctor()
@@ -676,6 +679,30 @@ class RunnerTests(unittest.TestCase):
         self.serve("wl")
         self.wait(lambda: len(json.loads((self.root / "config/diggers/wl/conversations/.status").read_text())["rejected"]) >= 2,
                   "malformed requests were not refused")
+
+    def test_selftest_runs_both_tiers_end_to_end_and_leaves_nothing_behind(self):
+        (self.owner / ".codex").mkdir()
+        (self.owner / ".codex/auth.json").write_text("{}")   # the owner's own login
+        self.env["GRAVE_DIGGER_TEST_UNITS"] = "1"             # a unit is a background serve
+        run = self.grave("selftest", timeout=300)
+        lines = [line.split("\t", 1) for line in run.stdout.splitlines()]
+        self.assertNotIn("fail", {level for level, _ in lines}, run.stdout + run.stderr)
+        for expected in ("selftest-own: verdict ready-for-review", "selftest-own: the pinned MCP tool was called",
+                         "selftest: an unlogged digger refuses the request with the login hint",
+                         "doctor: no failures for the selftest diggers"):
+            self.assertIn(["ok", expected], lines)
+        self.assertIn("full dedicated run needs its own login", run.stdout)
+        for gone in ("repos/digger-selftest", "config/diggers/selftest", "config/diggers/selftest-own",
+                     "diggers/selftest", "diggers/.records/selftest", "worktrees/digger-selftest"):
+            self.assertFalse((self.root / gone).exists(), gone)
+        self.assertEqual(list((self.root / "agents").glob("digger-selftest*")), [])
+        # With a selftest key the dedicated digger logs in and runs the same conversation.
+        (self.root / "config/secrets").mkdir(mode=0o700)
+        key = self.root / "config/secrets/digger-selftest-key"
+        key.write_text("sk-test\n"); key.chmod(0o600)
+        run = self.grave("selftest", timeout=300)
+        self.assertIn("ok\tselftest: verdict ready-for-review", run.stdout, run.stdout + run.stderr)
+        self.assertNotIn("warn\tselftest:", run.stdout)
 
     def test_definitions_take_checks_and_prompt_chips(self):
         module = load("diggers_optional", {"GRAVE_DIGGER_TEST": "1"})
