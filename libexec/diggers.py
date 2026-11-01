@@ -848,7 +848,8 @@ def owner_tool(provider):
     if shutil.which("mise"):
         result = subprocess.run(["mise", "which", provider], capture_output=True, text=True, timeout=30)
         candidates.append(result.stdout.strip() if result.returncode == 0 else "")
-    found = [os.path.realpath(path) for path in candidates if path]
+    # A mise shim resolves to the mise binary itself, which is native but not the provider.
+    found = [os.path.realpath(path) for path in candidates if path and Path(os.path.realpath(path)).name != "mise"]
     if not found:
         raise DiggerError(f"{provider} is not installed for the appliance owner")
     return next((path for path in found if TEST or native(path)), found[0])
@@ -1311,6 +1312,9 @@ class DiggerRunner(keeper.Runner):
         self.seen, self.rejected, self.finishing = set(), {}, set()
         self.gaming_cancelled, self.requeue_pending = set(), set()
         self.paused, self.login, self.login_at, self.status_at = False, None, 0, 0
+        # Owner tiers run the owner's native build: a version-manager shim would try to
+        # install or update under the unit's read-only HOME. Dedicated diggers have their copy.
+        self.binary = definition["provider"] if definition["identity"] == "dedicated" else owner_tool(definition["provider"])
 
     # ---- checkout ----
     def prepare(self, record):
@@ -1386,6 +1390,7 @@ class DiggerRunner(keeper.Runner):
         if d["provider"] == "claude":
             where["mcp_config"] = str(pin / ".mcp.json")
         argv, extra = table.digger_command(d, "digger", True, where)
+        argv = [self.binary, *argv[1:]]
         if not table.policy_ok(argv):
             raise DiggerError("compiled command carries a permission-bypass flag")
         record["settling"] = True  # cleared once after_turn has decided whether this turn ends the conversation
@@ -1639,7 +1644,8 @@ class DiggerRunner(keeper.Runner):
         home = layout(d)["provider_home"] if d["identity"] == "separate-login" else None
         extra = {("CODEX_HOME" if d["provider"] == "codex" else "CLAUDE_CONFIG_DIR"): home} if home else {}
         try:
-            result = subprocess.run(status_argv(d["provider"]), capture_output=True, text=True, timeout=30, env=scrubbed(extra))
+            result = subprocess.run([self.binary, *status_argv(d["provider"])[1:]], capture_output=True, text=True,
+                                    timeout=30, env=scrubbed(extra))
         except (OSError, subprocess.SubprocessError):
             return False
         return logged_in(d["provider"], result)

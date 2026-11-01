@@ -396,6 +396,18 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(module.owner_tool("codex"), str(native))
         with unittest.mock.patch.dict(os.environ, {"PATH": str(self.bin), "DIGGER_CODEX_BIN": ""}):
             self.assertEqual(module.owner_tool("codex"), str(self.bin / "codex"))   # refused later, with the fix named
+        # A mise shim on the unit's PATH is a symlink to the mise binary: never the provider.
+        shims = pathlib.Path(self.tmp.name) / "shims"
+        shims.mkdir()
+        mise = pathlib.Path(self.tmp.name) / "mise"
+        mise.write_bytes(b"\x7fELF" + b"\0" * 16)
+        mise.chmod(0o755)
+        (shims / "codex").symlink_to(mise)
+        with unittest.mock.patch.dict(os.environ, {"PATH": str(shims), "DIGGER_CODEX_BIN": str(native)}):
+            self.assertEqual(module.owner_tool("codex"), str(native))
+        with unittest.mock.patch.dict(os.environ, {"PATH": str(shims), "DIGGER_CODEX_BIN": ""}):
+            with self.assertRaises(module.DiggerError):
+                module.owner_tool("codex")
 
 
 RUNNER_CODEX = r"""#!/usr/bin/env python3
