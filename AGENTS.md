@@ -69,10 +69,11 @@ are expected to solve yourself: package name differences (`docker` vs
 - `docker ps` — core-postgres and core-redis healthy, ports on 127.0.0.1 only.
 - Reboot test if the human allows: everything comes back without login.
 - `grave digger selftest` exits 0: throwaway diggers run real conversations
-  through their units and leave nothing behind. From another tailnet device,
-  start it as a durable operation (`POST /grave/api/v1/operations`
-  `{"id": "<id>", "action": "digger-selftest"}`, then poll `?id=<id>`); run
-  it after any change to diggers, the Keeper runner, providers or the units.
+  through their units and leave nothing behind. Run it after any change to
+  diggers, the Keeper runner, providers or the units. From another tailnet
+  device, with no terminal: `scripts/grave-op.sh <box>.ts.net digger-selftest`
+  (or `doctor`): it starts the durable operation, waits, prints the report
+  and exits with its status.
 
 ## 4. Secrets & MCP (optional, per integration)
 
