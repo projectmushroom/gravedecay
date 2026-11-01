@@ -1039,6 +1039,8 @@ def cmd_remove(args):
     if dedicated:
         root("remove", args.name, *(["--purge"] if args.purge else []), capture=True)
     if args.purge:
+        if not dedicated:
+            purge_checkouts(definition)
         make_writable(STORE / args.name)  # pinned tools are read-only
         shutil.rmtree(STORE / args.name)
         print(f"{args.name}: purged (definition and login"
@@ -1051,6 +1053,22 @@ def cmd_remove(args):
     os.rename(STORE / args.name, target)
     print(f"{args.name}: removed; definition and login kept at {target}"
           + ("; Unix user, HOME and clone kept (purge with --purge)" if dedicated else ""))
+
+
+def purge_checkouts(definition):
+    """An owner-tier digger's worktrees and their session history, so a purge leaves
+    no checkout for doctor to find. Only paths the runner itself would have made."""
+    source = ROOT / "repos" / definition["repo"]
+    for record in read_records(definition):
+        session = record.get("session") or ""
+        checkout = ROOT / "worktrees" / definition["repo"] / session
+        if not session.startswith(f"digger-{definition['name']}-") or record.get("checkout") != str(checkout):
+            continue
+        if source.is_dir():
+            subprocess.run(["git", "-C", str(source), "worktree", "remove", "--force", str(checkout)], capture_output=True)
+            subprocess.run(["git", "-C", str(source), "branch", "-D", record["branch"]], capture_output=True)
+        shutil.rmtree(checkout, ignore_errors=True)
+        shutil.rmtree(ROOT / "agents" / session, ignore_errors=True)
 
 
 # ------------------------------------------------------------------ runner ----
@@ -2140,17 +2158,8 @@ def selftest_cleanup():
     """Every trace of a run: both diggers, the owner tier's checkouts and the repo."""
     repo = ROOT / "repos" / SELFTEST_REPO
     for name in ("selftest-own", "selftest"):
-        if not (STORE / name).is_dir():
-            continue
-        try:
-            for record in read_records(load(name)[0]):
-                if record.get("session"):  # owner tier: a worktree of the selftest repo
-                    subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", record["checkout"]],
-                                   capture_output=True)
-                    shutil.rmtree(ROOT / "agents" / record["session"], ignore_errors=True)
-        except (DiggerError, OSError):
-            pass
-        subprocess.run([sys.executable, str(Path(__file__).resolve()), "remove", name, "--purge"], capture_output=True)
+        if (STORE / name).is_dir():
+            subprocess.run([sys.executable, str(Path(__file__).resolve()), "remove", name, "--purge"], capture_output=True)
     shutil.rmtree(ROOT / "worktrees" / SELFTEST_REPO, ignore_errors=True)
     shutil.rmtree(repo, ignore_errors=True)
 

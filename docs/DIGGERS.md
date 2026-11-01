@@ -356,6 +356,6 @@ files, so `docs/PORTS.md` is unchanged.
 login) to `config/diggers/.removed/<name>-<time>/`, removes the root-owned
 policy and disables the unit. A `dedicated` digger's Unix user, HOME, clone
 and login are kept, and so are every tier's conversation records; defining the
-same name again adopts them. `--purge` deletes all of it, the Unix user,
-inbox and records included. `grave uninstall` lists remaining
+same name again adopts them. `--purge` deletes all of it: the Unix user,
+inbox, records, and an owner-tier digger's checkouts and branches. `grave uninstall` lists remaining
 `grave-digger-*` users rather than deleting them.

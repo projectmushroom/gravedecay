@@ -626,6 +626,9 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("checkout removed", self.grave("prune", "wl").stdout)   # an untouched branch is disposable
         meta = json.loads((self.root / f"agents/digger-wl-{cid}/meta.json").read_text())
         self.assertEqual((meta["digger"], meta["pruned"]), ("wl", True))
+        self.grave("remove", "wl", "--purge")   # purge leaves no checkout or session history behind
+        self.assertEqual(list((self.root / "agents").glob("digger-wl-*")), [])
+        self.assertNotIn(f"digger/wl/{cid}", self.git("branch", "--list", "digger/*"))
 
     def test_cancel_stops_the_turn_and_gaming_mode_requeues_it_once(self):
         self.grave("new", "wl", "--repo", "app", "--provider", "codex", "--identity", "separate-login",
