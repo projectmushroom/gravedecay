@@ -2498,6 +2498,87 @@
         "description": "Diggers on this grave (single-owner Linux). Reads digger records; POSTs only write a request into the digger's inbox, which its own unit runs. The same request ID twice is one request."
       }
     },
+    "/diggers/resume": {
+      "post": {
+        "operationId": "post_diggers_resume",
+        "summary": "POST diggers/resume",
+        "parameters": [
+          {
+            "name": "X-Grave-Client",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            },
+            "description": "Protocol marker, NOT authentication. Owner identity is mandatory via Tailscale Serve or local maintenance."
+          }
+        ],
+        "x-grave-contract": "1.0.0",
+        "responses": {
+          "200": {
+            "description": "Existing request; never re-sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiggerResume"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Access, validation or availability error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "New request written to the inbox",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiggerResume"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Workspace gateway capability refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiggerResumeRequest"
+              }
+            }
+          }
+        },
+        "description": "Restart a budget-paused digger's daily window (grave digger resume-budget)."
+      }
+    },
     "/fs": {
       "post": {
         "operationId": "post_fs",
@@ -4214,6 +4295,75 @@
               "additionalProperties": true
             },
             "maxItems": 8
+          },
+          "pause": {
+            "enum": [
+              "gaming",
+              "budget",
+              null
+            ]
+          },
+          "budget_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limits": {
+            "type": "object",
+            "properties": {
+              "turns": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "usd": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "turns",
+              "usd"
+            ],
+            "additionalProperties": true
+          },
+          "slack": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "connected": {
+                    "type": "boolean"
+                  },
+                  "error": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "approvals": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "connected",
+                  "error",
+                  "approvals"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "null without a slack binding; approvals is the count waiting for a click"
           }
         },
         "required": [
@@ -4230,7 +4380,11 @@
           "running",
           "today",
           "last_verdict",
-          "prompts"
+          "prompts",
+          "pause",
+          "budget_reason",
+          "limits",
+          "slack"
         ],
         "additionalProperties": true
       },
@@ -4481,6 +4635,40 @@
           "request"
         ],
         "additionalProperties": false
+      },
+      "DiggerResumeRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "request": {
+            "type": "string",
+            "pattern": "^[0-9]{10}-[0-9a-f]{32}$"
+          }
+        },
+        "required": [
+          "name",
+          "request"
+        ],
+        "additionalProperties": false
+      },
+      "DiggerResume": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "request": {
+            "type": "string",
+            "pattern": "^[0-9]{10}-[0-9a-f]{32}$"
+          }
+        },
+        "required": [
+          "name",
+          "request"
+        ],
+        "additionalProperties": true
       },
       "Capabilities": {
         "type": "object",

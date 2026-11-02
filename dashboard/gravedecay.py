@@ -165,7 +165,8 @@ CLIENT_ROUTES = {
                        "action", "action-stream", "fs", "upload", "session-kill",
                        "session-resume", "session-capture", "agent-job-cancel",
                        "linear-issue", "linear-dispatch", "notify-test", "operations", "resources/preferences",
-                       "keeper", "keeper/turn", "keeper/cancel", "diggers/ask", "diggers/cancel", "diggers/finish")),
+                       "keeper", "keeper/turn", "keeper/cancel", "diggers/ask", "diggers/cancel", "diggers/finish",
+                       "diggers/resume")),
 }
 
 
@@ -3787,6 +3788,28 @@ class Handler(BaseHTTPRequestHandler):
                 self._client_error(400, "invalid_request", str(error))
             except OSError:
                 self._client_error(503, "history_unavailable", "Cannot save Keeper conversations; run grave doctor")
+            return
+        if self._client_authorized and p == "/api/diggers/resume":
+            # Restart a budget-paused digger's daily window: one request in its inbox.
+            if diggers is None:
+                self._client_error(501, "unsupported", "Diggers require a single-owner Linux grave"); return
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                if not 0 < length <= 4096:
+                    raise ValueError("Invalid digger payload size")
+                data = json.loads(self.rfile.read(length))
+                if not isinstance(data, dict) or set(data) != {"name", "request"}:
+                    raise ValueError("Supply name, request")
+                definition = digger_definition(data["name"])
+                _, created = diggers.submit(definition, "resume-budget", diggers.new_id(), requested_by="owner",
+                                            request_id=data["request"])
+                self._send(202 if created else 200, json.dumps({"name": data["name"], "request": data["request"]}))
+            except diggers.DiggerError as error:
+                self._client_error(404 if "no such digger" in str(error) else 400, "invalid_request", str(error))
+            except (ValueError, TypeError) as error:
+                self._client_error(400, "invalid_request", str(error))
+            except OSError:
+                self._client_error(503, "history_unavailable", "Cannot write to the digger's inbox; run grave doctor")
             return
         if self._client_authorized and p in ("/api/diggers/ask", "/api/diggers/cancel", "/api/diggers/finish"):
             if diggers is None:

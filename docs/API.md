@@ -102,7 +102,7 @@ Platform-specific handlers continue to validate runtime availability.
 | `linear-issue`, `linear-dispatch`, `notify-test` | POST existing integration operations |
 | `operations` | GET owner-private progress or health; POST a retry-safe console action (single-owner Linux) |
 | `keeper`, `keeper/turn`, `keeper/cancel` | GET conversation list or one conversation by cursor; POST create, send a turn, cancel (single-owner Linux; see [Gravekeeper conversations](#gravekeeper-conversations)) |
-| `diggers`, `diggers/conversation`, `diggers/ask`, `diggers/cancel`, `diggers/finish` | GET digger rows, a digger's conversations, one conversation by cursor; POST a request into a digger's inbox (single-owner Linux; see [Diggers](#diggers)) |
+| `diggers`, `diggers/conversation`, `diggers/ask`, `diggers/cancel`, `diggers/finish`, `diggers/resume` | GET digger rows, a digger's conversations, one conversation by cursor; POST a request into a digger's inbox (single-owner Linux; see [Diggers](#diggers)) |
 | `action` | POST `{action: ...}` using the advertised fixed action names |
 | `action-stream?action=...` | **POST only**: SSE output (`data: <JSON string>`, then `event: done` with exit code) |
 
@@ -435,12 +435,16 @@ POST /grave/api/v1/diggers/ask     {"name": "wl", "conversation": "<id>", "reque
 GET  /grave/api/v1/diggers/conversation?name=wl&id=<id>&after=<cursor>
 POST /grave/api/v1/diggers/cancel  {"name": "wl", "conversation": "<id>", "request": "<id>"}
 POST /grave/api/v1/diggers/finish  {"name": "wl", "conversation": "<id>", "request": "<id>"}
+POST /grave/api/v1/diggers/resume  {"name": "wl", "request": "<id>"}     restart a budget-paused window
 GET  /grave/api/digger-diff?name=wl&id=<id>                  text/plain, 256 KiB cap
 ```
 
 A row carries `identity`, `provider`, `enabled`, `live` (the loop's heartbeat
-is fresh), `paused` (gaming mode), `loggedIn`, `queue`, `running`,
-`today.turns`, `today.usd`, `last_verdict` and the definition's `prompts`. A
+is fresh), `paused` (gaming mode), `pause` (`gaming`, `budget` or null) and
+`budget_reason`, `loggedIn`, `queue`, `running`, `today.turns`, `today.usd`
+(since the budget window opened), `limits.turns` and `limits.usd`, `slack`
+(null without a binding, else `connected`, `error` and `approvals` waiting),
+`last_verdict` and the definition's `prompts`. A
 new request returns 202, a known request ID 200 and is never written twice.
 A conversation reads as `state: "queued"` until the digger takes it. Records
 add `phase` (`open`, `finishing`, `finished`), `settling` (the runner is still

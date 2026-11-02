@@ -2965,6 +2965,10 @@ grave — gravedecay appliance control 🪦
   grave digger [resume <n> <id> "<reply>"|cancel <n> <id>|finish <n> <id>|kill <n>|prune <n>]
                              reply, stop a turn, package the result now, stop
                              everything (disables it), remove merged checkouts
+  grave digger slack-set <n>           store its Slack app and bot tokens (stdin,
+                             never argv); slack-logout <n> deletes them
+  grave digger pair <n> <code>         let a Slack user who DMed it in; resume-budget <n>
+                             restarts today's budget window after it paused
   grave digger selftest      ⛏️ end to end on this box with throwaway diggers;
                              exit 1 on a failure (also the digger-selftest action)
 

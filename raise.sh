@@ -682,6 +682,7 @@ install -m 755 "$REPO_DIR/libexec/agent-task.py" "$GRAVE_ROOT/scripts/agent-task
 install -m 755 "$REPO_DIR/libexec/agent-jobs.py" "$GRAVE_ROOT/scripts/agent-jobs.py"
 install -m 644 "$REPO_DIR/libexec/providers.py" "$GRAVE_ROOT/scripts/providers.py"
 install -m 755 "$REPO_DIR/libexec/diggers.py" "$GRAVE_ROOT/scripts/diggers.py"
+install -m 644 "$REPO_DIR/libexec/digger-slack.py" "$GRAVE_ROOT/scripts/digger-slack.py"
 install -m 755 "$REPO_DIR/dashboard/gateway.py" "$GRAVE_ROOT/scripts/gateway.py"
 install -m 755 "$REPO_DIR/libexec/t3-connect-diagnose.py" "$GRAVE_ROOT/scripts/t3-connect-diagnose.py"
 install -d -m 755 "$GRAVE_ROOT/scripts/dashboard-static"

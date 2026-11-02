@@ -107,9 +107,12 @@ Runner and limits: [API.md](API.md#gravekeeper-conversations),
 **Diggers**, under active work on the Work tab, lists each digger defined on
 this grave (single-owner Linux only; the section is absent elsewhere). It shows
 the tier, provider and repository, whether the digger is enabled, running,
-paused for gaming mode and logged in, its queue depth, today's turns and cost,
-and its last verdict. **Conversations** on a row lists that digger's saved
-conversations; an invalid definition shows its error instead of a row.
+paused (gaming mode or budget spent) and logged in, its queue depth, today's
+turns and cost against its daily budget, its Slack connection and waiting
+approvals when it has a Slack binding, and its last verdict. A budget-paused
+row has **Resume budget** (`grave digger resume-budget`). **Conversations** on
+a row lists that digger's saved conversations; an invalid definition shows its
+error instead of a row.
 
 **Summon** opens the Keeper's drawer bound to that digger (⛏️ and its name in
 the header). Each drawer thread is one conversation: one checkout, the digger's

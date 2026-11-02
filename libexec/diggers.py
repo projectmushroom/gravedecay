@@ -17,6 +17,7 @@ its HOME and a root-owned copy of the policy, and acts *as* the digger through
 repository another identity owns: the clone arrives as a bundle. Stdlib only.
 """
 import argparse
+from collections import deque
 import getpass
 import hashlib
 import importlib.util
@@ -52,7 +53,7 @@ RESERVED = ("keeper",)
 IDENTITIES = ("shared", "separate-login", "dedicated")
 WORK = {"shared": "worktree", "separate-login": "worktree", "dedicated": "clone"}
 KEYS = {"name", "provider", "model", "identity", "repo", "work", "tools", "budget", "pause_in_gaming", "enabled"}
-OPTIONAL = {"checks", "prompts"}  # absent means: detect the base commit's checks; no composer chips
+OPTIONAL = {"checks", "prompts", "slack"}  # absent: detect the base commit's checks; no chips; no Slack
 PLACEHOLDER = re.compile(r"\{([a-z][a-z0-9_]{0,19})\}")
 BUDGET = {"max_turns": (1, 200), "timeout_s": (60, 86400), "daily_turns": (1, 10000)}
 DEFAULT_BUDGET = {"max_turns": 30, "timeout_s": 1800, "daily_turns": 200, "daily_usd": 10.0}
@@ -94,6 +95,7 @@ def sibling(filename):
 table = sibling("providers.py")      # the one provider command table
 keeper = sibling("keeper.py")        # the turn runner the Gravekeeper uses
 jobs = sibling("agent-jobs.py")      # worktrees, checks, verdicts and the gaming flag
+slackbot = sibling("digger-slack.py")  # the optional Slack channel (Socket Mode, outbound only)
 
 
 # ------------------------------------------------------------------ schema ----
@@ -141,6 +143,8 @@ def validate(value, name=None, instructions=None):
     for server_id, server in tools["mcp"].items():
         if not MCP_ID.fullmatch(server_id):
             raise DiggerError(f"MCP server id {server_id!r} must match ^[a-z][a-z0-9-]{{0,31}}$")
+        if server_id == "digger":
+            raise DiggerError("MCP server id 'digger' is reserved for the runner's approval bridge")
         if not isinstance(server, dict) or set(server) != {"command", "args"}:
             raise DiggerError(f"MCP server {server_id} must hold exactly command and args")
         if not printable(server["command"], 200) or not isinstance(server["args"], list) or len(server["args"]) > 32 \
@@ -177,6 +181,11 @@ def validate(value, name=None, instructions=None):
             for p in prompts):
         raise DiggerError("prompts must be at most 8 {label, template} chips; a template's {field} names"
                           " are lowercase words")
+    if "slack" in value:
+        try:
+            slackbot.validate(value["slack"])
+        except ValueError as error:
+            raise DiggerError(str(error)) from None
     argv, _ = compile_command(value, "" if instructions is None else instructions)
     if not table.policy_ok(argv):
         raise DiggerError("compiled command carries a permission-bypass flag; remove it from the definition"
@@ -700,6 +709,12 @@ def root_check(args):
         lines += json.loads(records.stdout)
     except (DiggerError, ValueError, OSError) as error:
         lines.append(["fail", f"digger {name}: conversation records unreadable ({str(error)[:200]}) — run: grave digger enable {name}"])
+    if "slack" in definition:   # as the digger: root never follows a link inside its HOME
+        probe = helper(name, "check-slack", name, check=False, capture=True)
+        try:
+            lines += json.loads(probe.stdout)
+        except ValueError:
+            lines.append(["fail", f"digger {name}: Slack token probe failed"])
     print(json.dumps(lines))
 
 
@@ -740,13 +755,30 @@ def root_main(argv):
     p = sub.add_parser("remove"); p.add_argument("name"); p.add_argument("--purge", action="store_true")
     p = sub.add_parser("unit"); p.add_argument("name"); p.add_argument("action", choices=("start", "stop"))
     p = sub.add_parser("prune"); p.add_argument("name")
+    for op in ("slack-set", "slack-logout"):
+        sub.add_parser(op).add_argument("name")
     args = parser.parse_args(argv)
     if args.op == "provision" and args.origin and (args.origin.startswith("-") or not printable(args.origin, 500)):
         raise DiggerError("unsafe origin URL")
     if args.op in ("provision",) and args.branch and not re.fullmatch(r"[A-Za-z0-9._/-]{1,200}", args.branch):
         raise DiggerError("unsafe branch name")
     {"provision": root_provision, "login": root_login, "status": root_status,
-     "check": root_check, "remove": root_remove, "unit": root_unit, "prune": root_prune}[args.op](args)
+     "check": root_check, "remove": root_remove, "unit": root_unit, "prune": root_prune,
+     "slack-set": root_slack, "slack-logout": root_slack}[args.op](args)
+
+
+def root_slack(args):
+    """The tokens as the digger, in its own HOME; they never pass through argv."""
+    check_name(args.name)
+    account(args.name)
+    if args.op == "slack-logout":
+        helper(args.name, "unlink", "secrets/slack.env")
+        return
+    try:
+        body = slackbot.render_tokens(slackbot.parse_tokens(sys.stdin.read(8192)))
+    except slackbot.SlackError as error:
+        raise DiggerError(str(error)) from None
+    helper(args.name, "write", "secrets/slack.env", input=body)
 
 
 # ------------------------------------------------------- as-digger helpers ----
@@ -779,6 +811,8 @@ def as_digger_main(argv):
         path = inside_home(args[0], create=False)
         if path.is_file():
             sys.stdout.write(path.read_text())
+    elif op == "unlink":
+        inside_home(args[0], create=False).unlink(missing_ok=True)
     elif op == "is-dir":
         path = inside_home(args[0], create=False)
         sys.exit(0 if path.is_dir() and not path.is_symlink() else 1)
@@ -815,6 +849,13 @@ def as_digger_main(argv):
             print(json.dumps({"origin": result.stdout.strip()}))
     elif op == "prune":
         print("\n".join(prune_lines(load_policy(args[0])[0])))
+    elif op == "check-slack":
+        definition = load_policy(args[0])[0]
+        try:
+            lines = token_lines(definition, os.geteuid(), inside_home("secrets/slack.env", create=False))
+        except DiggerError as error:
+            lines = [["fail", f"digger {args[0]}: Slack tokens: {error}"]]
+        print(json.dumps(lines))
     elif op == "check-records":
         print(json.dumps(record_lines(load_policy(args[0])[0])))
     else:
@@ -1082,7 +1123,9 @@ STATUS_EVERY = 15          # seconds between heartbeats in .status (never *.json
 LOGIN_EVERY = 600          # seconds between provider login probes
 PIN_LIMIT = 32 * 1024 * 1024
 DIFF_LIMIT = 256 * 1024
-OPS = ("ask", "cancel", "finish", "kill")
+OPS = ("ask", "cancel", "finish", "kill", "resume-budget")
+AUDIT = ".audit.jsonl"     # one line per turn and per Slack refusal; never message text
+PAIRING = ".pairing"       # pending Slack pairing codes the owner confirms
 INBOXES = HOMES / ".inbox"
 RECORDS = HOMES / ".records"
 HOST = os.uname().nodename
@@ -1118,6 +1161,15 @@ def channel(definition):
 def work_root(definition):
     """Pinned tools per conversation, and for a clone its checkouts, live under here."""
     return HOMES / definition["name"] if definition["identity"] == "dedicated" else STORE / definition["name"]
+
+
+def slack_secrets(definition):
+    """The Slack tokens, owned by the identity that serves the digger."""
+    return work_root(definition) / "secrets/slack.env"
+
+
+def midnight():
+    return time.mktime(time.localtime()[:3] + (0, 0, 0, 0, 0, -1))
 
 
 def prepare_channel(name, entry, create=True):
@@ -1338,6 +1390,9 @@ class DiggerRunner(keeper.Runner):
         self.seen, self.rejected, self.finishing = set(), {}, set()
         self.gaming_cancelled, self.requeue_pending = set(), set()
         self.paused, self.login, self.login_at, self.status_at = False, None, 0, 0
+        self.slack, self.slack_queue, self.slack_pending, self.conditions = None, deque(), {}, {}
+        self.budget_since, self.budget_paused, self.origin, self.slack_state = 0, None, None, None
+        self.approvals = str(work_root(definition) / "approvals")
         # Owner tiers run the owner's native build: a version-manager shim would try to
         # install or update under the unit's read-only HOME. Dedicated diggers have their copy.
         self.binary = definition["provider"] if definition["identity"] == "dedicated" else owner_tool(definition["provider"])
@@ -1399,7 +1454,11 @@ class DiggerRunner(keeper.Runner):
                                     record["branch"])
         (pin / ".instructions.md").write_text(text)
         if d["provider"] == "claude":
-            (pin / ".mcp.json").write_text(table.digger_files(d, pinned_servers(d, pin))["claude-mcp.json"])
+            config = json.loads(table.digger_files(d, pinned_servers(d, pin))["claude-mcp.json"])
+            if table.approvals(d):   # Claude's permission prompts go to the bridge, the bridge to Slack
+                config["mcpServers"]["digger"] = {"type": "stdio", "command": sys.executable, "args": [
+                    "-I", str(Path(__file__).resolve()), "approve-bridge", self.approvals, record["id"]]}
+            (pin / ".mcp.json").write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
         for directory, dirs, files in os.walk(pin, topdown=False):
             for name in files:
                 full = Path(directory, name)
@@ -1421,6 +1480,8 @@ class DiggerRunner(keeper.Runner):
             raise DiggerError("compiled command carries a permission-bypass flag")
         record["settling"] = True  # cleared once after_turn has decided whether this turn ends the conversation
         env = dict(keeper.scrub_env(os.environ), **extra, GIT_TERMINAL_PROMPT="0")
+        if table.approvals(d):
+            env["MCP_TOOL_TIMEOUT"] = str((slackbot.APPROVAL_EXPIRY + 60) * 1000)   # an approval waits up to 10 minutes
         return argv, record["checkout"], env
 
     def after_turn(self, record):
@@ -1440,6 +1501,14 @@ class DiggerRunner(keeper.Runner):
                 else:
                     record["settling"] = False
                 self._save(record)
+            usd = (self.cost(record["checkout"], record["created_at"])[0] or {}).get("usd") if record.get("checkout") else None
+            if usd is not None:
+                with self.mutex:
+                    record["budget"]["usd"] = usd   # the daily dollar budget reads this after every turn
+                    self._save(record)
+            self.audit(cid, record["turn"]["id"], record["state"], turn_slack(record))
+            if record.get("slack") and self.slack:
+                self.slack.turn_ended(record, turn_text(record), DONE)
             if done:
                 self.finish(cid, "done marker")
         except Exception as error:  # a packaging problem never wedges the loop
@@ -1468,6 +1537,8 @@ class DiggerRunner(keeper.Runner):
                               finished_by=why, finished_at=time.time(), updated_at=time.time())
                 record["budget"]["usd"] = (result.get("cost") or {}).get("usd")
                 self._save(record)
+            if record.get("slack") and self.slack:
+                self.slack.finished(record, self.link(cid))
         finally:
             self.finishing.discard(cid)
             self.cancelled.discard(cid)
@@ -1530,6 +1601,10 @@ class DiggerRunner(keeper.Runner):
         self.rejected[request_id] = str(why)[:300]
         while len(self.rejected) > 32:
             self.rejected.pop(next(iter(self.rejected)))
+        request = self.slack_pending.pop(request_id, None)
+        if request and self.slack:
+            self.audit(request["conversation"], None, "refused", request["slack"])
+            self.slack.refused(request, why)
         self.heartbeat(force=True)
 
     def busy(self):
@@ -1544,7 +1619,13 @@ class DiggerRunner(keeper.Runner):
         if not self.login:  # probe again now: a login since the last probe must not be refused
             self.login, self.login_at = self.probe_login(), time.time()
         if not self.login:
+            self.condition("logged-out")
             self.reject(rid, f"{d['provider']} is not logged in for this digger — run: grave digger login {d['name']}")
+            return
+        self.budget_paused = self.over_budget()
+        if self.budget_paused:
+            self.condition("budget")
+            self.reject(rid, f"{self.budget_paused}; the owner can run: grave digger resume-budget {d['name']}")
             return
         try:
             record = self._read(self._path(cid))
@@ -1555,6 +1636,8 @@ class DiggerRunner(keeper.Runner):
                     record.update(model=d["model"], digger=d["name"], requested_by=request["requested_by"], requests=[],
                                   requeues=[], phase="open", settling=False, checkout=None, base=None, branch=None,
                                   session=None, pin=None, pin_digest=None, result=None, budget={"turns": 0, "usd": None})
+                    if request.get("slack"):
+                        record["slack"] = {k: request["slack"][k] for k in ("channel", "thread_ts")}
                     self._save(record)
                 try:
                     note = self.prepare(record)
@@ -1575,12 +1658,119 @@ class DiggerRunner(keeper.Runner):
                 return
             with self.mutex:
                 record = self._read(self._path(cid))
-                record["requests"].append({"id": rid, "at": request["at"]})
+                record["requests"].append({"id": rid, "at": request["at"], **({"slack": request["slack"]} if request.get("slack") else {})})
                 record["budget"]["turns"] += 1
                 self._save(record)
             self.send(cid, rid, request["message"], "digger")
+            if self.slack_pending.pop(rid, None) and self.slack:
+                self.slack.turn_started(request)
         except keeper.KeeperError as error:
             self.reject(rid, str(error))
+
+    # ---- Slack, budget, audit ----
+    def slack_ask(self, request):
+        """From the Slack thread: always answer; queue at most five."""
+        if request["id"] in self.seen or request["id"] in self.slack_pending:
+            return   # redelivered: one message is one request
+        why = None
+        if self.login is False:
+            why, kind = f"{self.definition['provider']} is logged out on the box; the owner has been told", "logged-out"
+        elif self.over_budget():
+            why, kind = "this digger's daily budget is spent; the owner has been told", "budget"
+        elif len(self.slack_queue) >= slackbot.QUEUE_LIMIT:
+            why, kind = f"{slackbot.QUEUE_LIMIT} requests are already waiting; try again later", "queue-full"
+        if why:
+            self.condition(kind)
+            self.audit(request["conversation"], None, "refused", request["slack"])
+            self.slack.refused(request, why)
+            return
+        ahead = len(self.slack_queue) + (1 if self.busy() else 0)
+        self.slack_pending[request["id"]] = request
+        self.slack_queue.append(request)
+        if ahead or self.paused:
+            self.slack.queued(request, ahead, self.paused)
+
+    def record(self, cid):
+        try:
+            return self._read(self._path(cid))
+        except (OSError, keeper.KeeperError):
+            return None
+
+    def over_budget(self):
+        """The reason today's turns or dollars are spent, else None. The window starts
+        at local midnight or at the owner's last resume-budget, whichever is later."""
+        budget, since = self.definition["budget"], max(midnight(), self.budget_since)
+        records = read_records(self.definition)
+        turns = sum(1 for r in records for q in r.get("requests", []) if q["at"] >= since)
+        # shortcut: a conversation's whole spend counts on the day it last ran; per-turn spend would need per-turn cost.
+        usd = sum((r.get("budget") or {}).get("usd") or 0 for r in records if r["updated_at"] >= since)
+        if turns >= budget["daily_turns"]:
+            return f"daily budget spent: {turns} of {budget['daily_turns']} turns"
+        if budget["daily_usd"] and usd >= budget["daily_usd"]:
+            return f"daily budget spent: ${usd:.2f} of ${budget['daily_usd']:.2f}"
+        return None
+
+    def condition(self, kind):
+        """The owner side pages once per condition per hour from these."""
+        self.conditions[kind] = time.time()
+
+    def audit(self, conversation, turn, outcome, slack=None):
+        slack = slack or {}
+        line = {"at": round(time.time(), 3), "digger": self.definition["name"], "slack_user": slack.get("user"),
+                "channel": slack.get("channel"), "thread": slack.get("thread_ts"), "conversation": conversation,
+                "turn": turn, "outcome": outcome}
+        fd = os.open(self.path / AUDIT, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, self.mode)
+        try:
+            os.write(fd, (json.dumps(line) + "\n").encode())
+        finally:
+            os.close(fd)
+
+    def pairing(self, user):
+        """A code the owner confirms with grave digger pair; one per user, an hour each."""
+        try:
+            codes = json.loads((self.path / PAIRING).read_text())
+        except (OSError, ValueError):
+            codes = {}
+        now = time.time()
+        codes = {c: v for c, v in codes.items() if now - v["at"] < slackbot.PAIR_EXPIRY}
+        code = next((c for c, v in codes.items() if v["user"] == user), None) or slackbot.new_code()
+        codes.setdefault(code, {"user": user, "at": now})
+        while len(codes) > 16:
+            codes.pop(next(iter(codes)))
+        write_file(self.path / PAIRING, json.dumps(codes) + "\n", self.mode)
+        return code
+
+    def answer(self, path, allow, message):
+        write_file(Path(path).with_suffix(".answer"),
+                   json.dumps({"behavior": "allow" if allow else "deny", "message": message}) + "\n")
+        record = self.record(json.loads(Path(path).read_text()).get("conversation", "")) if Path(path).exists() else None
+        if record:
+            self.audit(record["id"], (record.get("turn") or {}).get("id"), "approved" if allow else "approval-denied",
+                       record.get("slack"))
+
+    def link(self, cid):
+        if self.origin is None:
+            try:
+                status = json.loads(subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True,
+                                                   timeout=10).stdout)
+                self.origin = "https://" + status["Self"]["DNSName"].rstrip(".")
+            except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+                self.origin = ""
+        return f"{self.origin}/grave/?tab=work&digger={self.definition['name']}&conversation={cid}" if self.origin else ""
+
+    def start_slack(self):
+        """The Slack channel, when the definition binds one and its tokens are set."""
+        if "slack" not in self.definition:
+            return None
+        uid = os.geteuid()
+        try:
+            tokens = slackbot.parse_tokens(read_private(slack_secrets(self.definition), uid, 4096))
+        except (DiggerError, slackbot.SlackError) as error:
+            return {"connected": False, "since": time.time(),
+                    "error": f"{error} — run: grave digger slack-set {self.definition['name']}"}
+        self.slack = slackbot.Channel(self, tokens, STOP)
+        self.slack.start()
+        return None
 
     def requeue(self):
         for cid in sorted(self.requeue_pending):
@@ -1660,9 +1850,21 @@ class DiggerRunner(keeper.Runner):
             elif request["op"] == "finish":
                 if not self.busy():
                     self.start_finish(request)
+            elif request["op"] == "resume-budget":
+                self.seen.add(request["id"])
+                self.budget_since, self.budget_paused = time.time(), None
+                self.heartbeat(force=True)
             elif not blocked and not self.busy():
                 self.ask(request)
                 blocked = True
+        if self.slack_queue and not blocked and not self.busy():
+            self.ask(self.slack_queue.popleft())
+        if self.slack:
+            self.slack.approvals(self.approvals)
+        elif table.approvals(self.definition):
+            for path in sorted(Path(self.approvals).glob("*.json")) if Path(self.approvals).is_dir() else ():
+                if not path.with_suffix(".answer").exists():
+                    self.answer(path, False, "Slack is not set up for this digger, so no approver can answer")
         self.heartbeat()
 
     def kill(self):
@@ -1689,14 +1891,28 @@ class DiggerRunner(keeper.Runner):
             return
         if now - self.login_at >= LOGIN_EVERY:
             self.login, self.login_at = self.probe_login(), now
+        if not stopped:
+            self.budget_paused = self.over_budget()
+        pause = "gaming" if self.paused else "budget" if self.budget_paused else None
         value = {"instance": self.instance, "pid": os.getpid(), "started": self.started, "heartbeat": now,
-                 "paused": self.paused, "loggedIn": self.login, "rejected": self.rejected, "stopped": stopped}
+                 "paused": self.paused, "pause": pause, "budget_reason": self.budget_paused,
+                 "budget_since": self.budget_since, "loggedIn": self.login, "rejected": self.rejected,
+                 "conditions": self.conditions, "stopped": stopped,
+                 "slack": self.slack.health() if self.slack else self.slack_state}
         write_file(self.path / ".status", json.dumps(value) + "\n", self.mode)
         self.status_at = now
 
     def serve(self):
         """Reconcile, then loop until SIGTERM or a kill request."""
+        self.budget_since = (loop_status(self.definition) or {}).get("budget_since") or 0   # a resume outlives a restart
+        if not isinstance(self.budget_since, (int, float)):
+            self.budget_since = 0
+        audited = audited_turns(self.definition)
         for record in [self._recover(r) for r in read_records(self.definition)]:
+            for request in record.get("requests", []):   # a turn the loop died in, or records from before the audit
+                if request["id"] not in audited:
+                    last = (record["turn"] or {}).get("id") == request["id"]
+                    self.audit(record["id"], request["id"], record["state"] if last else "unknown", request.get("slack"))
             self.seen.update(r["id"] for r in record.get("requests", []))
             if record.get("requeue"):
                 self.requeue_pending.add(record["id"])
@@ -1708,6 +1924,7 @@ class DiggerRunner(keeper.Runner):
                                   finished_by="restart", finished_at=time.time(),
                                   message="The digger stopped while packaging this result; checks did not finish.")
                 self._save(record)
+        self.slack_state = self.start_slack()
         self.heartbeat(force=True)
         while not STOP.is_set():
             try:
@@ -1733,6 +1950,24 @@ def turn_events(record):
 def ends_with_marker(record):
     texts = [e["text"] for e in turn_events(record) if e["type"] == "text" and e["name"] != "runner" and e["text"].strip()]
     return bool(texts) and texts[-1].rstrip().splitlines()[-1].strip() == DONE
+
+
+def turn_text(record):
+    return "\n\n".join(e["text"] for e in turn_events(record) if e["type"] == "text" and not e["name"] and e["text"].strip())
+
+
+def turn_slack(record):
+    turn = (record.get("turn") or {}).get("id")
+    return next((q.get("slack") for q in record.get("requests", []) if q["id"] == turn), None)
+
+
+def audited_turns(definition):
+    """Turn IDs that already have an audit line."""
+    try:
+        with open(channel(definition)[1] / AUDIT, "rb") as stream:
+            return {json.loads(line).get("turn") for line in stream.read(8 << 20).splitlines() if line.strip()}
+    except (OSError, ValueError):
+        return set()
 
 
 def last_request(record):
@@ -1969,6 +2204,70 @@ def cmd_finish(args):
     sys.exit(follow(definition, args.conversation, request_id, until_finished=True))
 
 
+def cmd_slack_set(args):
+    definition, _ = load(args.name)
+    if sys.stdin.isatty():
+        text = "\n".join(getpass.getpass(f"{label} (not echoed): ") for label in ("App-level token xapp-…", "Bot token xoxb-…"))
+    else:
+        text = sys.stdin.read(8192)
+    try:
+        body = slackbot.render_tokens(slackbot.parse_tokens(text))
+    except slackbot.SlackError as error:
+        raise DiggerError(str(error)) from None
+    if definition["identity"] == "dedicated":
+        root("slack-set", args.name, input=body, capture=True)
+    else:
+        private_dir(STORE / args.name / "secrets", owner_uid(), create=True)
+        write_file(slack_secrets(definition), body)
+    if definition["enabled"]:
+        unit(definition, True)
+    print(f"{args.name}: Slack tokens stored in {slack_secrets(definition)} (0600)"
+          + ("; unit restarted" if definition["enabled"] else "")
+          + ("" if "slack" in definition else f"; add a slack section to digger.json, then: grave digger enable {args.name}"))
+
+
+def cmd_slack_logout(args):
+    definition, _ = load(args.name)
+    if definition["identity"] == "dedicated":
+        root("slack-logout", args.name, capture=True)
+    else:
+        slack_secrets(definition).unlink(missing_ok=True)
+    if definition["enabled"]:
+        unit(definition, True)
+    print(f"{args.name}: Slack tokens deleted; revoke them in the Slack app settings too")
+
+
+def cmd_pair(args):
+    """Confirm a pairing code a Slack user got by DM: they join slack.users."""
+    definition, instructions = load(args.name)
+    if "slack" not in definition:
+        raise DiggerError(f"{args.name} has no slack section")
+    records = channel(definition)[1]
+    try:
+        codes = json.loads(read_private(records / PAIRING, os.lstat(records).st_uid, 65536, mode=0o640))
+    except (DiggerError, OSError, ValueError):
+        codes = {}
+    entry = codes.get(args.code) if isinstance(codes, dict) else None
+    if not isinstance(entry, dict) or not isinstance(entry.get("at"), (int, float)) \
+            or time.time() - entry["at"] >= slackbot.PAIR_EXPIRY or not slackbot.USER_ID.fullmatch(str(entry.get("user"))):
+        raise DiggerError("no such pairing code, or it expired; ask them to message the digger again")
+    if entry["user"] not in definition["slack"]["users"]:
+        definition["slack"]["users"].append(entry["user"])
+    validate(definition, args.name, instructions)
+    save(definition)
+    sync(definition, instructions)
+    if definition["enabled"]:
+        unit(definition, True)
+    print(f"{args.name}: Slack user {entry['user']} paired" + ("" if "approvers" in definition["slack"]
+          else " (and may approve tool calls: approvers defaults to users)"))
+
+
+def cmd_resume_budget(args):
+    definition, _ = load(args.name)
+    submit(definition, "resume-budget", new_id())
+    print(f"{args.name}: budget window restarted now; today's spend before this no longer counts")
+
+
 def cmd_kill(args):
     """Stop everything now: running turn, queued asks, the unit; the digger is disabled."""
     definition, _ = load(args.name)
@@ -1990,17 +2289,24 @@ def cmd_kill(args):
 # --------------------------------------------------------- owner side, API ----
 def summary(definition):
     """One row for the dashboard's Diggers section; reads files only."""
-    records, status = read_records(definition), loop_status(definition)
-    today = time.mktime(time.localtime()[:3] + (0, 0, 0, 0, 0, -1))
+    records, status = read_records(definition), loop_status(definition) or {}
+    since = max(midnight(), status.get("budget_since") or 0)   # the loop's budget window
     finished = [r for r in records if r.get("phase") == "finished" and r.get("result")]
+    slack = status.get("slack") or {}
     return {"name": definition["name"], "provider": definition["provider"], "model": definition["model"],
             "identity": definition["identity"], "repo": definition["repo"], "enabled": definition["enabled"],
-            "live": live(status), "paused": bool((status or {}).get("paused")), "loggedIn": (status or {}).get("loggedIn"),
+            "live": live(status), "paused": bool(status.get("paused")), "loggedIn": status.get("loggedIn"),
+            "pause": status.get("pause") if live(status) else None, "budget_reason": status.get("budget_reason"),
             "queue": len(pending_asks(definition, records)),
             "running": next((r["id"] for r in records if r["state"] == "running"), None),
-            "today": {"turns": sum(1 for r in records for q in r.get("requests", []) if q["at"] >= today),
-                      "usd": round(sum((r["result"].get("cost") or {}).get("usd") or 0 for r in finished
-                                       if r.get("finished_at", 0) >= today), 4)},
+            "today": {"turns": sum(1 for r in records for q in r.get("requests", []) if q["at"] >= since),
+                      "usd": round(sum((r.get("budget") or {}).get("usd") or 0 for r in records
+                                       if r["updated_at"] >= since), 4)},
+            "limits": {"turns": definition["budget"]["daily_turns"], "usd": definition["budget"]["daily_usd"]},
+            "slack": None if "slack" not in definition else {
+                "connected": bool(slack.get("connected")) and live(status),
+                "error": slack.get("error") if live(status) else "loop not running",
+                "approvals": slack.get("approvals", 0) if live(status) else 0},
             "last_verdict": max(finished, key=lambda r: r.get("finished_at", 0))["result"]["verdict"] if finished else None,
             "prompts": definition.get("prompts", [])}
 
@@ -2066,6 +2372,7 @@ def notify_finished(seen):
         if seen.get(name) == mtime:
             continue
         seen[name] = mtime
+        page_conditions(name, definition)
         ledger_path = STORE / name / ".notified.json"
         try:
             ledger, first = json.loads(read_private(ledger_path, owner_uid(), 65536)), False
@@ -2088,6 +2395,38 @@ def notify_finished(seen):
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except (OSError, subprocess.TimeoutExpired):
                 pass  # the record stays; a page is best effort
+
+
+BLOCKED = {"logged-out": ("logged out", "run: grave digger login {name}"),
+           "budget": ("daily budget spent", "it resumes at midnight, or run: grave digger resume-budget {name}"),
+           "queue-full": ("queue full", "five Slack requests are waiting; check it is not stuck on the Work tab")}
+
+
+def page_conditions(name, definition):
+    """Once per condition per hour: the digger turned a Slack request away."""
+    conditions = (loop_status(definition) or {}).get("conditions")
+    if not isinstance(conditions, dict):
+        return
+    path = STORE / name / ".paged.json"
+    try:
+        paged = json.loads(read_private(path, owner_uid(), 65536))
+    except (DiggerError, ValueError):
+        paged = {}
+    now, changed = time.time(), False
+    for kind, at in conditions.items():
+        last = paged.get(kind, 0) if isinstance(paged, dict) else 0
+        if kind not in BLOCKED or not isinstance(at, (int, float)) or at <= last or now - last < 3600:
+            continue
+        paged[kind], changed = now, True
+        title, hint = BLOCKED[kind]
+        try:
+            subprocess.run([GRAVE, "notify", "--event", "unit-failure", "--link", f"/grave/?tab=work&digger={name}",
+                            f"Digger {name}: {title}", "A Slack request was turned away; " + hint.format(name=name)],
+                           timeout=20, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    if changed:
+        write_file(path, json.dumps(paged) + "\n")
 
 
 # --------------------------------------------------------------- selftest ----
@@ -2265,6 +2604,42 @@ def unit_lines(definition):
     return [["ok", f"digger {name}: {wanted} enabled and running, independent of T3"]]
 
 
+def token_lines(definition, uid, path=None):
+    """A Slack-bound digger's tokens file belongs to the identity that serves it, 0600, and parses."""
+    name = definition["name"]
+    if "slack" not in definition:
+        return []
+    try:
+        slackbot.parse_tokens(read_private(path or slack_secrets(definition), uid, 4096))
+        return [["ok", f"digger {name}: Slack tokens stored 0600, readable only by the identity that serves it"]]
+    except (DiggerError, slackbot.SlackError) as error:
+        return [["fail" if definition["enabled"] else "warn",
+                 f"digger {name}: Slack tokens: {str(error)[:200]} — run: grave digger slack-set {name}"]]
+
+
+def slack_lines(definition):
+    """Someone can summon it, its socket is up, and no token sits in the unit's environment."""
+    name, slack = definition["name"], definition.get("slack")
+    if not slack or not definition["enabled"]:
+        return []
+    lines = []
+    if not slack["users"] and slack["dm_policy"] != "pair":
+        lines.append(["fail", f"digger {name}: slack.users is empty and dm_policy is not pair, so nobody can summon it"])
+    status = loop_status(definition)
+    state = (status or {}).get("slack") or {}
+    if live(status) and state.get("connected"):
+        lines.append(["ok", f"digger {name}: Slack Socket Mode connected (outbound only, nothing listens)"])
+    else:
+        lines.append(["fail", f"digger {name}: Slack not connected ({state.get('error') or 'its loop is not running'})"])
+    if not TEST:
+        shown = subprocess.run(["systemctl", "show", unit_name(definition), "-p", "Environment"],
+                               capture_output=True, text=True, timeout=30).stdout
+        if re.search(r"xapp-|xoxb-|SLACK_", shown):
+            lines.append(["fail", f"digger {name}: a Slack token is in {unit_name(definition)}'s environment;"
+                                  f" keep it only in {slack_secrets(definition)}"])
+    return lines
+
+
 def record_lines(definition):
     """Every conversation record parses; an unfinished one belongs to the live loop;
     a finished one carries a valid result whose checks came from the owner or the
@@ -2275,10 +2650,13 @@ def record_lines(definition):
     source = repo_path(definition["repo"]) if definition["work"] == "worktree" \
         else HOMES / name / "repos" / definition["repo"]
     paths = sorted(runner.path.glob("*.json")) if runner.path.is_dir() else []
+    turns = set()
     for path in paths:
         try:
             record = runner._read(path)
             cid = record["id"]
+            current = (record["turn"] or {}).get("id") if record["state"] == "running" else None
+            turns.update(q["id"] for q in record.get("requests", []) if q["id"] != current)
             if record.get("digger") != name:
                 raise DiggerError("names another digger")
             if record["state"] == "running" or record.get("phase") == "finishing" or record.get("settling"):
@@ -2307,7 +2685,16 @@ def record_lines(definition):
             problems.append(f"{path.stem}: {str(error)[:200]}")
     if problems:
         return [["fail", f"digger {name}: conversation {problem}"] for problem in problems[:5]]
-    return [["ok", f"digger {name}: {len(paths)} conversation record(s) valid; checkouts and pinned tools intact"]]
+    audit = runner.path / AUDIT
+    if turns:
+        info = os.lstat(audit) if os.path.lexists(audit) else None
+        missing = turns - audited_turns(definition)
+        if info is None or not stat.S_ISREG(info.st_mode) or info.st_mode & 0o777 != runner.mode:
+            return [["fail", f"digger {name}: audit log {audit} missing or not mode {runner.mode:o}"]]
+        if missing:
+            return [["fail", f"digger {name}: {len(missing)} turn(s) have no audit line in {audit}"]]
+    return [["ok", f"digger {name}: {len(paths)} conversation record(s) valid; checkouts and pinned tools intact"
+                   + ("; every turn audited" if turns else "")]]
 
 
 def check_lines():
@@ -2345,7 +2732,7 @@ def check_lines():
             except ValueError:
                 detail = (result.stderr or "").strip().splitlines()
                 lines.append(["fail", f"digger {name}: identity probe failed: {detail[-1] if detail else 'no output'}"])
-            lines += unit_lines(definition)
+            lines += unit_lines(definition) + slack_lines(definition)
             continue
         base = STORE / name
         try:
@@ -2373,7 +2760,8 @@ def check_lines():
             lines.append(["warn", f"digger {name}: {provider} not logged in — log in as the appliance owner"])
         else:
             lines.append(["warn", f"digger {name}: {provider} not logged in — run: grave digger login {name}"])
-        lines += unit_lines(definition) + record_lines(definition)
+        lines += unit_lines(definition) + record_lines(definition) + slack_lines(definition) \
+            + token_lines(definition, owner_uid())
     if dedicated:
         secrets = ROOT / "config/secrets"
         if secrets.exists() and os.lstat(secrets).st_mode & 0o077:
@@ -2400,7 +2788,8 @@ USAGE = ("usage: grave digger new <name> --repo <repo> [--provider codex|claude]
          " [--check CMD] | list | show <name> | login <name> [--api-key|--console] | status [<name>] | enable <name>"
          " | disable <name> | ask <name> \"<request>\" | resume <name> <conversation> \"<reply>\""
          " | cancel <name> <conversation> | finish <name> <conversation> | kill <name> | prune <name>"
-         " | remove <name> [--purge]")
+         " | remove <name> [--purge] | slack-set <name> | slack-logout <name> | pair <name> <code>"
+         " | resume-budget <name>")
 
 
 def main(argv):
@@ -2408,6 +2797,8 @@ def main(argv):
         return root_main(argv[1:])
     if argv[:1] == ["__as-digger"]:
         return as_digger_main(argv[1:])
+    if argv[:1] == ["approve-bridge"] and len(argv) == 3:   # Claude starts this from the pinned .mcp.json
+        return slackbot.bridge(argv[1], check_id(argv[2]))
     parser = argparse.ArgumentParser(prog="grave digger", usage=USAGE)
     sub = parser.add_subparsers(dest="verb", required=True)
     p = sub.add_parser("new")
@@ -2423,8 +2814,9 @@ def main(argv):
                    help="verification command run in the checkout when a conversation finishes; repeatable."
                         " Without it the base commit's package.json test script, pytest or make test.")
     sub.add_parser("list")
-    for verb in ("show", "enable", "disable", "kill", "prune"):
+    for verb in ("show", "enable", "disable", "kill", "prune", "slack-set", "slack-logout", "resume-budget"):
         sub.add_parser(verb).add_argument("name")
+    p = sub.add_parser("pair"); p.add_argument("name"); p.add_argument("code")
     p = sub.add_parser("serve"); p.add_argument("name"); p.add_argument("--identity", choices=("dedicated",))
     p = sub.add_parser("ask"); p.add_argument("name"); p.add_argument("prompt")
     p = sub.add_parser("resume"); p.add_argument("name"); p.add_argument("conversation"); p.add_argument("prompt")
@@ -2441,7 +2833,9 @@ def main(argv):
     {"new": cmd_new, "list": cmd_list, "show": cmd_show, "status": cmd_status, "login": cmd_login,
      "enable": cmd_enable, "disable": lambda a: cmd_enable(a, False), "remove": cmd_remove,
      "check": cmd_check, "serve": cmd_serve, "ask": cmd_ask, "resume": cmd_ask, "cancel": cmd_cancel,
-     "finish": cmd_finish, "kill": cmd_kill, "prune": cmd_prune, "selftest": cmd_selftest}[args.verb](args)
+     "finish": cmd_finish, "kill": cmd_kill, "prune": cmd_prune, "selftest": cmd_selftest,
+     "slack-set": cmd_slack_set, "slack-logout": cmd_slack_logout, "pair": cmd_pair,
+     "resume-budget": cmd_resume_budget}[args.verb](args)
 
 
 if __name__ == "__main__":
