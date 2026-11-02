@@ -944,7 +944,8 @@ else
   sudo systemctl disable --now gravedecay-agents.service >/dev/null 2>&1 || true
 fi
 
-# Digger units (docs/DIGGERS.md): installed, never enabled or started here.
+# Digger units (docs/DIGGERS.md): `grave digger new|enable` enables one per
+# digger; a re-raise only restarts the running ones onto the new scripts.
 # Dedicated diggers run as grave-digger-<name>; owner-account tiers as the owner.
 step "Digger units"
 # A dedicated digger cannot reach the owner's HOME, so not a Homebrew python there.
@@ -958,7 +959,10 @@ sed -e "s|@USER@|$RUN_USER|g" -e "s|@GRAVE_ROOT@|$GRAVE_ROOT|g" \
     "$REPO_DIR/systemd/gravedecay-digger-owner@.service.tmpl" \
   | install_unit gravedecay-digger-owner@.service
 sudo systemctl daemon-reload
-ok "digger unit templates installed (not started; the runner arrives in M2)"
+while read -r unit _; do
+  [[ "$unit" == gravedecay-digger*@*.service ]] && sudo systemctl try-restart "$unit"
+done < <(systemctl list-units --no-legend --plain --state=active 'gravedecay-digger*@*.service' 2>/dev/null || true)
+ok "digger unit templates installed (running diggers restarted)"
 
 # -------------------------------------------------------------- 7. docker ----
 step "Docker stacks"

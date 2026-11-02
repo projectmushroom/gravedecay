@@ -600,3 +600,22 @@ the generated one and only the generated MCP servers, Codex with no
 `config.toml`, approvals never, `workspace-write` and its extra surfaces off.
 Where a provider cannot express a rule, the rule is refused or the gap is
 documented, never silently dropped.
+
+**The runner** (M2). Owner-tier diggers run in `gravedecay-digger-owner@`,
+which is still the owner's account: `ProtectHome=read-only` and a short write
+list narrow what a confused agent damages, not what a hostile one reads. A
+dedicated digger's unit runs as its own user, hides `/home` and `/root`, and
+writes only its HOME and its records directory. The two sides meet in two
+setgid directories root creates: the owner writes requests the digger can
+read, the digger writes records the owner can read; neither can write the
+other's. Requests are files, never a socket.
+
+What the result means: checks run by the runner, with a command the agent did
+not choose (the definition's `checks` or the base commit's test entry point),
+in the checkout the agent wrote, as the digger. The runner commits leftovers
+with hooks disabled, so no repository hook runs as the runner. MCP servers
+start from a copy pinned at the base commit, outside the checkout; Codex's
+sandbox keeps the agent out of it, and on Claude the tool policy does. A
+digger whose policy allows a shell running as its own identity could still
+change its pin; doctor compares every pin with its recorded digest, so that
+shows up as a failure rather than going unseen.

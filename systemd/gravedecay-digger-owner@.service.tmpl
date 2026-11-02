@@ -1,8 +1,9 @@
 [Unit]
 Description=gravedecay digger %i (owner account: shared or separate-login)
 Documentation=https://github.com/projectmushroom/gravedecay/blob/master/docs/DIGGERS.md
-# Installed by raise.sh but never enabled or started in M1: there is no runner
-# yet. M2 (#246) starts it. No listener, ever: intake is outbound only.
+# Installed by raise.sh; `grave digger new|enable` enables and starts one per
+# digger, `disable|kill|remove` stops it. Never after or wanting t3code.service
+# (doctor checks). No listener, ever: requests arrive as files in its inbox.
 After=network-online.target
 Wants=network-online.target
 OnFailure=gravedecay-notify@%n.service
@@ -14,18 +15,25 @@ WorkingDirectory=@GRAVE_ROOT@/config/diggers/%i
 Environment=HOME=@HOME@
 Environment=GRAVE_ROOT=@GRAVE_ROOT@
 Environment=PATH=@TOOLPATH@@HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=@PYTHON@ -I @GRAVE_ROOT@/scripts/diggers.py run %i
-Restart=no
+ExecStart=@PYTHON@ -I @GRAVE_ROOT@/scripts/diggers.py serve %i
+Restart=on-failure
+RestartSec=10
+KillMode=control-group
+TimeoutStopSec=60
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 # Same Unix account as the owner (docs/SECURITY.md "Diggers"): HOME stays
 # readable, and only the provider state a shared digger uses is writable.
 ProtectHome=read-only
-ReadWritePaths=@GRAVE_ROOT@/config/diggers/%i @GRAVE_ROOT@/worktrees @GRAVE_ROOT@/agents
+# The source checkout too: a worktree adds refs and metadata under its .git.
+ReadWritePaths=@GRAVE_ROOT@/config/diggers/%i @GRAVE_ROOT@/worktrees @GRAVE_ROOT@/agents @GRAVE_ROOT@/repos
 ReadWritePaths=-@HOME@/.codex -@HOME@/.claude -@HOME@/.claude.json
 UMask=0077
 TasksMax=512
 MemoryHigh=6G
 MemoryMax=8G
 CPUQuota=400%
+
+[Install]
+WantedBy=multi-user.target

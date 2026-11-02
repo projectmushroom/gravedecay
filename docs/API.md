@@ -102,6 +102,7 @@ Platform-specific handlers continue to validate runtime availability.
 | `linear-issue`, `linear-dispatch`, `notify-test` | POST existing integration operations |
 | `operations` | GET owner-private progress or health; POST a retry-safe console action (single-owner Linux) |
 | `keeper`, `keeper/turn`, `keeper/cancel` | GET conversation list or one conversation by cursor; POST create, send a turn, cancel (single-owner Linux; see [Gravekeeper conversations](#gravekeeper-conversations)) |
+| `diggers`, `diggers/conversation`, `diggers/ask`, `diggers/cancel`, `diggers/finish` | GET digger rows, a digger's conversations, one conversation by cursor; POST a request into a digger's inbox (single-owner Linux; see [Diggers](#diggers)) |
 | `action` | POST `{action: ...}` using the advertised fixed action names |
 | `action-stream?action=...` | **POST only**: SSE output (`data: <JSON string>`, then `event: done` with exit code) |
 
@@ -140,7 +141,8 @@ currently assemble a Blob in the client and are limited to 64 MiB; use the
 destination directly for larger files. Local downloads retain browser streaming.
 
 Console actions advertised in `capabilities.operations.actions` use the durable
-operation protocol below. Other mutations are not automatically retried. Existing
+operation protocol below. `doctor` and `digger-selftest` are the two an agent
+uses to verify a change on a grave without a terminal. Other mutations are not automatically retried. Existing
 update/benchmark status can be queried after reconnect. An interrupted legacy
 stream does not cancel its server operation.
 `grave doctor`'s dashboard auth probe checks version/capabilities, operation journal
@@ -417,6 +419,37 @@ conversation ID and the current turn (ID, message, accepted flag) per
 destination in browser storage, retries an unacknowledged turn with the same
 ID, reads by cursor once a second while `state` is `running`, and treats a 404
 as an expired conversation rather than a reason to start another.
+
+## Diggers
+
+The dashboard is a digger's channel zero ([DIGGERS.md](DIGGERS.md)). These
+routes read the digger's records and write requests into its inbox; the
+digger's own unit runs every turn, so a POST never launches a provider and a
+request survives a dashboard restart. Generate conversation and request IDs
+like Keeper IDs and save them first:
+
+```http
+GET  /grave/api/v1/diggers                                   {"diggers": [row…], "invalid": [{name, error}]}
+GET  /grave/api/v1/diggers?name=wl                           {"conversations": [summary…]}
+POST /grave/api/v1/diggers/ask     {"name": "wl", "conversation": "<id>", "request": "<id>", "message": "Create white label acme"}
+GET  /grave/api/v1/diggers/conversation?name=wl&id=<id>&after=<cursor>
+POST /grave/api/v1/diggers/cancel  {"name": "wl", "conversation": "<id>", "request": "<id>"}
+POST /grave/api/v1/diggers/finish  {"name": "wl", "conversation": "<id>", "request": "<id>"}
+GET  /grave/api/digger-diff?name=wl&id=<id>                  text/plain, 256 KiB cap
+```
+
+A row carries `identity`, `provider`, `enabled`, `live` (the loop's heartbeat
+is fresh), `paused` (gaming mode), `loggedIn`, `queue`, `running`,
+`today.turns`, `today.usd`, `last_verdict` and the definition's `prompts`. A
+new request returns 202, a known request ID 200 and is never written twice.
+A conversation reads as `state: "queued"` until the digger takes it. Records
+add `phase` (`open`, `finishing`, `finished`), `settling` (the runner is still
+deciding whether the turn ended the conversation), `branch`, `base`,
+`requested_by` and, once finished, `result`: the scheduled-job result package.
+Clients keep polling while `state` is `queued` or `running`, `phase` is
+`finishing` or `settling` is true. Refusals: 409 `disabled`, 409 `finished`
+(start a new conversation), 409 when 8 requests already wait, 404 for an
+unknown digger or conversation.
 
 # Existing dashboard API
 

@@ -288,7 +288,10 @@ def git(*args):
         terminate(proc)
 
 
-def worktree(job, session):
+def worktree(job, session, branch=None):
+    """A worktree of the job's primary checkout on a new branch at its HEAD.
+    A digger conversation passes its own branch; its meta.json names the digger
+    instead of a scheduled job, so `grave agents prune` leaves it to the digger."""
     source = repo_path(job["repo"])
     agents = ROOT / "agents"
     agents.mkdir(exist_ok=True)
@@ -301,14 +304,14 @@ def worktree(job, session):
                 raise ValueError("worktree parents must not be symlinks")
             path.mkdir(mode=0o700, exist_ok=True)
         directory = parent / session
-        branch = "agent/" + session
+        branch = branch or "agent/" + session
         base = git("-C", source, "rev-parse", "HEAD")
         history = agents / session
         history.mkdir(mode=0o700)
         git("-C", source, "worktree", "add", "-b", branch, directory, base)
         write_json(history / "meta.json", dict(dir=str(directory), repo=job["repo"],
             branch=branch, base=base, worktree=True, created=dt.datetime.now(dt.timezone.utc).isoformat(),
-            scheduled_job=job["name"]))
+            **({"digger": job["digger"]} if "digger" in job else {"scheduled_job": job["name"]})))
         run_lock = os.open(history / ".run.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         fcntl.flock(run_lock, fcntl.LOCK_EX)
     return directory, history, run_lock, base
@@ -1103,11 +1106,21 @@ def recover(name):
         pass
 
 
+def notify_diggers(seen):
+    """Finished digger conversations page through the same agent-done event. The
+    owner's always-running scheduler sends them: a dedicated digger cannot read
+    the notification secrets (docs/DIGGERS.md)."""
+    try:
+        shared("diggers.py").notify_finished(seen)
+    except Exception as error:  # a digger problem never stops scheduled jobs
+        print("digger notifications: " + str(error)[:200], file=sys.stderr, flush=True)
+
+
 def scheduler():
     private_dir(STORE)
     children = {}
     with locked(STORE / ".scheduler.lock", blocking=False):
-        restore, recovered = True, set()
+        restore, recovered, digger_pages = True, set(), {}
         try:
             while not STOP:
                 for name in names():
@@ -1125,6 +1138,7 @@ def scheduler():
                         print(name + ": " + str(error), file=sys.stderr, flush=True)
                 sweep_previews(restore)
                 restore = False
+                notify_diggers(digger_pages)
                 for _ in range(50):
                     if STOP:
                         break

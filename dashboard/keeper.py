@@ -163,7 +163,13 @@ MAPPERS = {"claude": claude_events, "codex": codex_events}
 
 
 class Runner:
-    """One conversation index file per conversation; the provider owns the transcript."""
+    """One conversation index file per conversation; the provider owns the transcript.
+
+    The Keeper is the built-in instance. A digger's runner (scripts/diggers.py)
+    subclasses it and overrides ``launch`` (its own command, checkout and
+    environment), ``mode`` (records its owner can read through a group) and
+    ``after_turn`` (the result package), so both share one turn loop."""
+    mode = 0o600
 
     def __init__(self, path, host, script=__file__, grave="/usr/local/bin/grave",
                  api="http://127.0.0.1:4712/grave", work_dir=None, timeout=TURN_TIMEOUT):
@@ -208,6 +214,7 @@ class Runner:
         self.path.mkdir(parents=True, exist_ok=True, mode=0o700)
         fd, name = tempfile.mkstemp(dir=self.path, prefix=".conversation-")
         try:
+            os.fchmod(fd, self.mode)
             with os.fdopen(fd, "w") as stream:
                 json.dump(record, stream)
             os.replace(name, self._path(record["id"]))
@@ -339,6 +346,13 @@ class Runner:
         return providers.keeper_command(record["provider"], self.mcp_command(), self.work_dir,
                                         record.get("model") or "", record["session_id"])
 
+    def launch(self, record):
+        """``(argv, cwd, env)`` for one turn."""
+        return self.command(record), self.work_dir, scrub_env(os.environ)
+
+    def after_turn(self, record):
+        """Runs after each turn is saved, before the conversation takes another."""
+
     def _append(self, record, event):
         text = event["text"].encode("utf-8")[:MAX_TEXT].decode("utf-8", "ignore")
         if record["bytes"] + len(text.encode("utf-8")) > MAX_OUTPUT or len(record["events"]) >= MAX_EVENTS:
@@ -366,7 +380,8 @@ class Runner:
             kill()
 
         try:
-            process = subprocess.Popen(self.command(record), cwd=self.work_dir, env=scrub_env(os.environ),
+            argv, cwd, env = self.launch(record)
+            process = subprocess.Popen(argv, cwd=cwd, env=env,
                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                        start_new_session=True)
             with self.mutex:
@@ -433,6 +448,7 @@ class Runner:
                 with self.mutex:
                     record["turn"]["finished_at"] = record["updated_at"] = time.time()
                     self._save(record)
+                self.after_turn(record)
             finally:
                 with self.mutex:
                     self.processes.pop(record["id"], None)

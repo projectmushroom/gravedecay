@@ -230,6 +230,26 @@ SCHEMAS = {
     'KeeperConversationRequest': obj({'id': ID, 'provider': {'enum': ['claude', 'codex']}}, required=['id'], closed=True),
     'KeeperTurnRequest': obj({'conversation': ID, 'turn': ID, 'message': {'type': 'string', 'minLength': 1, 'maxLength': 8000}}, closed=True),
     'KeeperCancelRequest': obj({'conversation': ID}, closed=True),
+    'DiggerRow': obj({'name': STRING, 'provider': {'enum': ['claude', 'codex']}, 'model': STRING,
+                      'identity': {'enum': ['shared', 'separate-login', 'dedicated']}, 'repo': STRING, 'enabled': BOOL,
+                      'live': BOOL, 'paused': BOOL, 'loggedIn': nullable('boolean'), 'queue': COUNT, 'running': TEXT,
+                      'today': obj({'turns': COUNT, 'usd': {'type': 'number', 'minimum': 0}}), 'last_verdict': TEXT,
+                      'prompts': array(obj({'label': STRING, 'template': STRING}), 8)}),
+    'DiggerList': obj({'diggers': array(ref('DiggerRow'), 64), 'invalid': array(obj({'name': STRING, 'error': STRING}), 64)}),
+    'DiggerConversations': obj({'conversations': array(obj({'id': ID, 'state': STRING, 'phase': TEXT, 'summary': STRING,
+                                                            'requested_by': TEXT, 'created_at': {'type': 'number'},
+                                                            'updated_at': {'type': 'number'}, 'verdict': TEXT}), 64)}),
+    'DiggerConversation': {**obj({'id': ID, 'state': {'enum': ['queued', 'idle', 'running', 'succeeded', 'failed', 'timed_out', 'cancelled', 'interrupted']},
+                                  'phase': {'enum': ['open', 'finishing', 'finished']}, 'queued': COUNT,
+                                  'events': array(ref('KeeperEvent'), 400), 'turn': {'anyOf': [{'type': 'object'}, {'type': 'null'}]},
+                                  'message': STRING, 'result': {'anyOf': [{'type': 'object'}, {'type': 'null'}]},
+                                  'refused': array(obj({'request': ID, 'op': STRING, 'reason': STRING}), 32)},
+                                 required=['id', 'state', 'phase', 'events']),
+                           'description': 'A Keeper conversation record plus digger fields (branch, base, requested_by, settling, budget); '
+                                          'result is the scheduled-job result package (docs/SCHEDULES.md) once phase is finished.'},
+    'DiggerAskRequest': obj({'name': STRING, 'conversation': ID, 'request': ID,
+                             'message': {'type': 'string', 'minLength': 1, 'maxLength': 8000}}, closed=True),
+    'DiggerControlRequest': obj({'name': STRING, 'conversation': ID, 'request': ID}, closed=True),
     'Capabilities': obj({'product': {'const': 'gravedecay'}, 'api_version': {'const': 1},
                          'host': STRING, 'platform': STRING,
                          'routes': obj({'GET': array(STRING), 'POST': array(STRING)}), 'actions': array(STRING),
@@ -316,6 +336,24 @@ def document(routes, base='/grave'):
                     entry['responses']['200'] = response(ref('KeeperConversation'), 'Existing conversation or turn; never re-sent')
                     if name != 'keeper/cancel':
                         entry['responses']['202'] = response(ref('KeeperConversation'), 'New conversation or turn accepted')
+            elif name.startswith('diggers'):
+                entry['x-grave-contract'] = VERSION
+                entry['description'] = ('Diggers on this grave (single-owner Linux). Reads digger records; POSTs only write a request '
+                                        'into the digger\'s inbox, which its own unit runs. The same request ID twice is one request.')
+                if method == 'GET':
+                    entry['parameters'].append({'name': 'name', 'in': 'query', 'schema': STRING,
+                                                'description': 'A digger; required for conversation, lists its conversations on diggers.'})
+                    if name == 'diggers':
+                        entry['responses']['200'] = response({'oneOf': [ref('DiggerList'), ref('DiggerConversations')]})
+                    else:
+                        entry['parameters'] += [{'name': 'id', 'in': 'query', 'required': True, 'schema': ID},
+                                                {'name': 'after', 'in': 'query', 'schema': {'type': 'integer', 'minimum': 0, 'maximum': 9999999999}}]
+                        entry['responses']['200'] = response(ref('DiggerConversation'))
+                else:
+                    entry['requestBody']['content']['application/json']['schema'] = ref(
+                        'DiggerAskRequest' if name == 'diggers/ask' else 'DiggerControlRequest')
+                    entry['responses']['200'] = response(ref('DiggerConversation'), 'Existing request; never re-sent')
+                    entry['responses']['202'] = response(ref('DiggerConversation'), 'New request written to the inbox')
             elif name == 'openapi.json':
                 entry['x-grave-contract'] = VERSION
                 entry['responses']['200'] = response({'type': 'object'}, 'This OpenAPI 3.1 document')
