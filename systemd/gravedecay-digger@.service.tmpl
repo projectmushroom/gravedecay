@@ -3,7 +3,8 @@ Description=gravedecay digger %i (dedicated identity)
 Documentation=https://github.com/projectmushroom/gravedecay/blob/master/docs/DIGGERS.md
 # Installed by raise.sh; `grave digger new|enable` enables and starts one per
 # digger, `disable|kill|remove` stops it. Never after or wanting t3code.service
-# (doctor checks). No listener, ever: requests arrive as files in its inbox.
+# (doctor checks). No listener, ever: requests arrive as files
+# in its inbox or over its outbound Slack socket.
 After=network-online.target
 Wants=network-online.target
 OnFailure=gravedecay-notify@%n.service

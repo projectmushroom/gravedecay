@@ -494,7 +494,7 @@ body.remote-pending #panels,body.remote-pending #launcher,body.remote-pending #a
 #keeper-chips[hidden],#digger-chips[hidden],#digger-fields[hidden]{display:none}
 #panels>[data-panel].unsupported{display:none!important}
 .digger-row{border:1px solid var(--hairline);border-radius:8px;padding:8px 10px;margin-top:10px;font-size:13px;overflow-wrap:anywhere}
-.digger-row [data-digger-summon]{min-height:44px;margin-top:6px}
+.digger-row [data-digger-summon],.digger-row [data-digger-resume]{min-height:44px;margin-top:6px}
 .digger-row details button{display:block;width:100%;text-align:left;margin:4px 0;min-height:44px;font-size:12px;overflow-wrap:anywhere}
 #keeper-form{display:flex;gap:6px;align-items:flex-end;padding:6px 0 8px}
 #keeper-input{flex:1;min-height:44px;max-height:30dvh;font-size:16px;font-family:inherit;background:var(--inset);color:var(--ink);
@@ -3266,9 +3266,17 @@ let diggersProbed=0,diggersSeen='',diggerRows=[];
 const deepDigger=new URLSearchParams(location.search).get('digger'),deepConversation=new URLSearchParams(location.search).get('conversation');
 let deepPending=!!deepDigger;
 function diggerLine(d){
-  const state=!d.enabled?'disabled':!d.live?'not running':d.paused?'paused (gaming mode)':d.running?'working':'idle';
+  const state=!d.enabled?'disabled':!d.live?'not running':d.paused?'paused (gaming mode)':d.pause==='budget'?'paused (budget spent)':d.running?'working':'idle';
   const login=d.loggedIn===true?'logged in':d.loggedIn===false?'not logged in':'login unknown';
-  return `${state} · ${login} · ${counted(d.queue,'queued request')} · today ${counted(d.today.turns,'turn')}, $${Number(d.today.usd||0).toFixed(2)}${d.last_verdict?' · last: '+d.last_verdict:''}`;
+  const limits=d.limits||{},usd=Number(d.today.usd||0).toFixed(2);
+  const slack=!d.slack?'':d.slack.connected?' · Slack connected':` · Slack down${d.slack.error?': '+d.slack.error:''}`;
+  const waiting=d.slack&&d.slack.approvals?` · ${counted(d.slack.approvals,'approval')} waiting`:'';
+  return `${state} · ${login} · ${counted(d.queue,'queued request')} · today ${d.today.turns}${limits.turns?'/'+limits.turns:''} turns, $${usd}${limits.usd?'/$'+Number(limits.usd).toFixed(2):''}${slack}${waiting}${d.last_verdict?' · last: '+d.last_verdict:''}`;
+}
+async function resumeDigger(b){
+  b.disabled=true;
+  try{await keeperJSON('diggers/resume',{name:b.dataset.diggerResume,request:newId()});b.textContent='Resuming…';}
+  catch(e){b.disabled=false;b.textContent='Resume failed: '+e.message;}
 }
 async function paintDiggers(){
   diggersProbed=Date.now();
@@ -3296,10 +3304,12 @@ async function paintDiggers(){
         <div class="runhead"><b>${esc(d.name)}</b> <span class="dim2">${esc(d.identity)} · ${esc(d.provider)}${d.model?' · '+esc(d.model):''} · ${esc(d.repo)}</span></div>
         <div class="dim">${esc(diggerLine(d))}</div>
         <button class="mini" data-digger-summon="${esc(d.name)}" ${d.enabled?'':'disabled'}>⛏️ Summon</button>
+        ${d.pause==='budget'?`<button class="mini" data-digger-resume="${esc(d.name)}" title="${esc(d.budget_reason||'')}">Resume budget</button>`:''}
         <details data-digger-conversations="${esc(d.name)}" ${open.has(d.name)?'open':''}><summary>Conversations</summary><div class="dim">Loading…</div></details>
       </div>`).join('')
       +(data.invalid||[]).map(d=>`<div class="digger-row"><b>${esc(d.name)}</b> <span class="verdict" style="color:var(--crit)">invalid</span><div class="dim">${esc(d.error)}</div></div>`).join('');
     $('diggers').querySelectorAll('[data-digger-summon]').forEach(b=>b.onclick=()=>openKeeper('',b,diggerRows.find(d=>d.name===b.dataset.diggerSummon)));
+    $('diggers').querySelectorAll('[data-digger-resume]').forEach(b=>b.onclick=()=>resumeDigger(b));
     $('diggers').querySelectorAll('details[data-digger-conversations]').forEach(det=>{
       det.ontoggle=()=>{if(det.open)diggerConversations(det);};
       if(det.open)diggerConversations(det);

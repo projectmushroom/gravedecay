@@ -13,11 +13,11 @@ narrower: tools the definition allows and nothing else, a sandbox where the
 provider has one, and, for the `dedicated` tier, a Unix identity that cannot
 read the owner's secrets.
 
-Milestones 1 and 2 of the epic (#243) are here: definitions, identity tiers,
-the digger's own login, the compiled policy, and the conversation runner with
-the dashboard and CLI as its channels. A digger with no Slack binding is
-complete. Slack intake, approvals and budget enforcement are M3 (#247);
-OpenCode is a later provider (#245).
+Milestones 1 to 3 of the epic (#243) are here: definitions, identity tiers,
+the digger's own login, the compiled policy, the conversation runner with the
+dashboard and CLI as its channels, and optional [Slack](#slack) intake with
+approvals, enforced budgets and an audit log. A digger with no Slack binding
+is complete. OpenCode is a later provider (#245).
 
 ## Quick start
 
@@ -83,8 +83,11 @@ Each digger lives in `$GRAVE_ROOT/config/diggers/<name>/` (0700, the owner's):
   Unknown tools are refused. **An allowlist that is empty after deny is a
   validation error**: a digger with no tools refuses to exist rather than
   running text-only.
-- `budget`: recorded now, enforced from M3; `max_turns` is compiled into the
-  Claude command already.
+- `budget`: `max_turns` is compiled into the Claude command, `timeout_s` caps
+  each turn, and `daily_turns` and `daily_usd` pause the digger when spent
+  (see [Budgets](#budgets)). `daily_usd: 0` turns the dollar cap off, for a
+  subscription seat.
+- `slack` (optional): the Slack binding, see [Slack](#slack).
 - `checks` (optional): the commands the runner runs when a conversation
   finishes (`new --check CMD`, repeatable). Absent means the base commit's
   `package.json` test script, `pytest` or `make test`, as for scheduled jobs.
@@ -228,6 +231,13 @@ worktree of the recorded repo or clone with an unchanged, read-only pin.
 A missing login is a **warning**, not a failure: logging in is a post-raise
 owner step, like the Keeper's. `grave digger login <name>` clears it.
 
+For a digger with a `slack` binding doctor also checks: the tokens file is the
+serving identity's, 0600, and holds both tokens; someone can summon it
+(`users` is non-empty or `dm_policy` is `pair`); the socket is connected (the
+loop's heartbeat is fresh and reports it); no Slack token is in the unit's
+environment; and the audit log has the records' mode and a line for every
+finished turn.
+
 ## Disk cost
 
 A `dedicated` digger's clone is a full copy of the repository's history, not a
@@ -317,10 +327,100 @@ Each run costs one or two short provider turns. Agents start it remotely as
 the `digger-selftest` durable operation ([API.md](API.md)), the same way as
 `doctor`.
 
+## Slack
+
+Slack is optional per digger and Socket Mode only: the loop dials Slack over
+one outbound WebSocket, so nothing listens and `docs/PORTS.md` is unchanged.
+The Events API, request URLs and relays are refused by design. The client is
+stdlib (`digger-slack.py`), so there is no SDK or venv to install.
+
+**Set up** (one Slack app per digger):
+
+1. At api.slack.com/apps, create an app from scratch in the client's workspace.
+2. **Socket Mode**: enable it and create an app-level token with
+   `connections:write` (`xapp-…`).
+3. **OAuth & Permissions**, bot scopes: `app_mentions:read chat:write
+   channels:history reactions:write im:history`. Install to the workspace and
+   copy the bot token (`xoxb-…`).
+4. **Event Subscriptions**: subscribe the bot to `app_mention`,
+   `message.channels` and `message.im`. **Interactivity**: turn it on (Socket
+   Mode needs no URL); approval buttons need it.
+5. Add the binding to `digger.json` and store the tokens:
+
+   ```json
+   "slack": {"channels": ["C0123ABCD"], "users": ["U0123ABCD"], "dm_policy": "deny",
+             "require_mention": true, "approvers": ["U0123ABCD"]}
+   ```
+
+   ```sh
+   grave digger enable wl                  # recompile with the binding
+   grave digger slack-set wl               # prompts for both tokens (or reads them from stdin)
+   ```
+
+6. Invite the bot to the channel (`/invite @app`) and mention it with a request.
+   `grave doctor` shows `Slack Socket Mode connected`.
+
+`grave digger slack-logout <name>` deletes the tokens; revoke them in the app
+settings too.
+
+**Bindings are deny by default.** No `users` means nobody. Bots are always
+ignored. In a channel the message must come from a listed channel and user,
+and, with `require_mention`, mention the bot; a reply in a thread the digger
+already owns needs no mention. `dm_policy` covers direct messages: `deny`
+ignores them, `allow` takes them from `users`, and `pair` answers a stranger
+with a code that `grave digger pair <name> <code>` (within an hour) adds to
+`users`. `approvers` defaults to `users`, so a paired user can approve too
+unless you list approvers explicitly.
+
+**What the client sees.** A message outside a thread starts a conversation and
+the digger replies in its thread; one thread is one conversation. 👀 marks the
+message when its turn starts; each turn's answer is posted in the thread
+(without the done marker); when the conversation finishes, a result card
+gives the verdict, change summary, checks, branch and a dashboard link on the
+tailnet origin, and the thread gets ✅ (ready-for-review or no-changes) or ❌.
+A request the digger cannot take is always answered: logged out, budget spent,
+queue full (five waiting), or the conversation already finished. While gaming
+mode pauses it, requests queue and the reply says so. Logged-out, budget and
+queue-full refusals page the owner once per condition per hour.
+
+Every Socket Mode envelope is acked before any work. Redeliveries and the
+`message` plus `app_mention` pair of one mention are one request: the request
+ID is derived from the channel and message timestamp and kept in the record.
+
+**Approvals (Claude only).** With approvers, a Claude digger compiles with
+`--permission-prompt-tool mcp__digger__approve` and permission mode `default`
+instead of `dontAsk`: a tool call the allowlist does not cover asks instead of
+failing. The runner's approval bridge posts **Approve / Deny** buttons in the
+thread and waits; only an approver's click answers, a plain-text "yes" never
+does, and ten minutes without a click denies. A conversation started from the
+dashboard has no thread, so its prompts are denied at once. Codex `exec` has
+no approver hook: Codex diggers stay deny-only. Approvals are not offered in
+the dashboard: the owner can already widen the allowlist, and a second place
+to approve is a second thing to secure.
+
+## Budgets
+
+The loop checks the budget before each turn, from every channel. When today's
+turns reach `daily_turns`, or today's estimated spend reaches `daily_usd`, the
+digger pauses (`pause: budget` on its dashboard row) and refuses new turns
+with the reason; a running turn finishes. The window starts at local midnight,
+or at the last `grave digger resume-budget <name>` (the row's **Resume budget**
+button), whichever is later. Spend is the conversation's transcript cost
+after each turn, estimated as for scheduled jobs; a conversation's whole spend
+counts on the day it last ran.
+
+## Audit
+
+Every turn, Slack refusal, denial and approval appends one line to
+`.audit.jsonl` beside the records: `at`, `digger`, `slack_user`, `channel`,
+`thread`, `conversation`, `turn`, `outcome`. Never the message text. It has
+the records' mode, and doctor checks every finished turn has a line.
+
 ## The dashboard
 
 The Work tab's **Diggers** section lists each digger (tier, provider, login,
-live or paused, queue, today's turns and cost, last verdict). **Summon** opens
+live or paused, queue, today's turns and cost against its budget, Slack
+connection and waiting approvals, last verdict). **Summon** opens
 the Keeper's drawer bound to that digger: each thread is one conversation,
 Stop cancels the turn, Finish packages it, and the result card from the
 Overnight report renders at the end. It works from the installed PWA. API:
@@ -337,7 +437,8 @@ The dedicated pair sits outside both HOMEs and each side reads the other's
 files through a setgid group directory root creates, so the dashboard reads
 records directly and the digger reads only requests. Beside each record are
 its `.diff` and check `.log`; `.status` is the loop's heartbeat (login state,
-pause, refused requests).
+pause, refused requests, Slack connection), `.audit.jsonl` the audit log and
+`.pairing` the open Slack pairing codes.
 
 `raise.sh` installs `gravedecay-digger@.service` (`User=grave-digger-%i`,
 `ProtectHome=yes`, writes only its HOME and records) and
@@ -348,7 +449,7 @@ enable and (re)start the one for the digger's tier, `disable`, `kill` and
 private `/tmp` and the workspace CPU and memory ceilings, and neither waits on
 T3. Starting a unit goes through the root half, so run `new` and `enable` from
 the terminal tile or SSH. A digger never listens on a port: requests arrive as
-files, so `docs/PORTS.md` is unchanged.
+files or over its outbound Slack socket, so `docs/PORTS.md` is unchanged.
 
 ## Removing
 

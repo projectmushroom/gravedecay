@@ -1,4 +1,4 @@
-// Digger M2: the Work tab's Diggers section and the drawer bound to one digger (docs/DASHBOARD.md).
+// Diggers: the Work tab's Diggers section and the drawer bound to one digger (docs/DASHBOARD.md).
 const { test } = require('@playwright/test');
 const expect = require('@playwright/test').expect.configure({ timeout: 10000 });
 test.use({ serviceWorkers: 'block' });
@@ -7,9 +7,11 @@ test.afterEach(async ({ page }) => page.unrouteAll({ behavior: 'ignoreErrors' })
 const rows = [
   { name: 'wl', provider: 'codex', model: '', identity: 'dedicated', repo: 'app', enabled: true, live: true, paused: false,
     loggedIn: true, queue: 0, running: null, today: { turns: 3, usd: 0.42 }, last_verdict: 'ready-for-review',
+    pause: null, budget_reason: null, limits: { turns: 200, usd: 10 }, slack: { connected: true, error: null, approvals: 1 },
     prompts: [{ label: 'New white label', template: 'Create white label {name} with domain {domain}' }] },
   { name: 'docs', provider: 'claude', model: '', identity: 'separate-login', repo: 'app', enabled: false, live: false, paused: false,
-    loggedIn: false, queue: 0, running: null, today: { turns: 0, usd: 0 }, last_verdict: null, prompts: [] },
+    loggedIn: false, queue: 0, running: null, today: { turns: 0, usd: 0 }, last_verdict: null, prompts: [],
+    pause: null, budget_reason: null, limits: { turns: 200, usd: 10 }, slack: null },
 ];
 const result = { verdict: 'ready-for-review', changes: { commits: 1, files: 1, insertions: 1, deletions: 0, dirty: false },
   checks: [{ cmd: 'test -f config/whitelabels/acme.json', exit_code: 0, seconds: 0.1, tail: '', source: 'owner' }],
@@ -30,7 +32,7 @@ async function diggerFixture(page, request, baseURL, options = {}) {
   await page.route('**/api/v1/capabilities', async route => {
     const json = await (await route.fetch()).json();
     for (const name of ['diggers', 'diggers/conversation']) if (!json.routes.GET.includes(name)) json.routes.GET.push(name);
-    for (const name of ['diggers/ask', 'diggers/cancel', 'diggers/finish']) if (!json.routes.POST.includes(name)) json.routes.POST.push(name);
+    for (const name of ['diggers/ask', 'diggers/cancel', 'diggers/finish', 'diggers/resume']) if (!json.routes.POST.includes(name)) json.routes.POST.push(name);
     return route.fulfill({ json });
   });
   const posts = []; let record = null;
@@ -40,6 +42,7 @@ async function diggerFixture(page, request, baseURL, options = {}) {
     const req = route.request(), url = new URL(req.url()), path = url.pathname.replace(/^.*\/api\/v1\//, '');
     if (req.method() === 'POST') {
       const body = req.postDataJSON(); posts.push({ path, body });
+      if (path === 'diggers/resume') return route.fulfill({ status: 202, json: body });
       if (path === 'diggers/cancel') {
         if (record?.state === 'running') Object.assign(record, { state: 'cancelled', message: 'Cancelled by the owner', pending: [] });
         return route.fulfill({ json: view(0) });
@@ -60,7 +63,7 @@ async function diggerFixture(page, request, baseURL, options = {}) {
         { type: 'text', text: 'Created acme. <b>not html</b>\n[[digger:done]]' }]).slice();
       return route.fulfill({ status: 202, json: { ...view(0), request: body.request } });
     }
-    if (path === 'diggers' && !url.searchParams.get('name')) return route.fulfill({ json: { diggers: rows, invalid: [{ name: 'broken', error: 'unknown key(s): sandbox' }] } });
+    if (path === 'diggers' && !url.searchParams.get('name')) return route.fulfill({ json: { diggers: options.rows || rows, invalid: [{ name: 'broken', error: 'unknown key(s): sandbox' }] } });
     if (path === 'diggers') return route.fulfill({ json: { conversations: record ? [{ id: record.id, state: record.state, phase: record.phase,
       summary: 'Created acme.', requested_by: 'owner', created_at: 1, updated_at: 1, verdict: record.result?.verdict || null }] : [] } });
     if (!record || record.id !== url.searchParams.get('id')) return route.fulfill({ status: 404, json: { error: 'not_found', output: 'No such conversation' } });
@@ -95,10 +98,27 @@ test('the section lists each digger with its tier, state and spend', async ({ pa
   if (await panel.locator('.panel-toggle').getAttribute('aria-expanded') !== 'true') await panel.locator('.panel-toggle').click();
   const wl = panel.locator('[data-digger="wl"]');
   await expect(wl).toContainText('dedicated · codex · app');
-  await expect(wl).toContainText('idle · logged in · 0 queued requests · today 3 turns, $0.42 · last: ready-for-review');
+  await expect(wl).toContainText('idle · logged in · 0 queued requests · today 3/200 turns, $0.42/$10.00 · Slack connected'
+    + ' · 1 approval waiting · last: ready-for-review');
+  await expect(page.locator('[data-digger-resume]')).toHaveCount(0);
   await expect(panel.locator('[data-digger="docs"]')).toContainText('disabled · not logged in');
   await expect(page.locator('[data-digger-summon="docs"]')).toBeDisabled();
   await expect(panel).toContainText('unknown key(s): sandbox');
+});
+
+test('a budget-paused digger says why and Resume restarts its window', async ({ page, request, baseURL }) => {
+  const paused = [{ ...rows[0], pause: 'budget', budget_reason: 'daily budget spent: 200 of 200 turns', today: { turns: 200, usd: 1 },
+    slack: { connected: false, error: 'invalid_auth', approvals: 0 } }];
+  const fixture = await diggerFixture(page, request, baseURL, { rows: paused });
+  const panel = page.locator('[data-panel="diggers"]');
+  await expect(panel).toBeVisible();
+  if (await panel.locator('.panel-toggle').getAttribute('aria-expanded') !== 'true') await panel.locator('.panel-toggle').click();
+  await expect(panel.locator('[data-digger="wl"]')).toContainText('paused (budget spent) · logged in · 0 queued requests'
+    + ' · today 200/200 turns, $1.00/$10.00 · Slack down: invalid_auth');
+  await page.locator('[data-digger-resume="wl"]').click();
+  await expect(page.locator('[data-digger-resume="wl"]')).toHaveText('Resuming…');
+  expect(fixture.posts.map(p => p.path)).toEqual(['diggers/resume']);
+  expect(Object.keys(fixture.posts[0].body).sort()).toEqual(['name', 'request']);
 });
 
 test('a request streams text-only events and ends with the result card and its diff', async ({ page, request, baseURL }) => {

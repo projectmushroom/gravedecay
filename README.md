@@ -149,8 +149,10 @@ or until the next run. Details and the verdict table are in
 - **Diggers**: `grave digger new` defines a focused agent bound to one job and
   one repository, with a deny-by-default tool policy and, for client-facing
   work, its own Unix user and its own Codex or Claude login. Ask it from the
-  CLI or **Summon** it on the dashboard; each conversation ends in a branch,
-  checks it did not choose and a verdict ([docs/DIGGERS.md](docs/DIGGERS.md)).
+  CLI, **Summon** it on the dashboard, or bind it to a client's Slack (Socket
+  Mode, allowlisted people, approval buttons, daily budgets); each conversation
+  ends in a branch, checks it did not choose and a verdict
+  ([docs/DIGGERS.md](docs/DIGGERS.md)).
 - **Notifications**: Web Push to the installed PWA and/or an ntfy topic, for
   finished runs, failing units and a failing doctor
   ([docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md)).
@@ -174,6 +176,7 @@ grave agents prune                        # drop clean, merged, idle worktrees
 grave digger new <name> --repo <r> --identity dedicated   # a focused agent on its own login
 grave digger login <name>                 # that digger's own Codex/Claude login
 grave digger ask <name> "<request>"       # one conversation: branch, checks, verdict
+grave digger slack-set <name>             # its Slack app tokens; mention it in a bound channel
 grave preview 3000                        # expose a loopback dev server on the tailnet
 grave gaming [--kill] [--for 2h]          # torpor: freeze agents, free RAM and GPU
 grave developer                           # thaw and restore
@@ -210,7 +213,7 @@ grave backup                              # bundles, configs, volumes; grave res
 | [discipline](https://github.com/orieg/discipline) | A GitHub Action with a test-integrity gate: deleted test files, unconditional skip/only/todo markers and assertion reductions fail the PR unless a label says the change is intended. | Runs on the box before a PR exists, with your own test command; [docs/REQUIRED-CHECKS.md](docs/REQUIRED-CHECKS.md) shows how to require either tool on the repository. |
 | protect-the-oracle recipe | Freeze the tests at the base commit, lock fixtures by hash and cap skips in CI, so the oracle grading the agent is not the one it edited. | Pins the check command to the base commit the same way, but runs it in the agent's worktree where tests are writable; the pin stops a swapped command, not an edited test. |
 | [Paseo](https://paseo.sh) | Self-hosted daemon that runs Claude Code, Codex, OpenCode and others on your machines, driven from phone, desktop and web, with worktrees, push and an optional relay. | Leaves live-session control to T3 and adds the unattended schedule, the runner-executed checks, the morning card and the system contract around the box. |
-| [Open Session](https://github.com/tellahq/opensession) | Self-hosted server that drives sessions in worktrees or sandboxes with Slack, Linear, Plain and GitHub intake, diff and PR review, and several subscriptions. | A single-owner appliance: firewall, services, backups and doctor come with it; Linear intake is one button and GitHub PR intake is left out on purpose. |
+| [Open Session](https://github.com/tellahq/opensession) | Self-hosted server that drives sessions in worktrees or sandboxes with Slack, Linear, Plain and GitHub intake, diff and PR review, and several subscriptions. | A single-owner appliance: firewall, services, backups and doctor come with it; Linear intake is one button, Slack intake is one digger per Slack app (Socket Mode, nothing listens), and GitHub PR intake is left out on purpose. |
 | Cursor cloud agents | Each agent in an isolated cloud VM that clones from GitHub, drives a browser and opens a PR. | The same shape on hardware you own, next to your real database and private services, with no per-day cap, no vendor relay, and a live preview of the branch instead of a recording. |
 
 ## Other plots

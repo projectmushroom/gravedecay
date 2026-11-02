@@ -234,7 +234,11 @@ SCHEMAS = {
                       'identity': {'enum': ['shared', 'separate-login', 'dedicated']}, 'repo': STRING, 'enabled': BOOL,
                       'live': BOOL, 'paused': BOOL, 'loggedIn': nullable('boolean'), 'queue': COUNT, 'running': TEXT,
                       'today': obj({'turns': COUNT, 'usd': {'type': 'number', 'minimum': 0}}), 'last_verdict': TEXT,
-                      'prompts': array(obj({'label': STRING, 'template': STRING}), 8)}),
+                      'prompts': array(obj({'label': STRING, 'template': STRING}), 8),
+                      'pause': {'enum': ['gaming', 'budget', None]}, 'budget_reason': TEXT,
+                      'limits': obj({'turns': COUNT, 'usd': {'type': 'number', 'minimum': 0}}),
+                      'slack': {'anyOf': [obj({'connected': BOOL, 'error': TEXT, 'approvals': COUNT}), {'type': 'null'}],
+                                'description': 'null without a slack binding; approvals is the count waiting for a click'}}),
     'DiggerList': obj({'diggers': array(ref('DiggerRow'), 64), 'invalid': array(obj({'name': STRING, 'error': STRING}), 64)}),
     'DiggerConversations': obj({'conversations': array(obj({'id': ID, 'state': STRING, 'phase': TEXT, 'summary': STRING,
                                                             'requested_by': TEXT, 'created_at': {'type': 'number'},
@@ -250,6 +254,8 @@ SCHEMAS = {
     'DiggerAskRequest': obj({'name': STRING, 'conversation': ID, 'request': ID,
                              'message': {'type': 'string', 'minLength': 1, 'maxLength': 8000}}, closed=True),
     'DiggerControlRequest': obj({'name': STRING, 'conversation': ID, 'request': ID}, closed=True),
+    'DiggerResumeRequest': obj({'name': STRING, 'request': ID}, closed=True),
+    'DiggerResume': obj({'name': STRING, 'request': ID}),
     'Capabilities': obj({'product': {'const': 'gravedecay'}, 'api_version': {'const': 1},
                          'host': STRING, 'platform': STRING,
                          'routes': obj({'GET': array(STRING), 'POST': array(STRING)}), 'actions': array(STRING),
@@ -349,6 +355,11 @@ def document(routes, base='/grave'):
                         entry['parameters'] += [{'name': 'id', 'in': 'query', 'required': True, 'schema': ID},
                                                 {'name': 'after', 'in': 'query', 'schema': {'type': 'integer', 'minimum': 0, 'maximum': 9999999999}}]
                         entry['responses']['200'] = response(ref('DiggerConversation'))
+                elif name == 'diggers/resume':
+                    entry['description'] = 'Restart a budget-paused digger\'s daily window (grave digger resume-budget).'
+                    entry['requestBody']['content']['application/json']['schema'] = ref('DiggerResumeRequest')
+                    entry['responses']['200'] = response(ref('DiggerResume'), 'Existing request; never re-sent')
+                    entry['responses']['202'] = response(ref('DiggerResume'), 'New request written to the inbox')
                 else:
                     entry['requestBody']['content']['application/json']['schema'] = ref(
                         'DiggerAskRequest' if name == 'diggers/ask' else 'DiggerControlRequest')
