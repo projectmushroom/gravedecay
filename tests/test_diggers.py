@@ -139,6 +139,14 @@ class CompileTests(unittest.TestCase):
     def setUp(self):
         self.module = load("diggers_compile", {"GRAVE_DIGGER_TEST": "1", "GRAVE_ROOT": "/srv/dev"})
 
+    def test_keeper_owner_notes_never_reach_a_digger_prompt(self):
+        with tempfile.TemporaryDirectory() as records:
+            (pathlib.Path(records) / "memory.md").write_text("- prefer tabs\n")
+            runner = object.__new__(self.module.DiggerRunner)
+            runner.path, runner.mutex = pathlib.Path(records), threading.Lock()
+            self.assertIn("<owner-notes>", self.module.keeper.Runner.prompt(runner, "make acme"))
+            self.assertEqual(runner.prompt("make acme"), "make acme")
+
     def test_codex_dedicated_compiles_to_the_exact_deny_by_default_argv(self):
         value = definition(tools={"mcp": {"whitelabel": {"command": "node", "args": [".grave/mcp/whitelabel.js"]}},
                                   "allow": ["mcp__whitelabel__create"], "deny": ["mcp__whitelabel__delete"]})

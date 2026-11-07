@@ -1397,6 +1397,10 @@ class DiggerRunner(keeper.Runner):
         # install or update under the unit's read-only HOME. Dedicated diggers have their copy.
         self.binary = definition["provider"] if definition["identity"] == "dedicated" else owner_tool(definition["provider"])
 
+    def prompt(self, message):
+        """The request verbatim: the Keeper's owner notes (memory.md) never reach a digger."""
+        return message
+
     # ---- checkout ----
     def prepare(self, record):
         """A checkout on ``digger/<name>/<conversation>`` and the pinned tools; returns a note."""
