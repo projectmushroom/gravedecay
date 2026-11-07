@@ -144,8 +144,11 @@ or until the next run. Details and the verdict table are in
   `https://<box>.ts.net:3000` on the tailnet; jobs get the same through `--serve`.
 - **gravenet** (`/net/`): live network view, per-interface traffic, tailnet
   peers, one stdlib Python daemon.
-- **Gravekeeper**: `grave keeper ask "<question>"` runs a read-only agent over
-  the box's own state, logs and docs; it diagnoses, it does not change anything.
+- **Gravekeeper**: `grave keeper ask "<question>"`, or **Summon the Keeper** on
+  the dashboard, runs a read-only agent over the box's own state, logs and docs;
+  it diagnoses, it does not change anything. The one thing it writes is a short
+  owner-editable memory of what you asked it to remember, which you can edit or
+  forget in its drawer ([docs/DASHBOARD.md](docs/DASHBOARD.md#the-gravekeeper)).
 - **Diggers**: `grave digger new` defines a focused agent bound to one job and
   one repository, with a deny-by-default tool policy and, for client-facing
   work, its own Unix user and its own Codex or Claude login. Ask it from the
@@ -248,7 +251,7 @@ grave backup                              # bundles, configs, volumes; grave res
 | [docs/REQUIRED-CHECKS.md](docs/REQUIRED-CHECKS.md) | Making a test-integrity workflow required on a GitHub repository |
 | [docs/DASHBOARD.md](docs/DASHBOARD.md) | Dashboard layout and the Overnight report |
 | [docs/DISPATCH.md](docs/DISPATCH.md) | Starting work from a Linear issue |
-| [docs/DIGGERS.md](docs/DIGGERS.md) | Focused agents: definitions, identity tiers, their own logins |
+| [docs/DIGGERS.md](docs/DIGGERS.md) | Focused agents: definitions, identity tiers, own logins, conversations, Slack, approvals, budgets, audit |
 | [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md) | Web Push and ntfy |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model, sudoers scope, T3 Connect, the shared account |
 | [docs/INSTALL.md](docs/INSTALL.md) | Choosing the appliance account |
