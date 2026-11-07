@@ -122,6 +122,16 @@ definition. Keep secrets out of `DIGGER.md` and `digger.json`: both are
 instructions and policy, and the Codex compile passes `DIGGER.md` as an
 argument.
 
+A digger's Slack tokens (`SLACK_APP_TOKEN`, `SLACK_BOT_TOKEN`) live in
+`secrets/slack.env` under the identity that serves it, 0600:
+`$GRAVE_ROOT/diggers/<name>/secrets/slack.env` for `dedicated`, written as the
+digger through root; `$GRAVE_ROOT/config/diggers/<name>/secrets/slack.env`
+for the owner tiers. `grave digger slack-set <name>` reads them without echo
+or from stdin, never from argv; the loop reads them at start and passes them
+to no provider or unit environment (doctor checks the unit). Backups follow
+the same rule as logins. `slack-logout` deletes the file; revoke the tokens in
+the Slack app settings as well.
+
 ## Shared coding provider
 
 Multi-user v1 supports administrator-managed API-key authentication only:

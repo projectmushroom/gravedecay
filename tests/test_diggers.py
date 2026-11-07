@@ -1,15 +1,23 @@
-"""Diggers M1: definitions, identity tiers, per-digger login, compiled policy and doctor."""
+"""Diggers: definitions, identity tiers, logins, policy, the runner, Slack intake and doctor."""
+import base64
+import hashlib
+import http.server
 import importlib.util
 import json
 import os
 import pathlib
+import re
+import socket
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import unittest.mock
+import uuid
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "libexec/diggers.py"
@@ -463,7 +471,7 @@ emit({"type": "item.completed", "item": {"type": "agent_message", "text": "Worke
 emit({"type": "turn.completed"})
 """
 RUNNER_CLAUDE = r"""#!/usr/bin/env python3
-import json, os, sys
+import json, os, subprocess, sys
 args = sys.argv[1:]
 home = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.environ["HOME"], ".claude")
 if args[:2] == ["auth", "status"]:
@@ -476,13 +484,27 @@ prompt = sys.stdin.read()
 emit = lambda value: print(json.dumps(value), flush=True)
 emit({"type": "system", "subtype": "init", "session_id": "session-1"})
 text = "Here is what I would do." + ("\n[[digger:done]]" if "finish up" in prompt else "")
+if "approve" in prompt:   # as Claude would: ask the --permission-prompt-tool before running Bash
+    server = json.load(open(args[args.index("--mcp-config") + 1]))["mcpServers"].get("digger")
+    decision = "no bridge"
+    if server:
+        bridge = subprocess.Popen([server["command"], *server["args"]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        for call in ({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+                     {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "approve", "arguments":
+                      {"tool_name": "Bash", "input": {"command": "make deploy"}}}}):
+            bridge.stdin.write(json.dumps(call) + "\n")
+        bridge.stdin.flush()
+        reply = next(r for r in map(json.loads, bridge.stdout) if r.get("id") == 2)
+        bridge.stdin.close(); bridge.wait()
+        decision = json.loads(reply["result"]["content"][0]["text"])["behavior"]
+    text = "decision: " + decision
 emit({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
 emit({"type": "result", "subtype": "success", "session_id": "session-1"})
 """
 WL_TOOL = load("diggers_selftest_tool", {}).SELFTEST_MCP   # a real stdio MCP server
 
 
-class RunnerTests(unittest.TestCase):
+class RunnerBase(unittest.TestCase):
     """Conversations end to end in test mode: the serve loop, fake providers, a real repository."""
 
     def setUp(self):
@@ -559,6 +581,8 @@ class RunnerTests(unittest.TestCase):
     def doctor(self):
         return {tuple(line.split("\t", 1)) for line in self.grave("check").stdout.splitlines()}
 
+
+class RunnerTests(RunnerBase):
     def test_dedicated_codex_conversation_uses_only_the_pinned_tool_and_ends_with_a_verdict(self):
         self.grave("new", "wl", "--repo", "app", "--provider", "codex", "--identity", "dedicated",
                    "--mcp", "wl=python3 .grave/mcp/wl.py", "--check", "test -f config/whitelabels/acme.json")
@@ -597,7 +621,8 @@ class RunnerTests(unittest.TestCase):
         self.assertFalse((self.owner / ".codex").exists())   # the owner's login and transcripts untouched
         findings = self.doctor()
         self.assertNotIn("fail", {level for level, _ in findings}, findings)
-        self.assertIn(("ok", "digger wl: 1 conversation record(s) valid; checkouts and pinned tools intact"), findings)
+        self.assertIn(("ok", "digger wl: 1 conversation record(s) valid; checkouts and pinned tools intact;"
+                             " every turn audited"), findings)
         # Tampering with the pinned tool is drift doctor names.
         os.chmod(pin / ".grave/mcp", 0o755); os.chmod(pin / ".grave/mcp/wl.py", 0o644)
         (pin / ".grave/mcp/wl.py").write_text("print('pwned')\n")
@@ -727,6 +752,329 @@ class RunnerTests(unittest.TestCase):
             module.validate(definition(checks=[""]))
 
 
+class FakeSlack:
+    """Slack's Web API over HTTP and one Socket Mode WebSocket, on loopback."""
+
+    def __init__(self):
+        self.calls, self.acks, self.slow, self.lock, self.conn = [], [], 0, threading.Lock(), None
+        self.listener = socket.create_server(("127.0.0.1", 0))
+        fake = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_POST(self):
+                method = self.path.rsplit("/", 1)[-1]
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])) or b"{}")
+                with fake.lock:
+                    fake.calls.append((method, body, self.headers.get("Authorization", "")))
+                if method == "chat.postMessage" and fake.slow:
+                    time.sleep(fake.slow)
+                reply = {"ok": True}
+                if method == "apps.connections.open":
+                    reply["url"] = f"ws://127.0.0.1:{fake.listener.getsockname()[1]}/link?ticket=t"
+                elif method == "auth.test":
+                    reply["user_id"] = "UBOT"
+                elif method == "chat.postMessage":
+                    reply["ts"] = f"{time.time():.6f}"
+                data = json.dumps(reply).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        self.http = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.http.server_address[1]}"
+        threading.Thread(target=self.http.serve_forever, daemon=True).start()
+        threading.Thread(target=self.accept, daemon=True).start()
+
+    def accept(self):
+        while True:
+            try:
+                conn, _ = self.listener.accept()
+            except OSError:
+                return
+            data = b""
+            while b"\r\n\r\n" not in data:
+                data += conn.recv(4096)
+            key = re.search(rb"Sec-WebSocket-Key: (\S+)", data).group(1).decode()
+            accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+            conn.sendall(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                          f"Sec-WebSocket-Accept: {accept}\r\n\r\n").encode())
+            self.conn = conn
+            self.send({"type": "hello"})
+            threading.Thread(target=self.read, args=(conn,), daemon=True).start()
+
+    def read(self, conn):
+        buf = b""
+        while True:
+            try:
+                chunk = conn.recv(65536)
+            except OSError:
+                return
+            if not chunk:
+                return
+            buf += chunk
+            while len(buf) >= 6:
+                n, at = buf[1] & 0x7F, 2
+                if n == 126:
+                    n, at = struct.unpack(">H", buf[2:4])[0], 4
+                if len(buf) < at + 4 + n:
+                    break
+                mask, payload, opcode = buf[at:at + 4], buf[at + 4:at + 4 + n], buf[0] & 0x0F
+                buf = buf[at + 4 + n:]
+                if opcode == 1:
+                    text = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+                    with self.lock:
+                        self.acks.append(json.loads(text)["envelope_id"])
+
+    def send(self, value):
+        data = json.dumps(value).encode()
+        header = bytes([0x81]) + (bytes([len(data)]) if len(data) < 126 else bytes([126]) + struct.pack(">H", len(data)))
+        self.conn.sendall(header + data)
+        return value
+
+    def event(self, user, channel, text, thread=None, kind="app_mention", **extra):
+        event = dict({"type": kind, "user": user, "channel": channel, "text": text, "ts": f"{time.time():.6f}"}, **extra)
+        if thread:
+            event["thread_ts"] = thread
+        return self.send({"envelope_id": uuid.uuid4().hex, "type": "events_api",
+                          "payload": {"event_id": "Ev" + uuid.uuid4().hex[:10], "event": event}})
+
+    def click(self, user, action, value):
+        return self.send({"envelope_id": uuid.uuid4().hex, "type": "interactive", "payload": {
+            "type": "block_actions", "user": {"id": user}, "actions": [{"action_id": action, "value": value}]}})
+
+    def posts(self, thread=None):
+        with self.lock:
+            return [b for m, b, _ in self.calls if m == "chat.postMessage" and thread in (None, b.get("thread_ts"))]
+
+    def called(self, method):
+        with self.lock:
+            return [b for m, b, _ in self.calls if m == method]
+
+    def close(self):
+        self.http.shutdown()
+        self.listener.close()
+        if self.conn:
+            self.conn.close()
+
+
+TOKENS = "SLACK_APP_TOKEN=xapp-1-A0TEST-0000000000\nSLACK_BOT_TOKEN=xoxb-0000-1111-testtoken\n"
+
+
+class SlackTests(RunnerBase):
+    """Socket Mode intake against a fake Slack: acks, dedupe, allowlists, threads, budgets, approvals, audit."""
+
+    def setUp(self):
+        super().setUp()
+        self.slack = FakeSlack()
+        self.addCleanup(self.slack.close)
+        self.env["GRAVE_SLACK_API"] = self.slack.url
+
+    def bind(self, name, **slack):
+        path = self.root / f"config/diggers/{name}/digger.json"
+        value = json.loads(path.read_text())
+        value["slack"] = dict({"channels": ["C1"], "users": ["UALICE"], "dm_policy": "pair", "require_mention": True}, **slack)
+        if "budget" in slack:
+            value["budget"].update(value["slack"].pop("budget"))
+        path.write_text(json.dumps(value))
+        self.grave("enable", name)
+        proc = subprocess.run([sys.executable, str(SCRIPT), "slack-set", name], input=TOKENS, env=self.env,
+                              capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def connected(self, status):
+        self.wait(lambda: (json.loads(status.read_text()).get("slack") or {}).get("connected"), "Slack never connected")
+
+    def replied(self, thread, fragment, seconds=30):
+        return self.wait(lambda: next((p for p in self.slack.posts(thread) if fragment in p["text"]), None),
+                         f"no reply containing {fragment!r} in thread {thread}: {self.slack.posts()}", seconds)
+
+    def test_a_thread_is_one_deduplicated_conversation_and_only_the_allowlist_is_heard(self):
+        self.grave("new", "wl", "--repo", "app", "--provider", "codex", "--identity", "dedicated",
+                   "--mcp", "wl=python3 .grave/mcp/wl.py", "--check", "test -f config/whitelabels/acme.json")
+        self.grave("login", "wl")
+        self.bind("wl")
+        secret = self.root / "diggers/wl/secrets/slack.env"
+        self.assertEqual(stat.S_IMODE(secret.stat().st_mode), 0o600)
+        records = self.root / "diggers/.records/wl"
+        self.serve("wl", "--identity", "dedicated")
+        self.connected(records / ".status")
+        self.assertIn("Bearer xapp-", self.slack.calls[[m for m, _, _ in self.slack.calls].index("apps.connections.open")][2])
+        # One message arrives as app_mention and as message, and Slack redelivers the envelope.
+        ask = self.slack.event("UALICE", "C1", "<@UBOT> create white label acme with domain acme.example")
+        thread = ask["payload"]["event"]["ts"]
+        self.slack.send(ask)
+        self.slack.event("UALICE", "C1", ask["payload"]["event"]["text"], kind="message", ts=thread)
+        card = self.replied(thread, "*ready-for-review*")
+        self.assertIn("Branch `digger/wl/", card["text"])
+        self.assertIn("`test -f config/whitelabels/acme.json` passed", card["text"])
+        self.assertTrue(any("Worked on it." in p["text"] and "[[digger:done]]" not in p["text"] for p in self.slack.posts(thread)))
+        (record,) = self.records(records).values()
+        self.assertEqual(len(record["requests"]), 1)
+        self.assertEqual(record["slack"], {"channel": "C1", "thread_ts": thread})
+        self.assertEqual(record["requested_by"], "slack:UALICE")
+        reactions = {(r["timestamp"], r["name"]) for r in self.slack.called("reactions.add")}
+        self.assertEqual(reactions, {(thread, "eyes"), (thread, "white_check_mark")})
+        self.assertIn(ask["envelope_id"], self.slack.acks)
+        # The ack goes out before any work: here the reply is slow and the ack is not.
+        self.slack.slow = 3
+        denied = self.slack.event("UBOB", "C1", "<@UBOT> make me one too")
+        self.wait(lambda: denied["envelope_id"] in self.slack.acks, "no ack while the reply was slow", seconds=1.5)
+        self.slack.slow = 0
+        self.replied(denied["payload"]["event"]["ts"], "not on this digger's allowlist")
+        # Bots, unbound channels and unmentioned top-level messages are never requests.
+        for sent in (self.slack.event("UALICE", "C1", "<@UBOT> hi", bot_id="B1"),
+                     self.slack.event("UALICE", "C9", "<@UBOT> hi"),
+                     self.slack.event("UALICE", "C1", "just chatting", kind="message")):
+            self.wait(lambda: sent["envelope_id"] in self.slack.acks, "unacked envelope")
+        # A follow-up in a finished thread needs no mention and is answered with the reason.
+        self.slack.event("UALICE", "C1", "and another", kind="message", thread=thread)
+        self.replied(thread, "this conversation has finished")
+        time.sleep(1)
+        self.assertEqual(len(self.records(records)), 1)
+        # A stranger's DM gets a pairing code; the owner confirms it.
+        dm = self.slack.event("UCAROL", "D1", "hello", kind="message", channel_type="im")
+        code = re.search(r"grave digger pair wl (\w+)", self.replied(dm["payload"]["event"]["ts"], "grave digger pair")["text"]).group(1)
+        self.assertIn("UCAROL paired", self.grave("pair", "wl", code).stdout)
+        self.assertIn("UCAROL", json.loads((self.root / "config/diggers/wl/digger.json").read_text())["slack"]["users"])
+        self.assertIn("no such pairing code", self.grave("pair", "wl", "000000", ok=False).stderr)
+        # Every turn and every refusal has an audit line, without message text.
+        audit = [json.loads(line) for line in (records / ".audit.jsonl").read_text().splitlines()]
+        self.assertEqual([a["outcome"] for a in audit], ["succeeded", "denied", "refused"])
+        self.assertEqual((audit[0]["slack_user"], audit[0]["thread"], audit[1]["slack_user"]), ("UALICE", thread, "UBOB"))
+        self.assertNotIn("acme", (records / ".audit.jsonl").read_text())
+        findings = self.doctor()
+        self.assertNotIn("fail", {level for level, _ in findings}, findings)
+        for expected in ("digger wl: Slack Socket Mode connected (outbound only, nothing listens)",
+                         "digger wl: Slack tokens stored 0600, readable only by the identity that serves it"):
+            self.assertIn(("ok", expected), findings)
+        self.grave("slack-logout", "wl")
+        self.assertFalse(secret.exists())
+
+    def test_budget_pauses_the_digger_answers_in_thread_pages_once_and_resumes(self):
+        self.grave("new", "wl", "--repo", "app", "--provider", "codex", "--identity", "separate-login")
+        self.grave("login", "wl")
+        self.bind("wl", budget={"daily_turns": 1})
+        status = self.root / "config/diggers/wl/conversations/.status"
+        pages = pathlib.Path(self.tmp.name) / "pages"
+        notify = pathlib.Path(self.tmp.name) / "notify"
+        notify.write_text(f"#!/bin/sh\necho \"$@\" >> {pages}\n"); notify.chmod(0o755)
+        self.env["GRAVE_BIN"] = str(notify)
+        self.serve("wl")
+        self.connected(status)
+        first = self.slack.event("UALICE", "C1", "<@UBOT> hello there")
+        self.replied(first["payload"]["event"]["ts"], "Worked on it.")
+        second = self.slack.event("UALICE", "C1", "<@UBOT> one more")
+        self.replied(second["payload"]["event"]["ts"], "daily budget is spent")
+        self.wait(lambda: (lambda v: v["pause"] == "budget" and "budget" in v["conditions"])(json.loads(status.read_text())),
+                  "the loop never reported the budget pause")
+        module = load("diggers_pages", {"GRAVE_ROOT": str(self.root), "GRAVE_DIGGER_TEST": "1", "GRAVE_BIN": str(notify)})
+        definition, _ = module.load("wl")
+        row = module.summary(definition)
+        self.assertEqual((row["pause"], row["today"]["turns"], row["limits"]["turns"]), ("budget", 1, 1))
+        self.assertTrue(row["slack"]["connected"])
+        module.notify_finished({})
+        module.notify_finished({})
+        self.assertEqual(pages.read_text().count("daily budget spent"), 1)   # once per condition per hour
+        self.grave("resume-budget", "wl")
+        self.wait(lambda: json.loads(status.read_text())["pause"] is None, "resume-budget did not clear the pause")
+        third = self.slack.event("UALICE", "C1", "<@UBOT> now?")
+        self.replied(third["payload"]["event"]["ts"], "Worked on it.")
+
+    def test_claude_asks_an_allowlisted_approver_in_the_thread(self):
+        self.grave("new", "wl", "--repo", "app", "--provider", "claude", "--identity", "separate-login",
+                   "--mcp", "wl=python3 .grave/mcp/wl.py")
+        (self.root / "config/diggers/wl/claude/.credentials.json").write_text("{}")
+        self.bind("wl", users=["UALICE", "UBOB"], approvers=["UALICE"])
+        settings = json.loads((self.root / "config/diggers/wl/policy/claude-settings.json").read_text())
+        self.assertEqual(settings["permissions"]["defaultMode"], "default")   # asks the prompt tool instead of refusing
+        self.serve("wl")
+        self.connected(self.root / "config/diggers/wl/conversations/.status")
+        ask = self.slack.event("UALICE", "C1", "<@UBOT> please approve a deploy")
+        thread = ask["payload"]["event"]["ts"]
+        prompt = self.wait(lambda: next((p for p in self.slack.posts(thread) if p.get("blocks")), None), "no approval prompt")
+        self.assertIn("make deploy", prompt["blocks"][0]["text"]["text"])
+        aid = prompt["blocks"][1]["elements"][0]["value"]
+        self.slack.click("UBOB", "approve", aid)   # a user, not an approver: ignored
+        time.sleep(1.5)
+        self.assertFalse(self.slack.called("chat.update"))
+        self.slack.click("UALICE", "approve", aid)
+        self.replied(thread, "decision: allow")
+        self.assertIn("Approved by <@UALICE>", self.slack.called("chat.update")[0]["text"])
+        (call,) = [json.loads(l)["argv"] for l in (self.root / "config/diggers/wl/claude/argv.jsonl").read_text().splitlines()]
+        self.assertEqual(call[call.index("--permission-prompt-tool") + 1], "mcp__digger__approve")
+        self.assertTrue(providers.policy_ok(call))
+        # A dashboard conversation has no thread to ask in, so its prompt is denied at once.
+        self.assertIn("decision: deny", self.grave("ask", "wl", "approve from the dashboard", timeout=60).stdout)
+        outcomes = [json.loads(l)["outcome"] for l in (self.root / "config/diggers/wl/conversations/.audit.jsonl").read_text().splitlines()]
+        self.assertEqual(outcomes, ["approved", "succeeded", "approval-denied", "succeeded"])
+
+
+class SlackUnitTests(unittest.TestCase):
+    def setUp(self):
+        self.module = load("diggers_slack_unit", {"GRAVE_DIGGER_TEST": "1"})
+        self.slack = self.module.slackbot
+
+    def test_bindings_are_deny_by_default_and_approvers_are_users(self):
+        good = {"channels": ["C1"], "users": ["U1"], "dm_policy": "deny", "require_mention": True}
+        self.assertEqual(self.module.validate(definition(slack=good))["slack"], good)
+        for bad, fragment in (({**good, "approvers": ["U2"]}, "subset"), ({**good, "users": ["alice"]}, "Slack IDs"),
+                              ({**good, "dm_policy": "open"}, "dm_policy"), ({**good, "extra": 1}, "slack must hold"),
+                              ({**good, "require_mention": "yes"}, "require_mention")):
+            with self.assertRaises(self.module.DiggerError) as caught:
+                self.module.validate(definition(slack=bad))
+            self.assertIn(fragment, str(caught.exception))
+        with self.assertRaises(self.module.DiggerError):
+            self.module.validate(definition(tools={"mcp": {"digger": {"command": "x", "args": []}},
+                                                   "allow": ["mcp__digger__*"], "deny": []}))
+        codex = definition(slack=good)
+        self.assertFalse(providers.approvals(codex))   # Codex stays deny-only
+        claude = definition(provider="claude", identity="separate-login", work="worktree", slack=good)
+        argv, _ = self.module.compile_command(claude)
+        self.assertEqual(argv[argv.index("--permission-prompt-tool") + 1], "mcp__digger__approve")
+        argv, _ = self.module.compile_command(dict(claude, slack={**good, "approvers": []}))
+        self.assertNotIn("--permission-prompt-tool", argv)
+
+    def test_tokens_parse_from_either_form_and_ids_are_stable(self):
+        values = self.slack.parse_tokens("xoxb-0000-1111-testtoken\nxapp-1-A0TEST-0000000000\n")
+        self.assertEqual(self.slack.parse_tokens(self.slack.render_tokens(values)), values)
+        with self.assertRaises(self.slack.SlackError):
+            self.slack.parse_tokens("xoxb-0000-1111-testtoken")
+        a = self.slack.thread_id("C1", "1700000000.000100")
+        self.assertEqual(a, self.slack.thread_id("C1", "1700000000.000100"))
+        self.assertRegex(a, r"^1700000000-[0-9a-f]{32}$")
+        self.assertNotEqual(a, self.slack.thread_id("C2", "1700000000.000100"))
+
+    def test_unanswered_approvals_expire_and_a_disconnected_channel_denies(self):
+        tmp = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(tmp))
+        answers, updates = [], []
+
+        class Runner:
+            definition = {"name": "wl", "slack": {"channels": [], "users": ["U1"], "dm_policy": "deny", "require_mention": True}}
+            approvals = str(tmp)
+            record = staticmethod(lambda cid: {"slack": {"channel": "C1", "thread_ts": "1.0"}})
+            answer = staticmethod(lambda path, allow, why: (answers.append((pathlib.Path(path).stem, allow, why)),
+                                                             pathlib.Path(path).with_suffix(".answer").write_text("{}")))
+
+        channel = self.slack.Channel(Runner(), {"SLACK_APP_TOKEN": "x", "SLACK_BOT_TOKEN": "y"}, threading.Event())
+        channel.update = lambda c, ts, text: updates.append(text)
+        (tmp / "old.json").write_text(json.dumps({"id": "old", "conversation": "c", "tool": "Bash", "input": {}, "at": time.time() - 700}))
+        channel.state["connected"] = True
+        channel.asked["old"] = ("C1", "2.0", "Bash")
+        channel.approvals(tmp)
+        self.assertEqual(answers, [("old", False, "expired after 10 minutes without an approver")])
+        self.assertIn("Expired, denied", updates[0])
+        (tmp / "new.json").write_text(json.dumps({"id": "new", "conversation": "c", "tool": "Bash", "input": {}, "at": time.time()}))
+        channel.state["connected"] = False
+        channel.approvals(tmp)
+        self.assertEqual(answers[-1][:2], ("new", False))
+
+
 class InstallContractTests(unittest.TestCase):
     def test_cli_dispatches_digger_and_a_root_half_without_a_new_sudo_rule(self):
         self.assertIn('python3 "$GRAVE_ROOT/scripts/diggers.py" "$@"', GRAVE)
@@ -745,6 +1093,10 @@ class InstallContractTests(unittest.TestCase):
 
     def test_raise_installs_runner_and_units_and_only_the_cli_enables_them(self):
         self.assertIn('install -m 755 "$REPO_DIR/libexec/diggers.py" "$GRAVE_ROOT/scripts/diggers.py"', RAISE)
+        self.assertIn('install -m 644 "$REPO_DIR/libexec/digger-slack.py" "$GRAVE_ROOT/scripts/digger-slack.py"', RAISE)
+        help_text = GRAVE.split("cmd_help() {")[1]
+        for verb in ("grave digger slack-set <n>", "slack-logout <n>", "grave digger pair <n> <code>", "resume-budget <n>"):
+            self.assertIn(verb, help_text)
         for unit, serve in (("gravedecay-digger@", "serve %i --identity dedicated"), ("gravedecay-digger-owner@", "serve %i")):
             self.assertIn(f"install_unit {unit}.service", RAISE)
             self.assertNotIn(f"enable_restart {unit}", RAISE)
@@ -772,6 +1124,10 @@ class InstallContractTests(unittest.TestCase):
         source = SCRIPT.read_text()
         for needle in ("import socket", "http.server", "socketserver", ".bind(", ".listen("):
             self.assertNotIn(needle, source)
+        slack = (ROOT / "libexec/digger-slack.py").read_text()   # Socket Mode dials out; it never accepts
+        for needle in ("http.server", "socketserver", ".bind(", ".listen(", "create_server", ".accept("):
+            self.assertNotIn(needle, slack)
+        self.assertIn('raise SlackError("Socket Mode URL must be wss://")', slack)
         self.assertNotIn("digger", (ROOT / "docs/PORTS.md").read_text().lower())
 
     def test_workspace_slugs_cannot_take_the_digger_account_namespace(self):

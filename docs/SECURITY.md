@@ -619,3 +619,21 @@ sandbox keeps the agent out of it, and on Claude the tool policy does. A
 digger whose policy allows a shell running as its own identity could still
 change its pin; doctor compares every pin with its recorded digest, so that
 shows up as a failure rather than going unseen.
+
+**Slack** (M3). Slack text is untrusted input from people outside the
+appliance. Prompt injection is mitigated by the tool policy and the identity,
+not by prompt wording: a Slack message can make the agent try anything its
+allowlist permits and nothing more. Only listed users in listed channels (or
+paired DMs) are heard; bot senders never are. Approvals come only from an
+allowlisted approver's button click, never from text, and expire to deny.
+The Slack connection is outbound Socket Mode; nothing listens.
+
+What a dedicated identity does and does not isolate: it keeps the owner's
+secrets, logins and HOME out of reach. It does not hide the digger's own
+Slack tokens from its own agent: the provider runs as the same user, so a
+policy that allows a shell or file reads outside the checkout can read
+`secrets/slack.env`. Keep such diggers deny-by-default, and treat a leaked bot
+token as a reason to rotate it. The approval bridge never holds a token; it
+exchanges files with the loop, so an agent that can already write outside its
+checkout could forge an answer, which only matters for tools its allowlist
+does not already grant.
